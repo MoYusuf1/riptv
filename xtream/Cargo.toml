@@ -1,0 +1,16 @@
+[package]
+name = "xtream"
+version = "0.1.0"
+edition = "2024"
+description = "Xtream Codes API client (native + wasm)"
+
+[dependencies]
+idna_adapter = "=1.0.0"
+reqwest = { version = "0.13.5", features = ["json"], default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+reqwest = { version = "0.13.5", features = ["rustls"] }
+tokio = { version = "1.53.1", features = ["macros", "rt"] }

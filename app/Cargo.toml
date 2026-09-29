@@ -1,0 +1,11 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2024"
+description = "Dioxus web UI for the IPTV client"
+
+[dependencies]
+dioxus = { version = "0.7.10", default-features = false, features = ["web", "launch", "macro", "html", "signals", "hooks"] }
+player = { version = "0.1.0", path = "../player" }
+web-sys = { version = "0.3.105", features = ["Window", "Location", "Document", "Element", "HtmlVideoElement"] }
+xtream = { version = "0.1.0", path = "../xtream" }

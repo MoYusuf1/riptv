@@ -1,0 +1,13 @@
+[workspace]
+members = ["xtream", "proxy", "app", "player"]
+# `app` targets wasm32; build it with `dx`, not plain `cargo test`.
+default-members = ["xtream", "proxy", "player"]
+resolver = "3"
+
+# Small and fast to download beats small and fast to compile: this is what ships to the browser.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

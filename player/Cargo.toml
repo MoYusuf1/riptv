@@ -1,0 +1,15 @@
+[package]
+name = "player"
+version = "0.1.0"
+edition = "2024"
+description = "HLS + MPEG-TS to fMP4 transmuxer and MediaSource player (Rust, wasm)"
+
+[dependencies]
+thiserror = "2.0.21"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3.105"
+reqwest = { version = "0.13.5", default-features = false }
+wasm-bindgen = "=0.2.128"
+wasm-bindgen-futures = "0.4.78"
+web-sys = { version = "0.3.105", features = ["Window", "Document", "Element", "HtmlMediaElement", "HtmlVideoElement", "MediaSource", "MediaSourceReadyState", "SourceBuffer", "TimeRanges", "Url"] }
