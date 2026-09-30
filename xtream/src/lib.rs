@@ -717,7 +717,7 @@ impl Client {
 
     /// Fetch an M3U channel list, or treat an HLS `.m3u8` manifest as one live channel.
     /// The parsed list is shared across clones of this client; stream bytes still go through the
-    /// existing same-origin proxy. IPTV URLs are never stored in the browser's local storage.
+    /// existing same-origin proxy. (Nothing here stores anything: saving a playlist is the app's choice.)
     pub async fn load_playlist(mut self) -> Result<Self> {
         if !matches!(self.base.scheme(), "http" | "https") {
             return Err(Error::Playlist("use an http(s) playlist URL"));

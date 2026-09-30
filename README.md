@@ -120,9 +120,23 @@ a sliding playlist window, and an anamorphic PAL channel (720x576 with 64:45 pix
 --example mock_provider` adds your own file as a sixth movie, which is the best way to try seeking. `MOCK_TITLES=30000` adds that many
 channels, movies and series (and `MOCK_PORT` moves it off 8081): a big provider's catalogue, for trying how the app copes.
 
+## Profiles
+
+RIPTV opens on **Who's watching?**: one tile for each account you have saved, a **+** to add another, and
+**Edit** (**Manage profiles** on a desktop) to change or delete them. Tapping a tile signs in with that
+account straight away. A profile is an Xtream account (server, username, password) or an M3U/M3U8
+playlist, with a name and a colour, and you can keep as many of each as you like. **Switch profile** in
+the account menu brings the tiles back.
+
+Profiles are saved on the device, in this browser's storage for this address, **as plain text, the
+password included**: that is what makes a tile sign in with one click. They never leave the machine
+except to go to their own provider through the local proxy. Anyone who can read this browser's profile
+can read them, so use **Delete profile** when an account shouldn't stay. They belong to the address you
+open the app at (`127.0.0.1:3000` and `localhost:3000` keep separate lists).
+
 ## Add an M3U playlist
 
-On the sign-in page, choose **M3U / M3U8**, paste an HTTP(S) playlist URL, and select **Connect**.
+Add a profile and choose **M3U / M3U8**, paste an HTTP(S) playlist URL, and select **Save and connect**.
 An IPTV `.m3u` channel list becomes Live TV categories and channels. A direct HLS `.m3u8` manifest
 becomes one live channel; its video segments are not mistaken for separate channels. Use **Try free
 channels** for a small [iptv-org public playlist](https://github.com/iptv-org/iptv/blob/master/PLAYLISTS.md)
@@ -130,7 +144,7 @@ without entering an account. Public streams can go offline or be region-blocked.
 
 M3U mode currently covers Live TV only. Movies, series, and XMLTV guide data need separate metadata
 support, so those tabs are hidden rather than showing empty pages. Xtream sign-in and its guide are
-unchanged. Playlist URLs are used for the current session, not saved to local storage.
+unchanged.
 
 ## Using it
 

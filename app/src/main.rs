@@ -1,7 +1,8 @@
 //! Dioxus web UI. It talks to IPTV servers only through the local proxy
 //! (`xtream::Client::via_proxy`), because servers send no CORS headers.
 //!
-//! ponytail: credentials live in memory only (reload = log in again), no favourites, downloads are
+//! ponytail: profiles (and their passwords) are kept as plain text in this browser's storage, no
+//! favourites, downloads are
 //! plain browser downloads (no queue), no adaptive bitrate, and live streams must be HLS with
 //! MPEG-TS segments (H.264 + AAC).
 
@@ -15,9 +16,11 @@ use std::{
 
 mod controls;
 mod fetch;
+mod profiles;
 
 use controls::{IdleHide, Skip};
 use fetch::Proxied;
+use profiles::Login;
 use rstreamkit::{Unsupported, vod::Verdict};
 use web_sys::{
     js_sys,
@@ -25,8 +28,9 @@ use web_sys::{
 };
 use xtream::{Client, Details, EpgListing, Episode, LiveStream, Season, VodStream};
 
-/// Rows built per "page"; scrolling near the bottom adds another page.
-const SHOW: usize = 200;
+/// Items per page: a screen or so of posters, and the narrower channel list beside a player.
+const PAGE_GRID: usize = 60;
+const PAGE_LIST: usize = 40;
 
 /// One stylesheet, grouped by component. The comments live here, not in the shipped string.
 const CSS: &str = concat!(
@@ -132,7 +136,7 @@ svg{width:1.1rem;height:1.1rem}
 .card:hover{transform:scale(1.03)}
 .art{position:relative;display:grid;place-items:center;aspect-ratio:2/3;overflow:hidden;border-radius:12px;background:var(--row);box-shadow:0 6px 18px rgba(0,0,0,.35);color:var(--faint);font-size:1.6rem;font-weight:700}
 .tiles .art{aspect-ratio:16/10}
-.art img{width:100%;height:100%;object-fit:cover}
+.art img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
 .tiles .art img{padding:.7rem;object-fit:contain}
 .score{position:absolute;top:.4rem;right:.4rem;padding:.1rem .45rem;border-radius:999px;background:rgba(0,0,0,.55);color:#fff;font-size:.68rem;font-weight:600;backdrop-filter:blur(8px)}
 .score::before{content:'★ ';color:#ffcc4d}
@@ -209,8 +213,8 @@ svg{width:1.1rem;height:1.1rem}
 .row{display:flex;align-items:center;gap:.7rem;width:100%;padding:.5rem .6rem;border-radius:12px;content-visibility:auto;contain-intrinsic-size:auto 3.6rem}
 .row:hover{background:var(--row)}
 .row.on{background:var(--soft)}
-.logo{display:grid;place-items:center;flex:none;width:2.5rem;height:2.5rem;overflow:hidden;border-radius:9px;background:var(--row);color:var(--faint);font-size:.6rem;font-weight:700}
-.logo img{width:100%;height:100%;padding:.2rem;object-fit:contain}
+.logo{position:relative;display:grid;place-items:center;flex:none;width:2.5rem;height:2.5rem;overflow:hidden;border-radius:9px;background:var(--row);color:var(--faint);font-size:.6rem;font-weight:700}
+.logo img{position:absolute;inset:0;width:100%;height:100%;padding:.2rem;object-fit:contain}
 .row div{min-width:0}
 .row strong,.row small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row strong{font-weight:500}
@@ -323,6 +327,98 @@ svg{width:1.1rem;height:1.1rem}
 .upnext button{flex:1;padding:.5rem;border-radius:10px;background:rgba(255,255,255,.14);text-align:center;font-weight:600}
 .upnext button.go{background:#fff;color:#111}
 "#,
+    // Who's watching: saved profiles as tiles. A phone gets a picture on top and a curved panel of
+    // three columns under it; a desktop gets a centred row with the picture as a faint backdrop.
+    r#".login-page.who{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;min-height:100dvh;padding:0;background:radial-gradient(ellipse at 80% 40%,rgba(225,29,72,.16),transparent 55%),radial-gradient(ellipse at 10% 100%,rgba(95,60,140,.14),transparent 50%),var(--bg);gap:0;overflow-x:clip}
+.who-hero{position:absolute;inset:0;z-index:0;pointer-events:none}
+.who-mark{position:absolute;right:-7rem;top:50%;width:min(46vw,44rem);aspect-ratio:1;transform:translateY(-50%);opacity:.07}
+.who-mark .rust-mark{width:100%;height:100%}
+.who-hero .lockup{position:absolute;top:1.6rem;left:2.2rem;display:flex;align-items:baseline;gap:.7rem}
+.who-hero .lockup strong{font-size:1.25rem;font-weight:800;letter-spacing:.14em;color:var(--accent)}
+.who-hero .lockup span,.who-hero .chip{display:none}
+.who-panel{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:2.2rem;width:100%;padding:2rem 1.4rem}
+.who-panel h1{margin:0;font-size:clamp(1.9rem,3.6vw,2.8rem);font-weight:600;letter-spacing:-.03em}
+.who-panel h1 .m{display:none}
+.profiles{display:flex;flex-wrap:wrap;justify-content:center;gap:2.2rem 2rem;max-width:min(64rem,92vw)}
+.profile{display:grid;justify-items:center;gap:.6rem;width:9rem;color:var(--dim);text-align:center;animation:rise .45s calc(var(--i,0) * 45ms) cubic-bezier(.2,.8,.2,1) backwards}
+.profile:hover,.profile:focus-visible{color:var(--text)}
+.profile:disabled{cursor:wait;opacity:.6}
+.profile strong{max-width:100%;overflow:hidden;font-size:1rem;font-weight:500;text-overflow:ellipsis;white-space:nowrap}
+.profile small{margin-top:-.35rem;color:var(--faint);font-size:.64rem;letter-spacing:.08em;text-transform:uppercase}
+.avatar{position:relative;display:grid;place-items:center;width:9rem;height:9rem;border-radius:1.1rem;background:linear-gradient(155deg,rgba(255,255,255,.26),transparent 52%,rgba(0,0,0,.18)),var(--c,#e11d48);color:#fff;font-size:3.4rem;font-weight:700;box-shadow:0 12px 34px rgba(0,0,0,.42);transition:transform .18s ease,box-shadow .18s ease}
+.profile:not(:disabled):hover .avatar,.profile:focus-visible .avatar{transform:scale(1.06);box-shadow:0 0 0 3px var(--text),0 16px 38px rgba(0,0,0,.5)}
+.avatar .spinner{width:2.4rem;height:2.4rem}
+.avatar .edit{position:absolute;inset:0;display:grid;place-items:center;border-radius:inherit;background:rgba(0,0,0,.55)}
+.avatar .edit svg{width:2rem;height:2rem}
+.avatar.tool{border:1px solid var(--hair);background:rgba(255,255,255,.06);box-shadow:none;color:var(--dim)}
+.avatar.tool svg{width:2.2rem;height:2.2rem}
+.profile:not(:disabled):hover .avatar.tool{background:rgba(255,255,255,.12);box-shadow:0 0 0 3px var(--text);color:var(--text)}
+.edit-tile{display:none}
+.who .manage{padding:.65rem 1.6rem;border:1px solid var(--hair);border-radius:10px;color:var(--dim);font-size:.76rem;letter-spacing:.1em;text-transform:uppercase}
+.who .manage:hover{border-color:var(--text);color:var(--text)}
+.note{color:var(--faint);font-size:.72rem}
+.login .note{text-align:center}
+.login .avatar.preview{align-self:center;width:4.8rem;height:4.8rem;border-radius:.9rem;font-size:1.8rem;box-shadow:0 6px 18px rgba(0,0,0,.4)}
+.login .swatches{display:flex;justify-content:center;gap:.6rem;padding:.2rem 0}
+.login .swatches .swatch{width:1.6rem;height:1.6rem;padding:0;border-radius:50%;background:var(--c);box-shadow:inset 0 0 0 2px rgba(255,255,255,.14)}
+.login .swatches .swatch.on{box-shadow:0 0 0 2px var(--panel),0 0 0 4px var(--text)}
+.login button.danger{color:#ff8a8a}
+@media(max-width:820px){.login-page.who{justify-content:flex-start;background:radial-gradient(ellipse at 50% 26%,rgba(225,29,72,.3),transparent 58%),var(--bg)}
+.who-hero{position:relative;inset:auto;flex:1 0 auto;display:grid;place-content:center;justify-items:center;gap:.8rem;width:100%;padding:max(2.6rem,env(safe-area-inset-top)) 1rem 2.2rem;background:radial-gradient(rgba(255,255,255,.055) 1px,transparent 1.6px) 0 0/14px 14px}
+.who-mark{position:relative;inset:auto;right:auto;top:auto;width:min(44vw,11rem);transform:none;opacity:1;filter:drop-shadow(0 0 42px rgba(255,125,146,.4))}
+.who-hero .lockup{position:static;flex-direction:column;align-items:center;gap:.25rem;text-align:center}
+.who-hero .lockup strong{font-size:2rem;letter-spacing:.2em;color:var(--text)}
+.who-hero .lockup span{display:block;color:var(--dim);font-size:.85rem}
+.who-hero .chip{display:inline-flex;align-items:center;gap:.4rem;margin-top:.5rem;padding:.3rem .8rem;border-radius:999px;background:rgba(255,255,255,.08);color:var(--text);font-size:.78rem;font-weight:600}
+.who-panel{flex:none;gap:1.4rem;padding:2.2rem 1.4rem max(2rem,env(safe-area-inset-bottom));background:#161b23;background:color-mix(in srgb,var(--panel) 70%,#1b2430);border-radius:50% 50% 0 0/2.6rem 2.6rem 0 0;box-shadow:0 -20px 50px rgba(0,0,0,.35)}
+.who-panel h1{color:var(--dim);font-size:1.05rem;font-weight:500;letter-spacing:0}
+.who-panel h1 .m{display:inline}
+.who-panel h1 .d{display:none}
+.profiles{display:grid;grid-template-columns:repeat(3,1fr);gap:1.3rem 1rem;width:100%;max-width:27rem}
+.profile{width:auto;min-width:0}
+.avatar{width:100%;height:auto;aspect-ratio:1;border-radius:.9rem;font-size:2.4rem}
+.profile strong{font-size:1.05rem;color:var(--text)}
+.edit-tile{display:grid}
+.who .manage{display:none}}
+"#,
+    // Pictures fade in over a quiet placeholder (main.rs marks each one as it loads), pages and
+    // lists arrive instead of appearing, and what is loading is drawn as what it will become.
+    r#".art img,.logo img,.thumb img,.trailer img,.d-art,.d-poster{opacity:0;transition:opacity .4s ease}
+.art img[data-ready],.logo img[data-ready],.thumb img[data-ready],.trailer img[data-ready],.d-art[data-ready],.d-poster[data-ready]{opacity:1}
+img[data-failed]{display:none}
+.ph{position:absolute;inset:0;display:grid;place-items:center;color:var(--faint);font-weight:700;transition:opacity .4s ease}
+.art:has(img[data-ready]) .ph,.logo:has(img[data-ready]) .ph,.thumb:has(img[data-ready]) .ph{opacity:0}
+.prog{position:absolute;inset:auto 0 0;height:3px;background:rgba(255,255,255,.22)}
+.prog i{display:block;height:100%;border-radius:0 3px 3px 0;background:var(--fill)}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}}
+@keyframes fade{from{opacity:0}}
+@keyframes pop{from{opacity:0;transform:scale(.97) translateY(-4px)}}
+@keyframes pulse{50%{opacity:.5}}
+.scroll{animation:fade .22s ease-out}
+.detail{animation:rise .3s cubic-bezier(.2,.8,.2,1)}
+.d-main{animation:rise .45s .06s cubic-bezier(.2,.8,.2,1) backwards}
+.watch{animation:fade .2s ease-out}
+.menu,.w-menu{animation:pop .14s ease-out}
+.toast,.upnext{animation:rise .25s ease-out}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.sk{pointer-events:none}
+.sk .art,.sk .logo,.sk strong{background:var(--row);animation:pulse 1.4s ease-in-out infinite}
+.sk strong{display:block;width:70%;height:.8rem;margin:.5rem auto 0;border-radius:6px}
+.row.sk strong{width:60%;margin:0}
+.pager{display:flex;align-items:center;justify-content:space-between;flex:none;gap:1rem;padding:.5rem .8rem;border-top:1px solid var(--hair);color:var(--dim);font-size:.78rem}
+.pager .range{white-space:nowrap;font-variant-numeric:tabular-nums}
+.pages{display:flex;align-items:center;gap:.2rem}
+.pages button{display:grid;place-items:center;min-width:2rem;height:2rem;padding:0 .45rem;border-radius:9px;color:var(--dim);font-variant-numeric:tabular-nums}
+.pages button:hover:not(:disabled){background:var(--row);color:var(--text)}
+.pages button.on{background:var(--soft);color:var(--accent);font-weight:700}
+.pages button:disabled{opacity:.3;cursor:default}
+.pages svg{width:1rem;height:1rem}
+.pages .gap{padding:0 .25rem;color:var(--faint)}
+.pages .of{display:none;margin:0 .3rem;color:var(--faint);white-space:nowrap}
+.channels .pager{justify-content:center}
+.channels .pager .range,.channels .pages .gap,.channels .pages button:not(.on):not(.step){display:none}
+.channels .pages .of{display:inline}
+"#,
     // Narrow screens: the rail becomes a floating tab bar, categories a button
     r#"@media(max-width:820px){.brand span,.who b{display:none}.topbar{gap:.5rem}.rail{top:auto;bottom:.8rem;left:50%;flex-direction:row;transform:translateX(-50%)}.rail button{width:auto;min-width:4.4rem;height:3rem;padding:0 .8rem}.rail span{display:block}.workspace{inset:4.2rem 0 0;grid-template-columns:1fr;padding:0 .6rem .6rem}.sidebar{display:none}.cats-btn{display:inline-flex}.scroll,.episodes{padding-bottom:5.5rem}.d-hero{min-height:auto;padding:7rem 1rem 1.6rem}.d-facts{position:relative;inset:auto;width:auto;margin-top:1.4rem}.d-sec{padding:1rem 1rem .8rem}.w-top{padding:.8rem .8rem 2.5rem}.w-bottom{padding:3rem .8rem .6rem}.w-row .vol,.w-row .volume{display:none}.w-menu{right:.8rem;bottom:5.2rem}}
 /* Live TV on a phone: keep the picture above the channels, without squeezing in the guide. */
@@ -334,6 +430,7 @@ svg{width:1.1rem;height:1.1rem}
 @media(max-width:820px){.detail-return{left:.75rem}}
 /* A phone turned sideways while watching: just the picture. */
 @media(max-height:500px) and (orientation:landscape){body:has(.live.watching) .topbar,body:has(.live.watching) .rail,.workspace:has(.live.watching) .sidebar,.live.watching .channels,.live.watching .guide{display:none}.workspace:has(.live.watching){inset:0;grid-template-columns:1fr;padding:0}.live.watching{grid-template-columns:1fr;margin:0}.live.watching .stage{flex:1}.live.watching .live-stage{height:100%}.live.watching .player{height:100%;aspect-ratio:auto}}
+@media(max-width:820px){.pager{justify-content:center;padding-bottom:4.8rem}.pager .range,.pages .gap,.pages button:not(.on):not(.step){display:none}.pages .of{display:inline}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 "#,
 );
@@ -350,6 +447,7 @@ const MUTED: &str = "M11 5L6 9H3v6h3l5 4V5zM22 9l-6 6M16 9l6 6";
 const FULLSCREEN: &str = "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5";
 const DOWNLOAD: &str = "M12 4v11m0 0-4-4m4 4 4-4M5 20h14";
 const BACK: &str = "M15 5l-7 7 7 7";
+const NEXT_PAGE: &str = "M9 5l7 7-7 7";
 const USER: &str = "M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z";
 const PIP: &str = "M4 5h16a1 1 0 011 1v7M3 6v11a1 1 0 001 1h6M13 14h7a1 1 0 011 1v3a1 1 0 01-1 1h-7a1 1 0 01-1-1v-3a1 1 0 011-1z";
 const SORT: &str = "M3 6h11M3 12h7M3 18h4M17 6v12m0 0l-3-3m3 3l3-3";
@@ -402,7 +500,33 @@ fn main() {
         web_sys::console::error_1(&JsValue::from_str(&format!("RIPTV crashed: {info}")));
     }));
     set_favicon();
+    fade_pictures_in();
     dioxus::launch(App);
+}
+
+/// Marks every picture on the page when it has loaded (`data-ready`) or failed (`data-failed`), so
+/// the stylesheet can fade it in over its placeholder. One listener does it for all of them: a
+/// `load` event doesn't bubble, but it can be caught on the way down, so no picture needs a handler
+/// of its own (there can be hundreds).
+fn fade_pictures_in() {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    for (event, mark) in [("load", "data-ready"), ("error", "data-failed")] {
+        let on = Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+            if let Some(img) = e
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                .filter(|el| el.tag_name() == "IMG")
+            {
+                let _ = img.set_attribute(mark, "");
+            }
+        });
+        let _ =
+            doc.add_event_listener_with_callback_and_bool(event, on.as_ref().unchecked_ref(), true);
+        // For as long as the page lives.
+        on.forget();
+    }
 }
 
 /// Same-origin proxy endpoint, e.g. `http://127.0.0.1:3000/proxy`.
@@ -673,89 +797,6 @@ fn RustMark() -> Element {
     }
 }
 
-#[component]
-fn Login() -> Element {
-    #[derive(Clone, Copy, PartialEq)]
-    enum Mode {
-        Xtream,
-        Playlist,
-    }
-
-    let mut session = use_context::<Signal<Option<Client>>>();
-    let mut playlist = use_context::<Signal<String>>();
-    let mut server_url = use_signal(String::new);
-    let mut playlist_url = use_signal(String::new);
-    let mut user = use_signal(String::new);
-    let mut pass = use_signal(String::new);
-    let mut alias = use_signal(String::new);
-    let mut mode = use_signal(|| Mode::Xtream);
-    let mut status = use_signal(|| None::<String>);
-    let mut busy = use_signal(|| false);
-
-    let connect = move |(selected, u, n, p, label): (Mode, String, String, String, String)| {
-        spawn(async move {
-            busy.set(true);
-            status.set(None);
-            let result = match selected {
-                Mode::Xtream => login(&u, &n, &p).await,
-                Mode::Playlist => add_playlist(&u).await,
-            };
-            match result {
-                Ok(c) => {
-                    playlist.set(if label.is_empty() && selected == Mode::Playlist {
-                        "Playlist".into()
-                    } else {
-                        label
-                    });
-                    session.set(Some(c));
-                }
-                Err(e) => status.set(Some(explain(&e))),
-            }
-            busy.set(false);
-        });
-    };
-
-    rsx! {
-        div { class: "login-page",
-            form { class: "login",
-                onsubmit: move |e| {
-                    e.prevent_default();
-                    let selected = mode();
-                    let url = if selected == Mode::Xtream { server_url() } else { playlist_url() };
-                    connect((selected, url, user(), pass(), alias().trim().to_string()));
-                },
-                div { class: "brand", RustMark {} span { "RIPTV" } }
-                h1 { if mode() == Mode::Xtream { "Sign in" } else { "Add playlist" } }
-                div { class: "login-modes", aria_label: "Source type",
-                    button { r#type: "button", disabled: busy(), class: if mode() == Mode::Xtream { "on" } else { "" }, onclick: move |_| mode.set(Mode::Xtream), "Xtream" }
-                    button { r#type: "button", disabled: busy(), class: if mode() == Mode::Playlist { "on" } else { "" }, onclick: move |_| mode.set(Mode::Playlist), "M3U / M3U8" }
-                }
-                if mode() == Mode::Xtream {
-                    input { aria_label: "Server URL", placeholder: "Server URL", value: "{server_url}", oninput: move |e| server_url.set(e.value()) }
-                    input { aria_label: "Username", autocomplete: "username", placeholder: "Username", value: "{user}", oninput: move |e| user.set(e.value()) }
-                    input { r#type: "password", aria_label: "Password", autocomplete: "current-password", placeholder: "Password", value: "{pass}", oninput: move |e| pass.set(e.value()) }
-                } else {
-                    input { aria_label: "Playlist URL", placeholder: "Playlist URL", value: "{playlist_url}", oninput: move |e| playlist_url.set(e.value()) }
-                }
-                input { aria_label: "Playlist name", placeholder: "Name (optional)", value: "{alias}", oninput: move |e| alias.set(e.value()) }
-                button { r#type: "submit", disabled: busy(), if busy() { "Connecting…" } else { "Connect" } }
-                if mode() == Mode::Xtream {
-                    button { r#type: "button", class: "ghost", disabled: busy(),
-                        onclick: move |_| connect((Mode::Xtream, "http://127.0.0.1:8081".into(), "demo".into(), "demo".into(), "Demo".into())),
-                        "Try the demo"
-                    }
-                } else {
-                    button { r#type: "button", class: "ghost", disabled: busy(),
-                        onclick: move |_| connect((Mode::Playlist, "https://iptv-org.github.io/iptv/categories/public.m3u".into(), String::new(), String::new(), "Public TV".into())),
-                        "Try free channels"
-                    }
-                }
-                if let Some(msg) = status() { p { class: "err", "{msg}" } }
-            }
-        }
-    }
-}
-
 /// How a section's list is ordered. The first entry of `Sort::options` is each section's default.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Sort {
@@ -911,20 +952,21 @@ async fn load(c: &Client, kind: Kind) -> xtream::Result<Library> {
     })
 }
 
-/// The rows to show: items in `cat` (all if `None`) whose title contains `q` (lowercase), at most
-/// `limit`, plus how many matched. Only the rows actually shown are built (that includes making a
-/// stream URL), so a 30,000-title library stays cheap on every keystroke in the search box.
+/// One page of rows: of the items in `cat` (all if `None`) whose title contains `q` (lowercase),
+/// `limit` of them after the first `skip`, plus how many matched in all. Only the rows on the page
+/// are built (that includes making a stream URL), so a 30,000-title library stays cheap on every
+/// keystroke in the search box and every turn of the page.
 fn rows(
     lib: &Library,
     order: &[u32],
     c: &Client,
     cat: Option<u64>,
     q: &str,
-    limit: usize,
+    (skip, limit): (usize, usize),
 ) -> (Vec<Row>, usize) {
     fn take<T>(
         (list, order): (&[T], &[u32]),
-        (cat, q, limit, total_hint): (Option<u64>, &str, usize, Option<usize>),
+        (cat, q, (skip, limit), total_hint): (Option<u64>, &str, (usize, usize), Option<usize>),
         info: impl Fn(&T) -> (&str, Option<u64>),
         row: impl Fn(&T) -> Row,
     ) -> (Vec<Row>, usize) {
@@ -932,8 +974,9 @@ fn rows(
             let (title, category) = info(t);
             (cat.is_none() || category == cat) && xtream::contains_lowercase(title, q)
         });
+        let skipped = hits.by_ref().take(skip).count();
         let shown: Vec<Row> = hits.by_ref().take(limit).map(&row).collect();
-        let total = total_hint.unwrap_or_else(|| shown.len() + hits.count());
+        let total = total_hint.unwrap_or_else(|| skipped + shown.len() + hits.count());
         (shown, total)
     }
     // Category totals are already counted on load. Avoid scanning thousands of remaining items
@@ -941,7 +984,7 @@ fn rows(
     let total_hint = q
         .is_empty()
         .then(|| cat.map_or(lib.len(), |id| lib.counts.get(&id).copied().unwrap_or(0)));
-    let filter = (cat, q, limit, total_hint);
+    let filter = (cat, q, (skip, limit), total_hint);
     match &lib.items {
         Items::Live(v) => take(
             (v, order),
@@ -1024,7 +1067,7 @@ fn Browse() -> Element {
     let mut cats_open = use_signal(|| false);
     let mut player_revision = use_signal(|| 0_u64);
     let mut refresh = use_signal(|| 0_u64);
-    let mut limit = use_signal(|| SHOW);
+    let mut page = use_signal(|| 0_usize);
 
     let (c_cats, c_lib) = (client.clone(), client.clone());
     let cats = use_resource(move || {
@@ -1065,7 +1108,7 @@ fn Browse() -> Element {
         open.set(None);
         playing.set(None);
         live.set(None);
-        limit.set(SHOW);
+        page.set(0);
     };
     let mut select = move |cat: Option<u64>| {
         category.set(cat);
@@ -1075,14 +1118,14 @@ fn Browse() -> Element {
         if cat.is_none() {
             live.set(None);
         }
-        limit.set(SHOW);
+        page.set(0);
     };
     let pick = move |row: Row| match row.target {
         Target::Live { id, url } => {
             playing.set(None);
             if !three_pane {
                 category.set(row.category);
-                limit.set(SHOW);
+                page.set(0);
             }
             live.set(Some((id, row.title, url)));
         }
@@ -1131,13 +1174,15 @@ fn Browse() -> Element {
         }
     };
 
+    // A new key makes a new list, which is what lets a page arrive instead of just changing.
     let scope = format!(
-        "{}-{:?}-{}-{}-{:?}",
+        "{}-{:?}-{}-{}-{:?}-{}",
         kind() as u8,
         category(),
         search(),
         refresh(),
-        sort()
+        sort(),
+        page()
     );
     let body = match &*library.read() {
         Some(Err(e)) => rsx! { p { class: "err", "{e}" } },
@@ -1147,14 +1192,16 @@ fn Browse() -> Element {
                 .as_deref()
                 .filter(|o| o.len() == lib.len())
                 .unwrap_or(&[]);
-            let (shown, total) = rows(
-                lib,
-                order,
-                &client,
-                category(),
-                &search().to_lowercase(),
-                limit(),
-            );
+            let size = if three_pane { PAGE_LIST } else { PAGE_GRID };
+            let q = search().to_lowercase();
+            let (mut shown, total) =
+                rows(lib, order, &client, category(), &q, (page() * size, size));
+            let pages = total.div_ceil(size).max(1);
+            let now = page().min(pages - 1);
+            // A refresh can leave the page asked for past the end: show the last one instead.
+            if now != page() {
+                shown = rows(lib, order, &client, category(), &q, (now * size, size)).0;
+            }
             let list = if shown.is_empty() {
                 rsx! { div { class: "empty", "Nothing matches." } }
             } else if three_pane {
@@ -1178,22 +1225,27 @@ fn Browse() -> Element {
                 }
             };
             rsx! {
-                div {
-                    class: "scroll",
-                    key: "{scope}",
-                    onscroll: move |e| {
-                        let d = e.data();
-                        let bottom = d.scroll_top() + f64::from(d.client_height());
-                        if bottom > f64::from(d.scroll_height()) - 800.0 && limit() < total {
-                            limit += SHOW;
-                        }
-                    },
-                    {list}
-                }
+                div { class: "scroll", key: "{scope}", {list} }
+                Pager { page: now, pages, total, size, onpage: move |n| page.set(n) }
             }
         }
         // Still loading, or showing the previous section's data: don't pass that off as this one.
-        _ => rsx! { div { class: "empty", "Loading your library…" } },
+        _ => rsx! {
+            div { class: "scroll", role: "status", aria_busy: "true",
+                span { class: "sr", "Loading your library…" }
+                if three_pane {
+                    for n in 0..12 {
+                        div { class: "row sk", key: "{n}", span { class: "logo" } div { strong {} } }
+                    }
+                } else {
+                    div { class: if kind() == Kind::Live { "grid tiles" } else { "grid" },
+                        for n in 0..18 {
+                            div { class: "card sk", key: "{n}", span { class: "art" } strong {} }
+                        }
+                    }
+                }
+            }
+        },
     };
 
     let player = playing().map(|play| {
@@ -1271,7 +1323,7 @@ fn Browse() -> Element {
                                 class: if option == sort() { "on" } else { "" },
                                 onclick: move |_| {
                                     sort.set(option);
-                                    limit.set(SHOW);
+                                    page.set(0);
                                     sort_open.set(false);
                                 },
                                 span { "{option.label()}" }
@@ -1296,7 +1348,7 @@ fn Browse() -> Element {
                         aria_label: "Search this section",
                         placeholder: "Search {page_name}",
                         value: "{search}",
-                        oninput: move |e| { search.set(e.value()); limit.set(SHOW); }
+                        oninput: move |e| { search.set(e.value()); page.set(0); }
                     }
                 }
             }
@@ -1323,7 +1375,7 @@ fn Browse() -> Element {
                             onclick: move |_| {
                                 refresh += 1;
                                 player_revision += 1;
-                                limit.set(SHOW);
+                                page.set(0);
                                 account_open.set(false);
                             },
                             "Refresh"
@@ -1343,7 +1395,7 @@ fn Browse() -> Element {
                             "Sound in Rust"
                             i { class: "switch" }
                         }
-                        button { onclick: move |_| session.set(None), "Disconnect" }
+                        button { onclick: move |_| session.set(None), "Switch profile" }
                     }
                 }
             }
@@ -1411,6 +1463,69 @@ fn Browse() -> Element {
     }
 }
 
+/// The page numbers to offer: the first, the last and a few around this one, with `None` where
+/// pages are left out (a gap of one page is just shown).
+fn page_window(page: usize, pages: usize) -> Vec<Option<usize>> {
+    let mut shown: Vec<usize> = [0, pages - 1]
+        .into_iter()
+        .chain(page.saturating_sub(2)..=(page + 2).min(pages - 1))
+        .collect();
+    shown.sort_unstable();
+    shown.dedup();
+    let mut out = vec![];
+    for (i, &p) in shown.iter().enumerate() {
+        if i > 0 {
+            match p - shown[i - 1] {
+                1 => {}
+                2 => out.push(Some(shown[i - 1] + 1)),
+                _ => out.push(None),
+            }
+        }
+        out.push(Some(p));
+    }
+    out
+}
+
+/// Which page of a long list this is, and a way to turn it. Nothing for a list of one page.
+#[component]
+fn Pager(
+    page: usize,
+    pages: usize,
+    total: usize,
+    size: usize,
+    onpage: EventHandler<usize>,
+) -> Element {
+    if pages <= 1 {
+        return rsx! {};
+    }
+    let (first, last) = (page * size + 1, ((page + 1) * size).min(total));
+    rsx! {
+        nav { class: "pager", aria_label: "Pages",
+            span { class: "range", "{thousands(first)}–{thousands(last)} of {thousands(total)}" }
+            div { class: "pages",
+                button { class: "step", disabled: page == 0, aria_label: "Previous page", title: "Previous page",
+                    onclick: move |_| onpage.call(page.saturating_sub(1)), Icon { d: BACK } }
+                for slot in page_window(page, pages) {
+                    if let Some(n) = slot {
+                        button {
+                            key: "{n}",
+                            class: if n == page { "on" } else { "" },
+                            aria_current: if n == page { "page" } else { "false" },
+                            onclick: move |_| onpage.call(n),
+                            "{thousands(n + 1)}"
+                        }
+                    } else {
+                        span { class: "gap", "…" }
+                    }
+                }
+                span { class: "of", "of {thousands(pages)}" }
+                button { class: "step", disabled: page + 1 >= pages, aria_label: "Next page", title: "Next page",
+                    onclick: move |_| onpage.call(page + 1), Icon { d: NEXT_PAGE } }
+            }
+        }
+    }
+}
+
 #[component]
 fn Download(title: String, url: String) -> Element {
     rsx! {
@@ -1434,9 +1549,10 @@ fn ChannelRow(row: Row, active: bool, onpick: EventHandler<Row>) -> Element {
             title: "{row.title}",
             onclick: move |_| onpick.call(r.clone()),
             span { class: "logo",
+                span { class: "ph", "TV" }
                 if let Some(src) = row.icon.as_deref().filter(|s| s.starts_with("http")) {
                     img { src: "{src}", loading: "lazy", decoding: "async" }
-                } else { "TV" }
+                }
             }
             div {
                 strong { "{row.title}" }
@@ -1455,16 +1571,23 @@ fn Card(row: Row, onpick: EventHandler<Row>) -> Element {
         Target::Live { .. } => "TV",
         Target::Movie { .. } => "M",
     };
+    // How far the viewer got, if they did (a movie; a series is watched a episode at a time).
+    let progress = match &row.target {
+        Target::Movie { id, .. } => percent_watched(&format!("movie:{id}")),
+        _ => None,
+    };
     rsx! {
         button {
             class: "card",
             title: "{row.title}",
             onclick: move |_| onpick.call(r.clone()),
             span { class: "art",
+                span { class: "ph", "{fallback}" }
                 if let Some(src) = row.icon.as_deref().filter(|s| s.starts_with("http")) {
                     img { src: "{xtream::sized_art(src, xtream::Art::Thumb)}", loading: "lazy", decoding: "async" }
-                } else { "{fallback}" }
+                }
                 if let Some(s) = &row.score { span { class: "score", "{s}" } }
+                if let Some(p) = progress { span { class: "prog", i { style: "width:{p}%" } } }
             }
             strong { "{row.title}" }
         }
@@ -1586,12 +1709,26 @@ fn position_key(key: &str) -> String {
     format!("riptv.at.{key}")
 }
 
+/// How far the viewer got last time: (seconds in, seconds in all), the second 0 if not known.
+/// `None` if they haven't started or have finished.
+fn saved_progress(key: &str) -> Option<(f64, f64)> {
+    let saved = storage()?.get_item(&position_key(key)).ok()??;
+    // "754/7200" (older entries are just "754").
+    let (at, total) = saved.split_once('/').unwrap_or((&saved, "0"));
+    let at: f64 = at.parse().ok().filter(|a| *a > 0.0)?;
+    Some((at, total.parse().unwrap_or(0.0)))
+}
+
 /// Where the viewer stopped last time, in seconds (0 if not started or finished).
 fn saved_position(key: &str) -> f64 {
-    storage()
-        .and_then(|s| s.get_item(&position_key(key)).ok().flatten())
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0.0)
+    saved_progress(key).map_or(0.0, |p| p.0)
+}
+
+/// How much of a title has been watched, 1 to 99, for a progress bar; `None` if it can't be said.
+fn percent_watched(key: &str) -> Option<u32> {
+    saved_progress(key)
+        .filter(|p| p.1 > 0.0)
+        .map(|(at, total)| (at / total * 100.0).clamp(1.0, 99.0) as u32)
 }
 
 /// Remembers the position, unless the viewer is at the very start or has all but finished.
@@ -1601,7 +1738,10 @@ fn save_position(key: &str, at: f64, total: f64) {
     if at < 30.0 || finished {
         let _ = s.remove_item(&position_key(key));
     } else {
-        let _ = s.set_item(&position_key(key), &(at as u64).to_string());
+        let _ = s.set_item(
+            &position_key(key),
+            &format!("{}/{}", at as u64, total as u64),
+        );
     }
 }
 
@@ -2278,10 +2418,10 @@ fn DetailPage(
         let all = all.clone();
         move |i: usize| onplay.call((all[i].clone(), all[i + 1..].to_vec()))
     };
-    let resume_at = all
+    let resume = all
         .first()
-        .map(|p| saved_position(&p.key))
-        .filter(|s| *s > 0.0 && is_movie);
+        .filter(|_| is_movie)
+        .and_then(|p| saved_progress(&p.key));
     let season_now = chosen().or_else(|| spans.first().map(|s| s.0));
 
     rsx! {
@@ -2305,7 +2445,9 @@ fn DetailPage(
                         if !all.is_empty() {
                             button { class: "play", onclick: { let play_at = play_at.clone(); move |_| play_at(0) },
                                 Icon { d: PLAY }
-                                if resume_at.is_some() { "Resume" } else { "Play" }
+                                if let Some((at, total)) = resume {
+                                    if total > at { "Resume · {runtime_label((total - at) as u64)} left" } else { "Resume" }
+                                } else { "Play" }
                             }
                         }
                         if let Some(id) = &trailer {
@@ -2365,9 +2507,11 @@ fn DetailPage(
                             for (i, ep) in seasons.iter().flat_map(|s| s.episodes.iter()).enumerate().skip(range.start).take(range.len()) {
                                 div { class: "epc", key: "{ep.id}",
                                     button { class: "thumb", aria_label: "Play", onclick: { let play_at = play_at.clone(); move |_| play_at(i) },
+                                        span { class: "ph", "E{ep.episode_num.unwrap_or(0)}" }
                                         if let Some(img) = ep.info.image.as_deref().filter(|s| s.starts_with("http")) {
                                             img { src: "{xtream::sized_art(img, xtream::Art::Still)}", loading: "lazy", decoding: "async" }
-                                        } else { "E{ep.episode_num.unwrap_or(0)}" }
+                                        }
+                                        if let Some(p) = percent_watched(&all[i].key) { span { class: "prog", i { style: "width:{p}%" } } }
                                         span { class: "ep-num", "E{ep.episode_num.unwrap_or((i - range.start + 1) as u64)}" }
                                         span { class: "go", Icon { d: PLAY } }
                                         if let Some(secs) = ep.info.runtime_secs { span { class: "len", "{runtime_label(secs)}" } }
