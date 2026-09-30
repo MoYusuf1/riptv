@@ -615,27 +615,15 @@ fn video_el() -> Option<web_sys::HtmlVideoElement> {
         .ok()
 }
 
-/// Prefer the device's media pipeline for HTTPS HLS. The browser media element can fetch
-/// cross-origin video without CORS; Rust/proxy playback remains the fallback if it cannot.
+/// Prefer the device's media pipeline for HTTPS HLS where the browser has one (Safari, recent
+/// Chrome). A media element can fetch cross-origin video without CORS, and Rust/proxy playback
+/// remains the fallback if it cannot.
 fn native_hls_source(client: &Client, url: &str) -> Option<String> {
     let media = xtream::Url::parse(url).ok()?;
     let upstream = client.upstream(&media);
-    if upstream.scheme() != "https" || !upstream.path().to_ascii_lowercase().ends_with(".m3u8") {
-        return None;
-    }
-    let video = web_sys::window()?
-        .document()?
-        .create_element("video")
-        .ok()?
-        .dyn_into::<web_sys::HtmlVideoElement>()
-        .ok()?;
-    if video
-        .can_play_type("application/vnd.apple.mpegurl")
-        .is_empty()
-    {
-        return None;
-    }
-    Some(upstream.to_string())
+    let hls = upstream.path().to_ascii_lowercase().ends_with(".m3u8");
+    (upstream.scheme() == "https" && hls && rstreamkit::mse::plays_hls_natively())
+        .then(|| upstream.to_string())
 }
 
 fn toggle(v: &web_sys::HtmlVideoElement) {
