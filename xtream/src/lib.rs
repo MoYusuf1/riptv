@@ -414,6 +414,27 @@ fn split_records(bytes: &[u8]) -> Result<Vec<&serde_json::value::RawValue>> {
     }
 }
 
+/// A stream the proxy converts on the fly. It is one continuous stream with no index, so a
+/// `<video>` can't seek in it; to jump, start a new one part-way in with [`Converted::at`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Converted {
+    url: Url,
+    /// Whole seconds, for a movie or episode; `None` for a live stream.
+    pub duration: Option<u64>,
+}
+
+impl Converted {
+    /// The converted stream beginning `start` seconds in (from the beginning if zero).
+    pub fn at(&self, start: u64) -> Url {
+        let mut url = self.url.clone();
+        if start > 0 {
+            url.query_pairs_mut()
+                .append_pair("start", &start.to_string());
+        }
+        url
+    }
+}
+
 /// Header the proxy puts on its own refusals and failures, with the reason. Provider errors that
 /// pass through it don't have it.
 const PROXY_ERROR: &str = "x-riptv-error";
@@ -503,7 +524,7 @@ impl Client {
     /// converted stream, which any `<video>` can play. Fails, with the reason, if the proxy has no
     /// ffmpeg or can't read the stream. A `.m3u8` address is tried as the plain `.ts` stream first,
     /// which is what ffmpeg reads best.
-    pub async fn convert(&self, media: &Url) -> Result<Url> {
+    pub async fn convert(&self, media: &Url) -> Result<Converted> {
         let Some(proxy) = &self.proxy else {
             return Err(Error::Proxy("there is no proxy to convert it".into()));
         };
@@ -532,15 +553,13 @@ impl Client {
             };
             match answer {
                 Ok(resp) => {
-                    let video = resp
-                        .headers()
-                        .get("x-riptv-video")
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("transcode");
-                    return Ok(endpoint(
-                        "/compat",
-                        &[("url", candidate.as_str()), ("video", video)],
-                    ));
+                    let header =
+                        |name: &str| resp.headers().get(name).and_then(|v| v.to_str().ok());
+                    let video = header("x-riptv-video").unwrap_or("transcode");
+                    return Ok(Converted {
+                        url: endpoint("/compat", &[("url", candidate.as_str()), ("video", video)]),
+                        duration: header("x-riptv-duration").and_then(|d| d.parse().ok()),
+                    });
                 }
                 Err(e) => last = e,
             }

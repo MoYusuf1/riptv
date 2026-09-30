@@ -90,6 +90,10 @@ ffmpeg those channels say why, and a sound-only problem still plays the picture.
 in the pure-Rust player. ffmpeg follows redirects itself, so its own connections aren't held to the
 public-address rule the proxy applies to the page's requests.
 
+A converted movie or episode is one continuous stream with no index, which the browser can't seek in,
+so it gets its own seek bar: picking a place restarts the conversion from that second (a moment's
+wait). Titles that play fine on their own keep the browser's own controls.
+
 Press `I` on the live player (or the info button) for the picture size, real frame rate, dropped
 frames and buffer, which tells a slow stream from a slow decoder.
 

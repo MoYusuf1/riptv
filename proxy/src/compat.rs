@@ -37,6 +37,7 @@ use crate::{AppState, FALLBACK_UA, from_app, refusal, url_ok};
 const MISSING: &str =
     "ffmpeg isn't installed, and this stream needs it (Arch: sudo pacman -S ffmpeg)";
 const VIDEO_HEADER: HeaderName = HeaderName::from_static("x-riptv-video");
+const DURATION_HEADER: HeaderName = HeaderName::from_static("x-riptv-duration");
 
 /// Only plain network protocols: a playlist from a provider must not be able to make ffmpeg read
 /// local files.
@@ -47,6 +48,9 @@ pub struct CompatQuery {
     url: String,
     /// `copy` or `transcode`, as reported by the check; looked up again if absent.
     video: Option<String>,
+    /// Whole seconds into a movie or episode to begin at; the page's seek bar restarts the
+    /// conversion here, because a converted stream has no index a `<video>` could seek in.
+    start: Option<u32>,
 }
 
 /// What the first video stream is, from ffprobe.
@@ -56,6 +60,8 @@ struct Probe {
     pix_fmt: String,
     field_order: String,
     height: u32,
+    /// Seconds, for a movie or episode; live streams have none.
+    duration: Option<f64>,
 }
 
 impl Probe {
@@ -81,6 +87,10 @@ impl Probe {
             pix_fmt: get("pix_fmt"),
             field_order: get("field_order"),
             height: get("height").parse().unwrap_or(0),
+            duration: get("duration")
+                .parse::<f64>()
+                .ok()
+                .filter(|d| d.is_finite() && *d > 0.0),
         })
     }
 }
@@ -113,7 +123,7 @@ async fn probe(url: &str, ua: &str) -> Result<Option<Probe>, Failure> {
             "5000000",
         ])
         .args(["-select_streams", "v:0", "-show_entries"])
-        .arg("stream=codec_name,pix_fmt,field_order,height")
+        .arg("stream=codec_name,pix_fmt,field_order,height:format=duration")
         .args(["-of", "default=noprint_wrappers=1", url])
         .stdin(Stdio::null())
         .kill_on_drop(true)
@@ -168,6 +178,7 @@ fn ffmpeg_args(
     nvenc: bool,
     height: u32,
     max_height: u32,
+    start: u32,
 ) -> Vec<String> {
     let mut a: Vec<String> = [
         "-hide_banner",
@@ -197,6 +208,11 @@ fn ffmpeg_args(
     .into();
     if video != "copy" {
         a.extend(["-hwaccel", "auto"].map(String::from));
+    }
+    if start > 0 {
+        // Before `-i`: jump there without reading everything before it. Timestamps then begin at
+        // zero, so the page adds `start` back when it shows the position.
+        a.extend(["-ss".to_string(), start.to_string()]);
     }
     a.extend(["-i", url, "-map", "0:v:0?", "-map", "0:a:0?"].map(String::from));
     if video == "copy" {
@@ -342,6 +358,12 @@ pub async fn check(
     let mut res = StatusCode::NO_CONTENT.into_response();
     res.headers_mut()
         .insert(VIDEO_HEADER, HeaderValue::from_static(mode));
+    // A movie or episode's length, so the page can offer a seek bar.
+    if let Some(secs) = probed.as_ref().and_then(|p| p.duration)
+        && let Ok(v) = HeaderValue::from_str(&(secs as u64).to_string())
+    {
+        res.headers_mut().insert(DURATION_HEADER, v);
+    }
     res
 }
 
@@ -384,7 +406,15 @@ pub async fn stream(
         .and_then(|v| v.parse().ok())
         .unwrap_or(1080);
     let nvenc = mode != "copy" && nvenc_works().await;
-    let args = ffmpeg_args(url.as_str(), &ua, mode, nvenc, height, max_height);
+    let args = ffmpeg_args(
+        url.as_str(),
+        &ua,
+        mode,
+        nvenc,
+        height,
+        max_height,
+        q.start.unwrap_or(0),
+    );
 
     let mut child = match Command::new("ffmpeg")
         .args(args)
@@ -454,6 +484,15 @@ mod tests {
         assert_eq!((shuffled.codec.as_str(), shuffled.height), ("hevc", 2160));
         assert!(!Probe::parse("codec_name=h264\n").unwrap().can_copy());
         assert_eq!(Probe::parse(""), None, "no video stream: radio");
+        // A movie has a length; a live stream says N/A.
+        let long = Probe::parse("codec_name=h264\nduration=7200.5\n").unwrap();
+        assert_eq!(long.duration, Some(7200.5));
+        assert_eq!(
+            Probe::parse("codec_name=h264\nduration=N/A\n")
+                .unwrap()
+                .duration,
+            None
+        );
     }
 
     fn has(args: &[String], pair: [&str; 2]) -> bool {
@@ -462,7 +501,7 @@ mod tests {
 
     #[test]
     fn the_command_line_copies_or_encodes_as_asked() {
-        let copy = ffmpeg_args("http://h/x.ts", "UA", "copy", false, 0, 1080);
+        let copy = ffmpeg_args("http://h/x.ts", "UA", "copy", false, 0, 1080, 0);
         assert!(
             has(&copy, ["-c:v", "copy"]) && !copy.iter().any(|a| a == "-hwaccel" || a == "-vf")
         );
@@ -472,7 +511,13 @@ mod tests {
             "no local files"
         );
 
-        let gpu = ffmpeg_args("http://h/x.ts", "UA", "transcode", true, 2160, 1080);
+        // A seek goes before the input (so nothing earlier is read); no seek, no flag.
+        assert!(!copy.iter().any(|a| a == "-ss"));
+        let seek = ffmpeg_args("http://h/x.mp4", "UA", "copy", false, 0, 1080, 754);
+        let at = |flag: &str| seek.iter().position(|a| a == flag).unwrap();
+        assert!(at("-ss") < at("-i") && seek[at("-ss") + 1] == "754");
+
+        let gpu = ffmpeg_args("http://h/x.ts", "UA", "transcode", true, 2160, 1080, 0);
         assert!(has(&gpu, ["-c:v", "h264_nvenc"]) && has(&gpu, ["-hwaccel", "auto"]));
         assert!(
             has(&gpu, ["-b:v", "10M"]),
@@ -483,7 +528,7 @@ mod tests {
                 .any(|a| a.contains("min(1080,ih)") && a.contains("yadif"))
         );
 
-        let cpu = ffmpeg_args("http://h/x.ts", "UA", "transcode", false, 2160, 2160);
+        let cpu = ffmpeg_args("http://h/x.ts", "UA", "transcode", false, 2160, 2160, 0);
         assert!(has(&cpu, ["-c:v", "libx264"]) && has(&cpu, ["-b:v", "20M"]));
         assert_eq!(cpu.last().map(String::as_str), Some("pipe:1"));
     }

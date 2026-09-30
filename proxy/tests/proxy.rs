@@ -296,6 +296,7 @@ async fn serves_web_app_with_csp_and_spa_fallback() {
 const HEVC_AC3: &[u8] = include_bytes!("../../player/tests/fixtures/hevc_ac3.ts");
 const H264_AC3: &[u8] = include_bytes!("../../player/tests/fixtures/h264_ac3.ts");
 const INTERLACED: &[u8] = include_bytes!("../../player/tests/fixtures/interlaced_576i.ts");
+const MOVIE: &[u8] = include_bytes!("../../player/tests/fixtures/h264_ac3.mp4");
 
 fn have(tool: &str) -> bool {
     std::process::Command::new(tool)
@@ -356,6 +357,10 @@ async fn compat_mode_turns_hevc_and_ac3_into_h264_and_aac() {
                 get(|| async { ([("content-type", "video/mp2t")], H264_AC3) }),
             )
             .route(
+                "/movie.mp4",
+                get(|| async { ([("content-type", "video/mp4")], MOVIE) }),
+            )
+            .route(
                 "/i.ts",
                 get(|| async { ([("content-type", "video/mp2t")], INTERLACED) }),
             ),
@@ -403,6 +408,26 @@ async fn compat_mode_turns_hevc_and_ac3_into_h264_and_aac() {
         );
     }
 
+    // A movie's length comes with the check, and a conversion can start part-way in: that is
+    // what the page's seek bar does, since a converted stream has nothing a `<video>` can seek in.
+    // (Six seconds of AC-3 movie; a live stream has no length to report.)
+    let movie = ask("/compat/check", "movie.mp4", "").await.unwrap();
+    assert_eq!(movie.headers()["x-riptv-duration"], "6");
+    assert!(
+        h264.headers().get("x-riptv-duration").is_none(),
+        "no length for a live stream"
+    );
+    let whole = ask("/compat", "movie.mp4", "&video=copy").await.unwrap();
+    let (_, all_frames) = probe_bytes(&whole.bytes().await.unwrap(), "whole");
+    let from_2s = ask("/compat", "movie.mp4", "&video=copy&start=2")
+        .await
+        .unwrap();
+    let (_, later_frames) = probe_bytes(&from_2s.bytes().await.unwrap(), "later");
+    assert!(
+        later_frames * 100 >= all_frames * 55 && later_frames * 100 <= all_frames * 80,
+        "starting 2s into 6s: {later_frames} of {all_frames} frames, expected about two thirds"
+    );
+
     // Interlaced video (25 frames of two fields each, one second) is deinterlaced to full motion
     // rate: 50 progressive frames, not 25 combed ones.
     let i = ask("/compat/check", "i.ts", "").await.unwrap();
@@ -427,7 +452,11 @@ async fn compat_mode_turns_hevc_and_ac3_into_h264_and_aac() {
         "{converted:?}"
     );
     let playable = xtream::Url::parse(&format!("http://127.0.0.1:{upstream}/hevc.ts")).unwrap();
-    let url = c.convert(&playable).await.unwrap();
+    let converted = c.convert(&playable).await.unwrap();
+    assert_eq!(converted.duration, None, "a live stream has no length");
+    assert!(converted.at(90).as_str().ends_with("&start=90"));
+    assert!(!converted.at(0).as_str().contains("start="));
+    let url = converted.at(0);
     assert!(
         url.as_str().contains("/compat?url=") && url.as_str().contains("video=transcode"),
         "{url}"

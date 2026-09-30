@@ -206,6 +206,12 @@ svg{width:1.1rem;height:1.1rem}
 .sheet video{display:block;width:100%;max-height:64vh;background:#000}
 .sheet.cats{width:100%;max-height:78vh;border-radius:22px 22px 0 0}
 .sheet-body{padding:0 .8rem 1rem}
+.vod{position:relative;background:#000}
+.vod.fill{position:fixed;z-index:60;inset:0}
+.vod.fill video,.vod:fullscreen video{height:100%;max-height:none}
+.vod .controls{opacity:1}
+.scrub{flex:1;min-width:4rem;margin:0 .5rem;accent-color:var(--accent)}
+.time{margin:0 .3rem;color:#fff;font-size:.78rem;font-variant-numeric:tabular-nums;white-space:nowrap}
 .bar{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.8rem 1rem}
 .bar strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bar div{display:flex;align-items:center;gap:.5rem}
@@ -243,12 +249,44 @@ const LIST: &str = "M4 6h16M4 12h16M4 18h10";
 /// Pixels on the guide timeline are this many seconds wide (90 px per hour).
 const SECS_PER_PX: u64 = 40;
 
+/// The Rust logo, as the paths of the ring's teeth and of the R inside it (the ring is a circle).
+const MARK_TEETH: &str = "M32 2v8M32 54v8M2 32h8M54 32h8M11 11l6 6M47 47l6 6M53 11l-6 6M17 47l-6 6M20 5l3 8M44 51l3 8M5 20l8 3M51 44l8 3M44 5l-3 8M23 51l-3 8M59 20l-8 3M13 41l-8 3";
+const MARK_R: &str = "M23 44V20h11c6 0 10 4 10 9s-4 9-10 9H23M34 38l11 7";
+
+/// The tab icon: the same logo, in the accent colour on the page's own background. It is a data
+/// address so there is no file to serve (and the page's policy allows `data:` images).
+fn set_favicon() {
+    let svg = format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>\
+         <rect width='64' height='64' rx='14' fill='#0b0709'/>\
+         <g fill='none' stroke='#ff7d92' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'>\
+         <circle cx='32' cy='32' r='21'/><path d='{MARK_TEETH}'/><path d='{MARK_R}'/></g></svg>"
+    );
+    let href = format!(
+        "data:image/svg+xml,{}",
+        svg.replace('#', "%23")
+            .replace('<', "%3C")
+            .replace('>', "%3E")
+            .replace(' ', "%20")
+    );
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    if let (Ok(link), Ok(Some(head))) = (doc.create_element("link"), doc.query_selector("head")) {
+        let _ = link.set_attribute("rel", "icon");
+        let _ = link.set_attribute("type", "image/svg+xml");
+        let _ = link.set_attribute("href", &href);
+        let _ = head.append_child(&link);
+    }
+}
+
 fn main() {
     // The page is built to abort on a panic, which the browser reports as a bare "unreachable".
     // Say what happened first.
     std::panic::set_hook(Box::new(|info| {
         web_sys::console::error_1(&JsValue::from_str(&format!("RIPTV crashed: {info}")));
     }));
+    set_favicon();
     dioxus::launch(App);
 }
 
@@ -332,13 +370,27 @@ fn video_el() -> Option<web_sys::HtmlVideoElement> {
         .ok()
 }
 
+fn toggle(v: &web_sys::HtmlVideoElement) {
+    if v.paused() {
+        let _ = v.play();
+    } else {
+        let _ = v.pause();
+    }
+}
+
 fn toggle_play() {
     if let Some(v) = video_el() {
-        if v.paused() {
-            let _ = v.play();
-        } else {
-            let _ = v.pause();
-        }
+        toggle(&v);
+    }
+}
+
+/// `1:05:09` or `4:07`.
+fn hms(secs: u64) -> String {
+    let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
     }
 }
 
@@ -394,7 +446,7 @@ fn toggle_mute() -> Option<bool> {
 /// Real fullscreen where the browser really does it. Some embedded browsers accept the request and
 /// never act on it (and iOS Safari only fullscreens a bare `<video>`), so if nothing happened a
 /// moment later the player fills the page instead (`expanded`).
-fn toggle_fullscreen(mut expanded: Signal<bool>) {
+fn toggle_fullscreen(id: &'static str, mut expanded: Signal<bool>) {
     let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
         return;
     };
@@ -403,7 +455,7 @@ fn toggle_fullscreen(mut expanded: Signal<bool>) {
     } else if expanded() {
         expanded.set(false);
     } else {
-        if let Some(player) = doc.get_element_by_id("live-player") {
+        if let Some(player) = doc.get_element_by_id(id) {
             let _ = player.request_fullscreen();
         }
         // Not Dioxus's `spawn`: the key listener calls this from outside its runtime.
@@ -465,8 +517,8 @@ fn RustMark() -> Element {
             stroke_linecap: "round",
             stroke_linejoin: "round",
             circle { cx: "32", cy: "32", r: "21" }
-            path { d: "M32 2v8M32 54v8M2 32h8M54 32h8M11 11l6 6M47 47l6 6M53 11l-6 6M17 47l-6 6M20 5l3 8M44 51l3 8M5 20l8 3M51 44l8 3M44 5l-3 8M23 51l-3 8M59 20l-8 3M13 41l-8 3" }
-            path { d: "M23 44V20h11c6 0 10 4 10 9s-4 9-10 9H23M34 38l11 7" }
+            path { d: "{MARK_TEETH}" }
+            path { d: "{MARK_R}" }
         }
     }
 }
@@ -786,7 +838,7 @@ fn Browse() -> Element {
     // A title whose sound the browser can't play: what we tell the viewer, and the converted
     // stream that replaces the original once the proxy has one.
     let mut movie_note = use_signal(|| None::<String>);
-    let mut movie_src = use_signal(|| None::<String>);
+    let mut movie_conv = use_signal(|| None::<(xtream::Converted, u64)>);
     let mut sort = use_signal(|| Sort::Provider);
     let mut sort_open = use_signal(|| false);
     let mut account_open = use_signal(|| false);
@@ -908,8 +960,8 @@ fn Browse() -> Element {
         refresh(),
         sort()
     );
-    let (body, count_label) = match &*library.read() {
-        Some(Err(e)) => (rsx! { p { class: "err", "{e}" } }, String::new()),
+    let body = match &*library.read() {
+        Some(Err(e)) => rsx! { p { class: "err", "{e}" } },
         Some(Ok(lib)) if lib.kind == kind() => {
             let order = order.read();
             let order = order
@@ -924,11 +976,6 @@ fn Browse() -> Element {
                 &search().to_lowercase(),
                 limit(),
             );
-            let noun = match kind() {
-                Kind::Live => "channels",
-                Kind::Movies => "titles",
-                Kind::Series => "series",
-            };
             let list = if shown.is_empty() {
                 rsx! { div { class: "empty", "Nothing matches." } }
             } else if three_pane {
@@ -951,33 +998,26 @@ fn Browse() -> Element {
                     }
                 }
             };
-            (
-                rsx! {
-                    div {
-                        class: "scroll",
-                        key: "{scope}",
-                        onscroll: move |e| {
-                            let d = e.data();
-                            let bottom = d.scroll_top() + f64::from(d.client_height());
-                            if bottom > f64::from(d.scroll_height()) - 800.0 && limit() < total {
-                                limit += SHOW;
-                            }
-                        },
-                        {list}
-                    }
-                },
-                format!("{} {noun}", thousands(total)),
-            )
+            rsx! {
+                div {
+                    class: "scroll",
+                    key: "{scope}",
+                    onscroll: move |e| {
+                        let d = e.data();
+                        let bottom = d.scroll_top() + f64::from(d.client_height());
+                        if bottom > f64::from(d.scroll_height()) - 800.0 && limit() < total {
+                            limit += SHOW;
+                        }
+                    },
+                    {list}
+                }
+            }
         }
         // Still loading, or showing the previous section's data: don't pass that off as this one.
-        _ => (
-            rsx! { div { class: "empty", "Loading your library…" } },
-            String::new(),
-        ),
+        _ => rsx! { div { class: "empty", "Loading your library…" } },
     };
 
     let player = playing().map(|(title, url)| {
-        let shown = movie_src().unwrap_or_else(|| url.clone());
         let (converter, original) = (client.clone(), url.clone());
         rsx! {
             div { class: "overlay",
@@ -989,36 +1029,41 @@ fn Browse() -> Element {
                             button { class: "icon-btn", aria_label: "Close", onclick: move |_| playing.set(None), Icon { d: CLOSE } }
                         }
                     }
-                    video {
-                        key: "{shown}",
-                        controls: true,
-                        autoplay: true,
-                        src: "{shown}",
-                        ontimeupdate: move |_| {
-                            if movie_note().is_none()
-                                && movie_src().is_none()
-                                && let Some(v) = sheet_video()
-                                && no_audio_decoded(&v)
-                            {
-                                // Silent: have the proxy convert it (this restarts from the start).
-                                movie_note.set(Some("Fixing the sound: converting for your browser…".into()));
-                                let (converter, original) = (converter.clone(), original.clone());
-                                wasm_bindgen_futures::spawn_local(async move {
-                                    match converter.convert(&xtream::Url::parse(&original).expect("ours")).await {
-                                        Ok(converted) => {
-                                            movie_note.set(None);
-                                            movie_src.set(Some(converted.to_string()));
+                    if let Some((converted, from)) = movie_conv() {
+                        // Converted for sound: the browser's own bar can't seek in that, ours can.
+                        ConvertedPlayer { key: "{converted.at(0)}", converted, from }
+                    } else {
+                        video {
+                            key: "{url}",
+                            controls: true,
+                            autoplay: true,
+                            src: "{url}",
+                            ontimeupdate: move |_| {
+                                if movie_note().is_none()
+                                    && let Some(v) = sheet_video()
+                                    && no_audio_decoded(&v)
+                                {
+                                    // Silent: have the proxy convert it, and carry on from here.
+                                    let from = v.current_time() as u64;
+                                    movie_note.set(Some("Fixing the sound: converting for your browser…".into()));
+                                    let (converter, original) = (converter.clone(), original.clone());
+                                    wasm_bindgen_futures::spawn_local(async move {
+                                        match converter.convert(&xtream::Url::parse(&original).expect("ours")).await {
+                                            Ok(converted) => {
+                                                movie_note.set(None);
+                                                movie_conv.set(Some((converted, from)));
+                                            }
+                                            Err(e) => movie_note.set(Some(format!(
+                                                "No sound: this title's audio format (often AC-3 or DTS) can't be decoded by your browser. {e}"
+                                            ))),
                                         }
-                                        Err(e) => movie_note.set(Some(format!(
-                                            "No sound: this title's audio format (often AC-3 or DTS) can't be decoded by your browser. {e}"
-                                        ))),
-                                    }
-                                });
-                            }
-                        },
-                    }
-                    if let Some(note) = movie_note() {
-                        p { class: "sound-note inline", "{note}" }
+                                    });
+                                }
+                            },
+                        }
+                        if let Some(note) = movie_note() {
+                            p { class: "sound-note inline", "{note}" }
+                        }
                     }
                 }
             }
@@ -1145,7 +1190,7 @@ fn Browse() -> Element {
                     div { class: if live().is_some() { "live watching" } else { "live" },
                         section { class: "channels",
                             div { class: "head",
-                                div { h1 { "{category_name}" } span { "{count_label}" } }
+                                h1 { "{category_name}" }
                                 div { class: "tools",
                                     {sort_menu()}
                                     button { class: "cats-btn", onclick: move |_| cats_open.set(true), Icon { d: LIST } "Categories" }
@@ -1167,7 +1212,7 @@ fn Browse() -> Element {
                 } else {
                     section { class: if open().is_some() { "main covered" } else { "main" },
                         div { class: "head",
-                            div { h1 { "{category_name}" } span { "{count_label}" } }
+                            h1 { "{category_name}" }
                             div { class: "tools",
                                 {sort_menu()}
                                 button { class: "cats-btn", onclick: move |_| cats_open.set(true), Icon { d: LIST } "Categories" }
@@ -1183,7 +1228,7 @@ fn Browse() -> Element {
                         onback: move |_| open.set(None),
                         onplay: move |t: (String, String)| {
                             movie_note.set(None);
-                            movie_src.set(None);
+                            movie_conv.set(None);
                             playing.set(Some(t));
                         },
                     }
@@ -1205,6 +1250,125 @@ fn Download(title: String, url: String) -> Element {
             title: "Download",
             aria_label: "Download",
             Icon { d: DOWNLOAD }
+        }
+    }
+}
+
+/// A movie or episode the proxy converted to fix its sound. That stream is one continuous piece
+/// with no index, so the browser's own bar can't seek in it; this one can: picking a place starts a
+/// new conversion from that second.
+#[component]
+fn ConvertedPlayer(converted: xtream::Converted, from: u64) -> Element {
+    let mut start = use_signal(move || from); // the second of the movie where this stream begins
+    let mut pos = use_signal(move || from); // the second being shown
+    let mut scrubbing = use_signal(|| false);
+    let mut paused = use_signal(|| false);
+    let mut muted = use_signal(|| false);
+    let mut volume = use_signal(|| 100_u32);
+    let expanded = use_signal(|| false);
+    let src = converted.at(start()).to_string();
+    let total = converted.duration;
+
+    // Always a new conversion from there: the browser treats this stream as unseekable, even the
+    // part it has already loaded, so moving the playhead in place does nothing.
+    let mut seek = move |t: u64| {
+        pos.set(t);
+        start.set(t);
+    };
+
+    rsx! {
+        div { class: if expanded() { "vod fill" } else { "vod" }, id: "vod-player",
+            video {
+                key: "{src}",
+                autoplay: true,
+                src: "{src}",
+                onplay: move |_| paused.set(false),
+                onpause: move |_| paused.set(true),
+                onclick: move |_| {
+                    if let Some(v) = sheet_video() {
+                        toggle(&v);
+                    }
+                },
+                ontimeupdate: move |_| {
+                    if !scrubbing()
+                        && let Some(v) = sheet_video()
+                    {
+                        pos.set(start() + v.current_time() as u64);
+                    }
+                },
+            }
+            div { class: "controls",
+                button {
+                    class: "ctl",
+                    aria_label: "Play or pause",
+                    onclick: move |_| {
+                        if let Some(v) = sheet_video() {
+                            toggle(&v);
+                        }
+                    },
+                    Icon { d: if paused() { PLAY } else { PAUSE } }
+                }
+                div { class: "volume",
+                    button {
+                        class: "ctl",
+                        aria_label: "Mute",
+                        onclick: move |_| {
+                            if let Some(v) = sheet_video() {
+                                v.set_muted(!v.muted());
+                                muted.set(v.muted());
+                            }
+                        },
+                        Icon { d: if muted() { MUTED } else { VOLUME } }
+                    }
+                    input {
+                        class: "vol",
+                        r#type: "range",
+                        min: "0",
+                        max: "100",
+                        aria_label: "Volume",
+                        value: "{volume}",
+                        oninput: move |e| {
+                            let level: u32 = e.value().parse().unwrap_or(100);
+                            volume.set(level);
+                            muted.set(level == 0);
+                            if let Some(v) = sheet_video() {
+                                v.set_volume(f64::from(level) / 100.0);
+                                v.set_muted(level == 0);
+                            }
+                        }
+                    }
+                }
+                span { class: "time",
+                    "{hms(pos())}"
+                    if let Some(total) = total { " / {hms(total)}" }
+                }
+                if let Some(total) = total {
+                    input {
+                        class: "scrub",
+                        r#type: "range",
+                        min: "0",
+                        max: "{total}",
+                        aria_label: "Seek",
+                        value: "{pos}",
+                        oninput: move |e| {
+                            scrubbing.set(true);
+                            pos.set(e.value().parse().unwrap_or(0));
+                        },
+                        onchange: move |e| {
+                            scrubbing.set(false);
+                            seek(e.value().parse().unwrap_or(0));
+                        }
+                    }
+                } else {
+                    span { class: "grow" }
+                }
+                button {
+                    class: "ctl",
+                    aria_label: "Fullscreen",
+                    onclick: move |_| toggle_fullscreen("vod-player", expanded),
+                    Icon { d: FULLSCREEN }
+                }
+            }
         }
     }
 }
@@ -1502,7 +1666,7 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
                     // Not Dioxus's `spawn`: this callback runs outside its runtime.
                     wasm_bindgen_futures::spawn_local(async move {
                         match converter.convert(&media).await {
-                            Ok(converted) => feed.set(Feed::Converted(converted.to_string())),
+                            Ok(converted) => feed.set(Feed::Converted(converted.at(0).to_string())),
                             // No ffmpeg (or it can't read the stream): a sound problem still
                             // plays, without sound, and says why; anything else can't play.
                             Err(e) if reason.contains("sound") => {
@@ -1534,7 +1698,7 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
                         e.prevent_default();
                         toggle_play();
                     }
-                    "f" => toggle_fullscreen(expanded),
+                    "f" => toggle_fullscreen("live-player", expanded),
                     "i" => show_stats.set(!show_stats()),
                     "escape" => expanded.set(false),
                     "m" => muted.set(toggle_mute().unwrap_or(false)),
@@ -1593,7 +1757,7 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
                         }
                     },
                     onclick: move |_| toggle_play(),
-                    ondoubleclick: move |_| toggle_fullscreen(expanded),
+                    ondoubleclick: move |_| toggle_fullscreen("live-player", expanded),
                 }
                 if show_stats() {
                     div { class: "stats", "{stats}" }
@@ -1641,7 +1805,7 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
                     span { class: "grow" }
                     button { class: "ctl", aria_label: "Stream info", title: "Stream info (I)", onclick: move |_| show_stats.set(!show_stats()), Icon { d: INFO } }
                     button { class: "ctl", aria_label: "Picture in picture", title: "Picture in picture", onclick: move |_| toggle_pip(), Icon { d: PIP } }
-                    button { class: "ctl", aria_label: "Fullscreen", title: "Fullscreen (F)", onclick: move |_| toggle_fullscreen(expanded), Icon { d: FULLSCREEN } }
+                    button { class: "ctl", aria_label: "Fullscreen", title: "Fullscreen (F)", onclick: move |_| toggle_fullscreen("live-player", expanded), Icon { d: FULLSCREEN } }
                 }
             }
             Guide { id, title }
