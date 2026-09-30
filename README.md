@@ -22,16 +22,16 @@ Everything you write is Rust. The only non-Rust file in the build output is the 
  browser (WASM)                       your machine                      internet
  ┌───────────────────────┐  /proxy   ┌───────────────────┐            ┌────────────────┐
  │ app    screens, state │ ────────▶ │ riptv             │ ─────────▶ │ IPTV provider  │
- │ ├ xtream  API client  │  ?url=…   │ serves the app,   │  only for  │ and its CDNs   │
- │ └ player  live TV     │ ◀──────── │ relays the bytes  │  hosts in  └────────────────┘
- └───────────────────────┘           └───────────────────┘  allowlist
+ │ ├ xtream  API client  │  ?url=…   │ serves the app,   │  public    │ and its CDNs   │
+ │ └ player  live TV     │ ◀──────── │ relays the bytes  │  addresses └────────────────┘
+ └───────────────────────┘           └───────────────────┘  public hosts only
 ```
 
 | Component | Job | Checked by |
 |---|---|---|
 | `xtream` | Speaks the Xtream Codes API and builds stream URLs, routing everything through the proxy when asked. Lists are decoded record by record straight from the response bytes: a 30,000-title list peaks at ~7 MB of heap instead of ~70 MB. | Unit tests on real-world JSON quirks |
 | `player` | Playlist → MPEG-TS demux → fMP4 → the browser's MediaSource. Only `mse` touches the browser; the rest is plain Rust that runs and tests natively. | Real HLS segments, decoded by `ffmpeg` |
-| `proxy` (`riptv`) | The one native program. Serves the built app and relays requests to allowlisted hosts, with `Range`, redirect checks and a strict CSP. | End-to-end tests through a real proxy |
+| `proxy` (`riptv`) | The one native program. Serves the built app and relays requests for the app alone, to public addresses only, with `Range`, redirect checks and a strict CSP. | End-to-end tests through a real proxy |
 | `app` | Screens and state only, with no protocol or media code. | Driven in a browser |
 
 Where a change belongs: protocol quirks in `xtream`, anything about video bytes in `player`, anything
@@ -41,19 +41,24 @@ at the network boundary in `proxy`, and `app` only arranges them.
 
 ```sh
 rm -rf target/dx && dx build --web --release -p app  # once, and after UI changes (dx never deletes old builds)
-cargo riptv <provider host>                          # http://127.0.0.1:3000
+cargo riptv                                          # then open http://127.0.0.1:3000 and sign in
 ```
 
-The arguments are the hostnames (no port) the proxy may reach: your provider, plus any hosts it
-redirects streams to (CDNs). `IPTV_ALLOW` (comma-separated) adds more. Anything else is refused, and
-the app names the host to add. The proxy listens on localhost only. `cargo riptv` is an alias for
-`cargo run --release -p riptv --` (see `.cargo/config.toml`).
+That's all: there is no host list to keep. The proxy relays only for the app itself (not for other
+websites), and only to public addresses, so a provider, or a redirect it sends, can't point it at your
+router or other machines. A server on your own network (or this machine) works because signing in
+approves that one address. `cargo riptv` is an alias for `cargo run --release -p riptv --` (see
+`.cargo/config.toml`); `IPTV_PORT` changes the port.
+
+Open it in a normal browser (Chrome, Firefox, Safari). Sound and real fullscreen depend on the browser,
+and an embedded preview pane may have neither; the player falls back to filling the page. On the live
+player Space plays or pauses, F is fullscreen, M mutes, and double-click is fullscreen.
 
 ## Try it without a provider
 
 ```sh
 cargo run -p riptv --example mock_provider      # fake provider on :8081, login demo / demo
-cargo riptv 127.0.0.1 interactive-examples.mdn.mozilla.net test-streams.mux.dev
+cargo riptv
 ```
 
 Open the page and click "Try the demo". It has a movie, a two-season series, an HLS channel, a
@@ -66,11 +71,27 @@ The three sections (Live TV, Movies, Series) live on a floating rail, which beco
 bottom on a phone; there the category list turns into a **Categories** button.
 
 Live TV shows every channel as a tile grid until you pick a category; then it becomes a channel list
-next to the player, with the channel's schedule as a timeline underneath. Movies and Series are poster
-grids, newest first; opening one shows its page (backdrop, plot, cast, and Play or the episodes).
+next to the player, with the channel's schedule as a timeline underneath. Every list can be sorted
+(newest or oldest added, A to Z, Z to A, top rated). Movies and Series are poster
+grids; opening one shows its page (backdrop, plot, cast, and Play or the episodes).
 Each section is loaded once, so category counts are exact and switching category is instant; the
 account menu's **Refresh** reloads it. Movies and series episodes have a download button (a plain
 browser download through the proxy). Live channels are endless streams, so they can't be downloaded.
+
+## Compatibility mode (ffmpeg)
+
+Many browsers, Chrome on Linux among them, can't decode HEVC (every 4K channel), AC-3, MP2 or
+AAC-Main sound, interlaced video smoothly, or raw MPEG-TS streams. When a stream is one of those the
+player hands it to the proxy, which uses `ffmpeg` (if installed) to turn it into H.264 + AAC on the
+fly: the video is copied untouched when it's already fine, and only HEVC or interlaced video is
+re-encoded (NVENC if you have an NVIDIA card, otherwise x264), deinterlaced to full motion rate and
+capped at 1080p (`RIPTV_MAX_HEIGHT=2160` for full 4K, if your browser decodes it smoothly). Without
+ffmpeg those channels say why, and a sound-only problem still plays the picture. Everything else stays
+in the pure-Rust player. ffmpeg follows redirects itself, so its own connections aren't held to the
+public-address rule the proxy applies to the page's requests.
+
+Press `I` on the live player (or the info button) for the picture size, real frame rate, dropped
+frames and buffer, which tells a slow stream from a slow decoder.
 
 ## What plays
 

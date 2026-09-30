@@ -64,6 +64,18 @@ pub fn dimensions(sps_nal: &[u8]) -> Option<(u32, u32)> {
         data: &rbsp,
         pos: 0,
     })
+    .map(|(w, h, _)| (w, h))
+}
+
+/// Whether the pictures are interlaced (two fields per frame). Browsers show those combed and at
+/// half the motion rate, so they are worth converting. `None` if the SPS can't be read.
+pub fn interlaced(sps_nal: &[u8]) -> Option<bool> {
+    let rbsp = unescape(sps_nal.get(1..)?);
+    read_size(&mut Bits {
+        data: &rbsp,
+        pos: 0,
+    })
+    .map(|(_, _, interlaced)| interlaced)
 }
 
 /// Shape of one pixel (width, height) from the SPS's VUI data. Broadcast SD is anamorphic: a
@@ -103,7 +115,7 @@ pub fn pixel_aspect(sps_nal: &[u8]) -> Option<(u32, u32)> {
 }
 
 /// Reads the SPS up to and including the cropping fields, leaving `r` at the VUI flag.
-fn read_size(r: &mut Bits) -> Option<(u32, u32)> {
+fn read_size(r: &mut Bits) -> Option<(u32, u32, bool)> {
     let profile = r.bits(8)?;
     r.bits(16)?; // constraint flags + level
     r.ue()?; // SPS id
@@ -178,7 +190,11 @@ fn read_size(r: &mut Bits) -> Option<(u32, u32)> {
     };
     let width = (mbs_wide * 16).checked_sub(unit_x * (left + right))?;
     let height = (field * map_units_high * 16).checked_sub(unit_y * (top + bottom))?;
-    (width > 0 && height > 0).then_some((u32::try_from(width).ok()?, u32::try_from(height).ok()?))
+    (width > 0 && height > 0).then_some((
+        u32::try_from(width).ok()?,
+        u32::try_from(height).ok()?,
+        frame_mbs_only == 0,
+    ))
 }
 
 #[cfg(test)]
@@ -224,6 +240,23 @@ mod tests {
 
     /// The 480p test stream says 1:1 outright; the anamorphic PAL fixture (`setsar=64/45`, ffprobe
     /// agrees) says 64:45; a stream with no VUI says nothing.
+    /// Progressive streams say so in their SPS; an interlaced one (made by ffmpeg with
+    /// `ildct+ilme`, and confirmed by ffprobe as `tt`) says it isn't.
+    #[test]
+    fn tells_interlaced_from_progressive() {
+        for sps in [
+            "6742c00dd981419f970110000003001000000303c0f142a680",
+            "6764001facd940d43db011000003000100000300780f183196",
+            "67640028acd980780227e5c044000003000400000301e03c60c668",
+        ] {
+            assert_eq!(interlaced(&hex(sps)), Some(false));
+        }
+        let field =
+            crate::ts::demux(include_bytes!("../tests/fixtures/interlaced_576i.ts")).unwrap();
+        assert_eq!(interlaced(&field.sps.unwrap()), Some(true));
+        assert_eq!(interlaced(&[0x67]), None);
+    }
+
     #[test]
     fn reads_the_pixel_aspect() {
         assert_eq!(

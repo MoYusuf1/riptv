@@ -21,10 +21,27 @@ pub enum Error {
     Unsupported(String),
 }
 
+/// Marks a playback error as "the browser can't play this, but something else could": HEVC video,
+/// sound it can't decode, a raw stream. The page then asks the proxy to convert the stream.
+pub const CONVERT: &str = "convert:";
+
+/// Why this stream needs converting, if the error says it does.
+pub fn needs_conversion(err: &str) -> Option<&str> {
+    if let Some(reason) = err.strip_prefix(CONVERT) {
+        Some(reason)
+    } else if err.contains("no H.264 video") {
+        Some("the video isn't H.264 (probably HEVC)")
+    } else {
+        None
+    }
+}
+
 /// What to give `MediaSource.addSourceBuffer` and then append first.
 pub struct Init {
     pub bytes: Vec<u8>,
     pub mime: String,
+    /// Interlaced pictures play combed, at half the motion rate, in a browser.
+    pub interlaced: bool,
 }
 
 pub struct Output {
@@ -84,7 +101,9 @@ impl Transmuxer {
             self.has_audio = d.aac.is_some();
             let audio = d
                 .aac
-                .map(|a| format!(",mp4a.40.{}", a.object_type))
+                // Browsers only accept `mp4a.40.2` (AAC-LC) here, and decode Main and the rest of
+                // the family fine when told so; declaring the real type (Main is `.1`) is refused.
+                .map(|_| ",mp4a.40.2".to_string())
                 .unwrap_or_default();
             self.sent_init = true;
             Some(Init {
@@ -98,6 +117,7 @@ impl Transmuxer {
                     },
                     d.aac.as_ref(),
                 ),
+                interlaced: avc::interlaced(sps).unwrap_or(false),
                 mime: format!(
                     "video/mp4; codecs=\"avc1.{:02x}{:02x}{:02x}{audio}\"",
                     sps[1], sps[2], sps[3]
@@ -217,6 +237,21 @@ mod tests {
             t.unwrap(near_end + 1000),
             near_end + 1000,
             "a slightly older timestamp stays put"
+        );
+    }
+
+    #[test]
+    fn errors_that_a_converter_could_fix_are_recognised() {
+        let hevc = ts::demux(include_bytes!("../tests/fixtures/hevc_ac3.ts")).unwrap_err();
+        assert!(needs_conversion(&hevc.to_string()).is_some(), "{hevc}");
+        assert_eq!(
+            needs_conversion(&format!("{CONVERT}AC-3 sound")),
+            Some("AC-3 sound")
+        );
+        assert_eq!(needs_conversion("bad playlist: nothing here"), None);
+        assert_eq!(
+            needs_conversion("the proxy refused x: address not allowed"),
+            None
         );
     }
 }

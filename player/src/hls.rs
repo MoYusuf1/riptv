@@ -130,6 +130,45 @@ pub fn pick_variant(variants: &[Variant]) -> Option<&Variant> {
         .or_else(|| variants.iter().min_by_key(|v| v.bandwidth))
 }
 
+pub const RAW_STREAM: &str =
+    "this channel sends a raw MPEG-TS stream instead of an HLS playlist, which isn't supported yet";
+
+/// MPEG-TS packets are 188 bytes and each starts with 0x47.
+pub fn looks_like_ts(body: &[u8]) -> bool {
+    body.first() == Some(&0x47) && body.get(188) == Some(&0x47)
+}
+
+/// What a response that should have been a playlist really was, in words: usually a raw stream,
+/// or an error page or short "offline" note from the provider.
+pub fn describe_non_playlist(body: &[u8], content_type: &str) -> String {
+    if looks_like_ts(body) {
+        return RAW_STREAM.into();
+    }
+    if body.iter().all(u8::is_ascii_whitespace) {
+        return "the server sent an empty response (the channel may be offline)".into();
+    }
+    let preview = body
+        .iter()
+        .take(120)
+        .map(|&b| {
+            if (0x20..0x7f).contains(&b) {
+                b as char
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let kind = if content_type.is_empty() {
+        "something else"
+    } else {
+        content_type
+    };
+    format!("the server answered with {kind} instead of a playlist: \"{preview}\"")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,5 +261,30 @@ mod tests {
             parse(&[0xff, 0xfe, 0x00]),
             Err(Error::Playlist(_))
         ));
+    }
+
+    #[test]
+    fn a_response_that_is_not_a_playlist_says_what_it_was() {
+        let mut ts = vec![0u8; 400];
+        ts[0] = 0x47;
+        ts[188] = 0x47;
+        assert_eq!(describe_non_playlist(&ts, "video/mp2t"), RAW_STREAM);
+        assert!(describe_non_playlist(b"", "text/plain").contains("empty"));
+        assert!(describe_non_playlist(b" \r\n", "").contains("empty"));
+        let html = describe_non_playlist(
+            b"<html>\n  <body>Stream   offline</body></html>",
+            "text/html",
+        );
+        assert_eq!(
+            html,
+            "the server answered with text/html instead of a playlist: \"<html> <body>Stream offline</body></html>\""
+        );
+        // Binary noise can't garble the message, and long bodies are cut short.
+        let noisy = describe_non_playlist(&[0xff, 0x00, b'o', b'k', 0x1b], "");
+        assert!(
+            noisy.ends_with("\"ok\"") && noisy.contains("something else"),
+            "{noisy}"
+        );
+        assert!(describe_non_playlist(&[b'x'; 500], "text/plain").len() < 200);
     }
 }

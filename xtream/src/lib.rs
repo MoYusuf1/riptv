@@ -15,6 +15,9 @@ pub enum Error {
     // Every conversion goes through `without_url()` in `get_json`.
     #[error("request failed: {0}")]
     Http(reqwest::Error),
+    /// The proxy itself said no, and why (only ever a host name and a reason, never credentials).
+    #[error("the proxy couldn't do that: {0}")]
+    Proxy(String),
     #[error("unexpected response shape: {0}")]
     Json(#[from] serde_json::Error),
     #[error("login rejected by server")]
@@ -411,6 +414,26 @@ fn split_records(bytes: &[u8]) -> Result<Vec<&serde_json::value::RawValue>> {
     }
 }
 
+/// Header the proxy puts on its own refusals and failures, with the reason. Provider errors that
+/// pass through it don't have it.
+const PROXY_ERROR: &str = "x-riptv-error";
+
+fn http_error(e: reqwest::Error) -> Error {
+    Error::Http(e.without_url())
+}
+
+/// Turns an unsuccessful response into an error, preferring the proxy's own explanation.
+fn checked(resp: reqwest::Response) -> Result<reqwest::Response> {
+    if let Some(why) = resp
+        .headers()
+        .get(PROXY_ERROR)
+        .and_then(|v| v.to_str().ok())
+    {
+        return Err(Error::Proxy(why.to_owned()));
+    }
+    resp.error_for_status().map_err(http_error)
+}
+
 #[derive(Debug, Clone)]
 pub struct Client {
     base: Url,
@@ -441,6 +464,88 @@ impl Client {
     pub fn via_proxy(mut self, proxy: &str) -> Result<Self> {
         self.proxy = Some(Url::parse(proxy).map_err(|e| Error::BadUrl(e.to_string()))?);
         Ok(self)
+    }
+
+    /// Sign in with the proxy: ask it to accept this server's address even if that is on a private
+    /// network (a box on your LAN, or this machine). The proxy refuses private addresses
+    /// otherwise, so a provider can't aim it at your network. Public servers don't need this, and
+    /// without a proxy it does nothing.
+    pub async fn approve(&self) -> Result<()> {
+        let Some(p) = &self.proxy else {
+            return Ok(());
+        };
+        let mut u = p.clone();
+        u.set_path("/allow");
+        u.set_query(None);
+        u.query_pairs_mut()
+            .append_pair("host", self.base.host_str().unwrap_or_default());
+        checked(self.http.post(u).send().await.map_err(http_error)?)?;
+        Ok(())
+    }
+
+    /// The server-side address behind a proxied one; anything else comes back unchanged.
+    pub fn upstream(&self, media: &Url) -> Url {
+        let ours = |p: &Url| {
+            (media.host_str(), media.port(), media.path()) == (p.host_str(), p.port(), p.path())
+        };
+        match &self.proxy {
+            Some(p) if ours(p) => media
+                .query_pairs()
+                .find(|(k, _)| k == "url")
+                .and_then(|(_, v)| Url::parse(&v).ok())
+                .unwrap_or_else(|| media.clone()),
+            _ => media.clone(),
+        }
+    }
+
+    /// For a stream the browser can't play as it is (HEVC video, AC-3 or MP2 sound, a raw
+    /// transport stream): ask the proxy to convert it with ffmpeg. Returns the address of the
+    /// converted stream, which any `<video>` can play. Fails, with the reason, if the proxy has no
+    /// ffmpeg or can't read the stream. A `.m3u8` address is tried as the plain `.ts` stream first,
+    /// which is what ffmpeg reads best.
+    pub async fn convert(&self, media: &Url) -> Result<Url> {
+        let Some(proxy) = &self.proxy else {
+            return Err(Error::Proxy("there is no proxy to convert it".into()));
+        };
+        let raw = self.upstream(media);
+        let mut candidates = vec![];
+        if let Some(stem) = raw.path().strip_suffix(".m3u8") {
+            let mut ts = raw.clone();
+            ts.set_path(&format!("{stem}.ts"));
+            candidates.push(ts);
+        }
+        candidates.push(raw);
+
+        let endpoint = |path: &str, pairs: &[(&str, &str)]| {
+            let mut u = proxy.clone();
+            u.set_path(path);
+            u.set_query(None);
+            u.query_pairs_mut().extend_pairs(pairs);
+            u
+        };
+        let mut last = Error::Proxy("nothing to convert".into());
+        for candidate in candidates {
+            let check = endpoint("/compat/check", &[("url", candidate.as_str())]);
+            let answer = match self.http.get(check).send().await {
+                Ok(resp) => checked(resp),
+                Err(e) => Err(http_error(e)),
+            };
+            match answer {
+                Ok(resp) => {
+                    let video = resp
+                        .headers()
+                        .get("x-riptv-video")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or("transcode");
+                    return Ok(endpoint(
+                        "/compat",
+                        &[("url", candidate.as_str()), ("video", video)],
+                    ));
+                }
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
     }
 
     /// Wrap an upstream URL for the proxy (no-op if none is configured). Needed for URLs found
@@ -483,16 +588,10 @@ impl Client {
 
     /// GET, then hand the response bytes to `parse`, so each caller decides what to decode into.
     async fn get_with<R>(&self, url: Url, parse: impl FnOnce(&[u8]) -> Result<R>) -> Result<R> {
-        let go = async {
-            self.http
-                .get(self.proxied(url))
-                .send()
-                .await?
-                .error_for_status()?
-                .bytes()
-                .await
-        };
-        parse(&go.await.map_err(|e| Error::Http(e.without_url()))?)
+        let resp = self.http.get(self.proxied(url)).send().await;
+        let resp = checked(resp.map_err(http_error)?)?;
+        let body = resp.bytes().await.map_err(http_error)?;
+        parse(&body)
     }
 
     async fn get_json(&self, url: Url) -> Result<Value> {
@@ -822,6 +921,23 @@ mod tests {
         // Panels answer `[]` or nothing when they know nothing.
         assert_eq!(parse_details(Some(&json!([]))), Details::default());
         assert_eq!(parse_details(None), Details::default());
+    }
+
+    #[test]
+    fn the_upstream_behind_a_proxied_url_can_be_recovered() {
+        let c = Client::new("http://h.example:8080", "u", "p")
+            .unwrap()
+            .via_proxy("http://localhost:3000/proxy")
+            .unwrap();
+        let movie = c.movie_url(7, "mkv");
+        assert_ne!(movie.host_str(), Some("h.example"));
+        assert_eq!(
+            c.upstream(&movie).as_str(),
+            "http://h.example:8080/movie/u/p/7.mkv"
+        );
+        // Not ours: unchanged.
+        let other = Url::parse("http://elsewhere.example/a.mp4").unwrap();
+        assert_eq!(c.upstream(&other), other);
     }
 
     #[test]

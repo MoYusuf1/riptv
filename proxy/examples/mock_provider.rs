@@ -1,6 +1,6 @@
 //! Fake Xtream provider for local development. Login: demo / demo. Streams redirect to public
-//! test media (MDN's CC0 flower.mp4, Mux's Big Buck Bunny HLS), so the proxy needs to allow
-//! interactive-examples.mdn.mozilla.net and test-streams.mux.dev to follow them.
+//! test media (MDN's CC0 flower.mp4, Mux's Big Buck Bunny HLS). It listens on loopback, which the
+//! proxy only reaches because the demo sign-in approves 127.0.0.1.
 //!   cargo run -p riptv --example mock_provider     (listens on 127.0.0.1:8081)
 
 use std::{
@@ -23,6 +23,13 @@ static STARTED: OnceLock<Instant> = OnceLock::new();
 /// Anamorphic PAL (720x576, 64:45 pixels): must display as 16:9, not stretched to 5:4.
 const PAL: &[u8] = include_bytes!("../../player/tests/fixtures/pal_anamorphic.ts");
 
+/// Streams like the ones providers really send, which Chrome on Linux can't play as they are: HEVC
+/// video with AC-3 sound, and H.264 with AC-3 sound. The proxy's ffmpeg mode has to fix both.
+const HEVC_AC3: &[u8] = include_bytes!("../../player/tests/fixtures/hevc_ac3.ts");
+const H264_AC3: &[u8] = include_bytes!("../../player/tests/fixtures/h264_ac3.ts");
+/// A movie whose sound is AC-3: it plays, silently, until the page notices and converts it.
+const MOVIE_AC3: &[u8] = include_bytes!("../../player/tests/fixtures/h264_ac3.mp4");
+
 const PLAYLIST: [(header::HeaderName, &str); 1] =
     [(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")];
 
@@ -31,6 +38,19 @@ const PLAYLIST: [(header::HeaderName, &str); 1] =
 /// 10 s and wraps around (which shows up as a timestamp jump, like a real stream restart).
 /// Channel 3 is one anamorphic PAL segment.
 async fn live(Path((_user, _pass, file)): Path<(String, String, String)>) -> Response {
+    for (id, segment) in [("4", "hevc.ts"), ("5", "h264.ts")] {
+        if file.starts_with(&format!("{id}.")) {
+            if file.ends_with(".ts") {
+                return ([(header::CONTENT_TYPE, "video/mp2t")], transport(segment))
+                    .into_response();
+            }
+            let body = format!(
+                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:5\n#EXT-X-MEDIA-SEQUENCE:0\n\
+                 #EXTINF:4.000,\nhttp://127.0.0.1:8081/{segment}\n#EXT-X-ENDLIST\n"
+            );
+            return (PLAYLIST, body).into_response();
+        }
+    }
     if file.starts_with("3.") {
         let body = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n\
                     #EXTINF:1.000,\nhttp://127.0.0.1:8081/pal.ts\n#EXT-X-ENDLIST\n";
@@ -55,6 +75,14 @@ const FLOWER: &str = "https://interactive-examples.mdn.mozilla.net/media/cc0-vid
 /// Artwork (Wikimedia Commons, CC-BY) so the poster grid and detail pages have something to show.
 const POSTER: &str = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Big_buck_bunny_poster_big.jpg/500px-Big_buck_bunny_poster_big.jpg";
 const HLS: &str = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
+
+fn transport(name: &str) -> &'static [u8] {
+    if name == "hevc.ts" {
+        HEVC_AC3
+    } else {
+        H264_AC3
+    }
+}
 
 fn b64(s: &str) -> String {
     const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -117,14 +145,20 @@ async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
         Some("get_live_streams") => json!([
             {"stream_id": 1, "name": "Big Buck Bunny (HLS via redirect)", "category_id": "1"},
             {"stream_id": 2, "name": "Simulated live (sliding window)", "category_id": "1"},
-            {"stream_id": 3, "name": "Anamorphic PAL (720x576, 64:45)", "category_id": "1"}
+            {"stream_id": 3, "name": "Anamorphic PAL (720x576, 64:45)", "category_id": "1"},
+            {"stream_id": 4, "name": "HEVC video + AC-3 sound (needs conversion)", "category_id": "1"},
+            {"stream_id": 5, "name": "H.264 video + AC-3 sound (needs conversion)", "category_id": "1"}
         ]),
         Some("get_vod_categories") => {
             json!([{"category_id": "10", "category_name": "Test Movies"}])
         }
         Some("get_vod_streams") => json!([
             {"stream_id": 1, "name": "Flower (CC0 sample)", "container_extension": "mp4",
-             "rating": "5", "category_id": "10", "added": "1790000000", "stream_icon": POSTER}
+             "rating": "5", "category_id": "10", "added": "1790000000", "stream_icon": POSTER},
+            {"stream_id": 2, "name": "AC-3 sound test", "container_extension": "mp4",
+             "rating": "6.5", "category_id": "10", "added": "1780000000"},
+            {"stream_id": 3, "name": "An older title", "container_extension": "mp4",
+             "rating": "8.2", "category_id": "10", "added": "1700000000"}
         ]),
         Some("get_vod_info") => json!({
             "info": {
@@ -180,12 +214,28 @@ async fn main() {
         .route("/player_api.php", get(api))
         .route("/live/{user}/{pass}/{file}", get(live))
         .route(
+            "/hevc.ts",
+            get(|| async { ([(header::CONTENT_TYPE, "video/mp2t")], HEVC_AC3) }),
+        )
+        .route(
+            "/h264.ts",
+            get(|| async { ([(header::CONTENT_TYPE, "video/mp2t")], H264_AC3) }),
+        )
+        .route(
             "/pal.ts",
             get(|| async { ([(header::CONTENT_TYPE, "video/mp2t")], PAL) }),
         )
         .route(
             "/movie/{user}/{pass}/{file}",
-            get(|| async { Redirect::temporary(FLOWER) }),
+            get(
+                |Path((_u, _p, file)): Path<(String, String, String)>| async move {
+                    if file.starts_with("2.") {
+                        ([(header::CONTENT_TYPE, "video/mp4")], MOVIE_AC3).into_response()
+                    } else {
+                        Redirect::temporary(FLOWER).into_response()
+                    }
+                },
+            ),
         )
         .route(
             "/series/{user}/{pass}/{file}",
