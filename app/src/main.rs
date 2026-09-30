@@ -99,9 +99,8 @@ svg{width:1.1rem;height:1.1rem}
 .sort-btn:hover{color:var(--text)}
 .sort-menu{min-width:11rem}
 .menu button.on{color:var(--accent);font-weight:600}
-.menu:has(.setting){width:17rem}
-.menu .setting{display:flex;align-items:center;justify-content:space-between;gap:.9rem;padding-left:1.4rem}
-.setting small{display:block;margin-top:.15rem;color:var(--dim);font-size:.75rem;line-height:1.35}
+.menu:has(.setting){min-width:15rem}
+.menu .setting{display:flex;align-items:center;justify-content:space-between;gap:1rem}
 .switch{flex:none;position:relative;width:2.3rem;height:1.4rem;border-radius:99px;background:var(--hair);transition:background .15s}
 .switch::after{content:"";position:absolute;top:.15rem;left:.15rem;width:1.1rem;height:1.1rem;border-radius:50%;background:#fff;transition:transform .15s}
 .setting[aria-checked=true] .switch{background:var(--fill)}
@@ -912,7 +911,6 @@ fn Browse() -> Element {
     let mut session = use_context::<Signal<Option<Client>>>();
     let playlist = use_context::<Signal<String>>();
     let mut rust_sound = use_context::<Signal<bool>>();
-    let mut settings_open = use_signal(|| false);
     let client = use_hook(|| {
         session
             .read()
@@ -1225,10 +1223,7 @@ fn Browse() -> Element {
                     button {
                         class: "scrim",
                         aria_label: "Close menu",
-                        onclick: move |_| {
-                            account_open.set(false);
-                            settings_open.set(false);
-                        }
+                        onclick: move |_| account_open.set(false)
                     }
                     div { class: "menu",
                         button {
@@ -1241,28 +1236,19 @@ fn Browse() -> Element {
                             "Refresh"
                         }
                         button {
-                            aria_expanded: settings_open(),
-                            onclick: move |_| settings_open.set(!settings_open()),
-                            "Settings"
-                        }
-                        if settings_open() {
-                            button {
-                                class: "setting",
-                                role: "switch",
-                                aria_checked: rust_sound(),
-                                onclick: move |_| {
-                                    let on = !rust_sound();
-                                    rust_sound.set(on);
-                                    if let Some(s) = storage() {
-                                        let _ = s.set_item(RUST_SOUND, if on { "1" } else { "0" });
-                                    }
-                                },
-                                span {
-                                    "Sound in Rust"
-                                    small { "Experimental. Plays AC-3 and MP2 sound on live channels without ffmpeg. Applies to the next channel you open." }
+                            class: "setting",
+                            role: "switch",
+                            aria_checked: rust_sound(),
+                            title: "Experimental: decode AC-3 and MP2 sound on live channels in the page, without ffmpeg. Applies to the next channel you open.",
+                            onclick: move |_| {
+                                let on = !rust_sound();
+                                rust_sound.set(on);
+                                if let Some(s) = storage() {
+                                    let _ = s.set_item(RUST_SOUND, if on { "1" } else { "0" });
                                 }
-                                i { class: "switch" }
-                            }
+                            },
+                            "Sound in Rust"
+                            i { class: "switch" }
                         }
                         button { onclick: move |_| session.set(None), "Disconnect" }
                     }

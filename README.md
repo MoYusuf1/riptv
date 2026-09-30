@@ -116,7 +116,7 @@ so its seek bar restarts the conversion from the chosen second (a moment's wait)
 are converted only when nothing in the page can play them (HEVC, DTS and TrueHD sound, interlaced
 video), and that is decided before playback starts, never halfway through.
 
-**Sound in Rust (experimental)** is a switch under the account menu's Settings. On, live channels with
+**Sound in Rust (experimental)** is a switch in the account menu. On, live channels with
 AC-3, E-AC-3 or MP2 sound are decoded by rffmpeg inside the browser (5.1 is mixed down to stereo,
 played as FLAC) and skip ffmpeg. It applies to the next channel you open and is remembered. Off is
 the default: ffmpeg does it. It is checked against ffmpeg's own decoding in rffmpeg's tests, but has
