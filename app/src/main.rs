@@ -17,6 +17,7 @@ use std::{
 mod controls;
 mod fetch;
 mod profiles;
+mod shelves;
 
 use controls::{IdleHide, Skip};
 use fetch::Proxied;
@@ -418,6 +419,10 @@ img[data-failed]{display:none}
 .channels .pager{justify-content:center}
 .channels .pager .range,.channels .pages .gap,.channels .pages button:not(.on):not(.step){display:none}
 .channels .pages .of{display:inline}
+.shelf h2,.all-head{margin:.2rem 0 .7rem;font-size:1rem;font-weight:600}
+.strip{display:flex;gap:1rem;padding:.4rem 0 1rem;overflow-x:auto;scroll-snap-type:x proximity;scrollbar-width:thin}
+.strip .card{flex:none;width:8.6rem;scroll-snap-align:start}
+.card small{display:block;margin-top:.1rem;color:var(--faint);font-size:.68rem}
 "#,
     // Narrow screens: the rail becomes a floating tab bar, categories a button
     r#"@media(max-width:820px){.brand span,.who b{display:none}.topbar{gap:.5rem}.rail{top:auto;bottom:.8rem;left:50%;flex-direction:row;transform:translateX(-50%)}.rail button{width:auto;min-width:4.4rem;height:3rem;padding:0 .8rem}.rail span{display:block}.workspace{inset:4.2rem 0 0;grid-template-columns:1fr;padding:0 .6rem .6rem}.sidebar{display:none}.cats-btn{display:inline-flex}.scroll,.episodes{padding-bottom:5.5rem}.d-hero{min-height:auto;padding:7rem 1rem 1.6rem}.d-facts{position:relative;inset:auto;width:auto;margin-top:1.4rem}.d-sec{padding:1rem 1rem .8rem}.w-top{padding:.8rem .8rem 2.5rem}.w-bottom{padding:3rem .8rem .6rem}.w-row .vol,.w-row .volume{display:none}.w-menu{right:.8rem;bottom:5.2rem}}
@@ -1108,7 +1113,7 @@ fn Browse() -> Element {
         }
         page.set(0);
     };
-    let pick = move |row: Row| match row.target {
+    let mut pick = move |row: Row| match row.target {
         Target::Live { id, url } => {
             playing.set(None);
             if !three_pane {
@@ -1118,6 +1123,28 @@ fn Browse() -> Element {
             live.set(Some((id, row.title, url)));
         }
         Target::Movie { .. } | Target::Series(_) => open.set(Some(row)),
+    };
+
+    // A shelf remembers a title's id, not its address (which carries the account's credentials).
+    let c_shelf = client.clone();
+    let reopen = move |e: shelves::Entry| {
+        let target = match e.kind {
+            shelves::Title::Movie => Target::Movie {
+                id: e.id,
+                url: c_shelf
+                    .movie_url(e.id, e.ext.as_deref().unwrap_or("mp4"))
+                    .to_string(),
+            },
+            shelves::Title::Series => Target::Series(e.id),
+        };
+        pick(Row {
+            key: e.id,
+            title: e.title,
+            icon: e.icon,
+            category: None,
+            score: None,
+            target,
+        });
     };
 
     let cat_list = move || -> Element {
@@ -1212,8 +1239,27 @@ fn Browse() -> Element {
                     }
                 }
             };
+            // The shelves sit above the whole section, not above a category, search or later page.
+            let shelf = (kind() != Kind::Live && category().is_none() && q.is_empty() && now == 0)
+                .then(|| {
+                    let what = if kind() == Kind::Movies {
+                        shelves::Title::Movie
+                    } else {
+                        shelves::Title::Series
+                    };
+                    let mut entries = shelves::recent();
+                    entries.retain(|e| e.kind == what);
+                    entries
+                })
+                .filter(|e| !e.is_empty());
             rsx! {
-                div { class: "scroll", key: "{scope}", {list} }
+                div { class: "scroll", key: "{scope}",
+                    if let Some(entries) = shelf {
+                        Shelf { title: "Continue watching", entries, onpick: reopen }
+                        h2 { class: "all-head", if kind() == Kind::Movies { "All movies" } else { "All series" } }
+                    }
+                    {list}
+                }
                 Pager { page: now, pages, total, size, onpage: move |n| page.set(n) }
             }
         }
@@ -1561,7 +1607,7 @@ fn Card(row: Row, onpick: EventHandler<Row>) -> Element {
     };
     // How far the viewer got, if they did (a movie; a series is watched a episode at a time).
     let progress = match &row.target {
-        Target::Movie { id, .. } => percent_watched(&format!("movie:{id}")),
+        Target::Movie { id, .. } => shelves::percent(&format!("movie:{id}")),
         _ => None,
     };
     rsx! {
@@ -1582,6 +1628,42 @@ fn Card(row: Row, onpick: EventHandler<Row>) -> Element {
     }
 }
 
+/// A row of titles the viewer has put aside ("Continue watching"), as a strip that scrolls sideways.
+#[component]
+fn Shelf(
+    title: &'static str,
+    entries: Vec<shelves::Entry>,
+    onpick: EventHandler<shelves::Entry>,
+) -> Element {
+    rsx! {
+        section { class: "shelf",
+            h2 { "{title}" }
+            div { class: "strip",
+                for e in entries {
+                    button {
+                        key: "{e.id}",
+                        class: "card",
+                        title: "{e.title}",
+                        onclick: {
+                            let e = e.clone();
+                            move |_| onpick.call(e.clone())
+                        },
+                        span { class: "art",
+                            span { class: "ph", if e.kind == shelves::Title::Series { "S" } else { "M" } }
+                            if let Some(src) = e.icon.as_deref().filter(|s| s.starts_with("http")) {
+                                img { src: "{xtream::sized_art(src, xtream::Art::Thumb)}", loading: "lazy", decoding: "async" }
+                            }
+                            if let Some(p) = e.percent() { span { class: "prog", i { style: "width:{p}%" } } }
+                        }
+                        strong { "{e.title}" }
+                        if let Some(sub) = &e.sub { small { "{sub}" } }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Something to watch: a movie or an episode.
 #[derive(Clone, PartialEq)]
 struct Play {
@@ -1593,6 +1675,8 @@ struct Play {
     /// What a download is called.
     file: String,
     url: String,
+    /// The title as a shelf remembers it (a series, for an episode).
+    entry: Option<shelves::Entry>,
 }
 
 /// What a key press asks the player's page to do, from outside Dioxus (see `Watch`).
@@ -1693,43 +1777,36 @@ fn fullscreen_watch() {
     }
 }
 
-fn position_key(key: &str) -> String {
-    format!("riptv.at.{key}")
+/// The container a stream address ends in (`mkv`), if it looks like one.
+fn extension(url: &str) -> Option<String> {
+    url.rsplit('.')
+        .next()
+        .filter(|e| (1..=4).contains(&e.len()) && e.chars().all(|c| c.is_ascii_alphanumeric()))
+        .map(str::to_owned)
 }
 
-/// How far the viewer got last time: (seconds in, seconds in all), the second 0 if not known.
-/// `None` if they haven't started or have finished.
-fn saved_progress(key: &str) -> Option<(f64, f64)> {
-    let saved = storage()?.get_item(&position_key(key)).ok()??;
-    // "754/7200" (older entries are just "754").
-    let (at, total) = saved.split_once('/').unwrap_or((&saved, "0"));
-    let at: f64 = at.parse().ok().filter(|a| *a > 0.0)?;
-    Some((at, total.parse().unwrap_or(0.0)))
-}
-
-/// Where the viewer stopped last time, in seconds (0 if not started or finished).
-fn saved_position(key: &str) -> f64 {
-    saved_progress(key).map_or(0.0, |p| p.0)
-}
-
-/// How much of a title has been watched, 1 to 99, for a progress bar; `None` if it can't be said.
-fn percent_watched(key: &str) -> Option<u32> {
-    saved_progress(key)
-        .filter(|p| p.1 > 0.0)
-        .map(|(at, total)| (at / total * 100.0).clamp(1.0, 99.0) as u32)
-}
-
-/// Remembers the position, unless the viewer is at the very start or has all but finished.
-fn save_position(key: &str, at: f64, total: f64) {
-    let Some(s) = storage() else { return };
-    let finished = total > 0.0 && at > total * 0.95;
-    if at < 30.0 || finished {
-        let _ = s.remove_item(&position_key(key));
-    } else {
-        let _ = s.set_item(
-            &position_key(key),
-            &format!("{}/{}", at as u64, total as u64),
-        );
+/// A title as the shelves remember it.
+fn entry_of(
+    row: &Row,
+    title: &str,
+    icon: Option<String>,
+    ext: Option<String>,
+    sub: Option<String>,
+) -> shelves::Entry {
+    let (kind, id) = match &row.target {
+        Target::Movie { id, .. } => (shelves::Title::Movie, *id),
+        Target::Series(id) => (shelves::Title::Series, *id),
+        Target::Live { id, .. } => (shelves::Title::Movie, *id),
+    };
+    shelves::Entry {
+        kind,
+        id,
+        title: title.to_owned(),
+        icon,
+        ext,
+        sub,
+        at: 0.0,
+        total: 0.0,
     }
 }
 
@@ -1822,7 +1899,7 @@ fn Watch(
     let session = use_context::<Signal<Option<Client>>>();
     let client = use_hook(|| session.read().clone().expect("logged in"));
     let key = play.key.clone();
-    let resume = use_hook(|| saved_position(&key));
+    let resume = use_hook(|| shelves::position(&key));
     let has_next = next.is_some();
 
     let mut engine = use_signal(|| None::<Engine>);
@@ -2043,11 +2120,12 @@ fn Watch(
         if paused() { " paused" } else { "" },
         if active() { " active" } else { "" }
     );
-    let (c, url, key, saved) = (
+    let (c, url, key, saved, entry) = (
         client.clone(),
         play.url.clone(),
         play.key.clone(),
         saved.clone(),
+        play.entry.clone(),
     );
     let native_url = play.url.clone();
     rsx! {
@@ -2107,7 +2185,7 @@ fn Watch(
                         }
                     },
                     ontimeupdate: {
-                        let (c, url, key, saved) = (c.clone(), url.clone(), key.clone(), saved.clone());
+                        let (c, url, key, saved, entry) = (c.clone(), url.clone(), key.clone(), saved.clone(), entry.clone());
                         move |_| {
                             sync();
                             // Some of the file's sound the browser can't decode after all: go
@@ -2121,7 +2199,7 @@ fn Watch(
                             }
                             if (*pos.peek() - saved.get()).abs() >= 5.0 {
                                 saved.set(*pos.peek());
-                                save_position(&key, *pos.peek(), *total.peek());
+                                shelves::save(&key, *pos.peek(), *total.peek(), entry.as_ref());
                             }
                         }
                     },
@@ -2139,7 +2217,7 @@ fn Watch(
                     },
                     onended: move |_| {
                         paused.set(true);
-                        save_position(&key, 0.0, 0.0);
+                        shelves::finish(&key, entry.as_ref());
                         if has_next {
                             up_next.set(Some(8));
                             spawn(async move {
@@ -2377,6 +2455,7 @@ fn DetailPage(
             subtitle: None,
             file: title.clone(),
             url: url.clone(),
+            entry: Some(entry_of(&row, &title, poster.clone(), extension(url), None)),
         }),
         (Target::Series(_), Some(Ok((_, seasons)))) => {
             for season in seasons {
@@ -2394,6 +2473,13 @@ fn DetailPage(
                         subtitle: Some(format!("S{} E{num} · {}", season.number, ep.title)),
                         file: format!("{title} S{}E{num}: {}", season.number, ep.title),
                         url: client.episode_url(ep.id, ext).to_string(),
+                        entry: Some(entry_of(
+                            &row,
+                            &title,
+                            poster.clone(),
+                            None,
+                            Some(format!("S{} E{num}", season.number)),
+                        )),
                     });
                 }
                 spans.push((season.number, from..all.len()));
@@ -2406,10 +2492,18 @@ fn DetailPage(
         let all = all.clone();
         move |i: usize| onplay.call((all[i].clone(), all[i + 1..].to_vec()))
     };
-    let resume = all
-        .first()
-        .filter(|_| is_movie)
-        .and_then(|p| saved_progress(&p.key));
+    // The main button plays the episode last left half watched (or the movie), else the first.
+    let (start_at, resume) = all
+        .iter()
+        .enumerate()
+        .rev()
+        .find_map(|(i, p)| shelves::progress(&p.key).map(|r| (i, Some(r))))
+        .unwrap_or((0, None));
+    let episode_now = all
+        .get(start_at)
+        .and_then(|p| p.subtitle.as_deref())
+        .and_then(|s| s.split(" · ").next())
+        .map(str::to_owned);
     let season_now = chosen().or_else(|| spans.first().map(|s| s.0));
 
     rsx! {
@@ -2431,10 +2525,12 @@ fn DetailPage(
                     }
                     div { class: "d-actions",
                         if !all.is_empty() {
-                            button { class: "play", onclick: { let play_at = play_at.clone(); move |_| play_at(0) },
+                            button { class: "play", onclick: { let play_at = play_at.clone(); move |_| play_at(start_at) },
                                 Icon { d: PLAY }
                                 if let Some((at, total)) = resume {
-                                    if total > at { "Resume · {runtime_label((total - at) as u64)} left" } else { "Resume" }
+                                    "Resume"
+                                    if let Some(ep) = &episode_now { " {ep}" }
+                                    if total > at { " · {runtime_label((total - at) as u64)} left" }
                                 } else { "Play" }
                             }
                         }
@@ -2499,7 +2595,7 @@ fn DetailPage(
                                         if let Some(img) = ep.info.image.as_deref().filter(|s| s.starts_with("http")) {
                                             img { src: "{xtream::sized_art(img, xtream::Art::Still)}", loading: "lazy", decoding: "async" }
                                         }
-                                        if let Some(p) = percent_watched(&all[i].key) { span { class: "prog", i { style: "width:{p}%" } } }
+                                        if let Some(p) = shelves::percent(&all[i].key) { span { class: "prog", i { style: "width:{p}%" } } }
                                         span { class: "ep-num", "E{ep.episode_num.unwrap_or((i - range.start + 1) as u64)}" }
                                         span { class: "go", Icon { d: PLAY } }
                                         if let Some(secs) = ep.info.runtime_secs { span { class: "len", "{runtime_label(secs)}" } }

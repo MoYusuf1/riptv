@@ -175,8 +175,13 @@ Movies and episodes play full page: back and title on top, a seek bar that shows
 play/pause, 15-second skips, volume, time, playback speed, picture-in-picture and fullscreen. The
 controls fade while you watch. Keys: Space or K plays and pauses, J/← and L/→ skip 15 seconds, ↑/↓
 change the volume, M mutes, F is fullscreen, N is the next episode, Esc goes back. Where you stopped
-is remembered in the browser (not sent anywhere) and offered the next time, with **Start over**; when an
-episode ends the next one is offered, and starts in a few seconds unless you cancel.
+is remembered in the browser (not sent anywhere), per profile, and offered the next time, with **Start over**;
+when an episode ends the next one is offered, and starts in a few seconds unless you cancel.
+
+Titles you have started and not finished appear in a **Continue watching** row at the top of Movies and
+Series (a series shows the episode you were in, and its page's main button resumes that episode). The row
+keeps the last 24 and only shows on the section's first page, with no category or search chosen. Only
+ids and titles are kept, never stream addresses, which carry the account's credentials.
 
 ## Compatibility mode (ffmpeg)
 

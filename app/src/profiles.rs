@@ -131,6 +131,7 @@ pub fn Login() -> Element {
                     }
                     busy.set(None);
                     account.set(p.name.clone());
+                    crate::shelves::set_scope(&p.id);
                     session.set(Some(client));
                 }
                 Err(e) => {
