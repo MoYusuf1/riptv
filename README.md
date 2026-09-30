@@ -183,6 +183,9 @@ Series (a series shows the episode you were in, and its page's main button resum
 keeps the last 24 and only shows on the section's first page, with no category or search chosen. Only
 ids and titles are kept, never stream addresses, which carry the account's credentials.
 
+The heart on a movie or series page adds it to **My List** (up to 200 titles), a second row in the same
+place. Both rows are kept per profile on the device.
+
 ## Compatibility mode (ffmpeg)
 
 Many browsers, Chrome on Linux among them, can't decode HEVC (every 4K channel), AC-3, MP2 or

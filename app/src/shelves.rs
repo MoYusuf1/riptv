@@ -60,7 +60,9 @@ impl Entry {
     }
 }
 
-const SHELF: usize = 24;
+/// How many titles each shelf keeps.
+const RECENT: usize = 24;
+const LIST: usize = 200;
 
 fn load(list: &str) -> Vec<Entry> {
     storage()
@@ -78,11 +80,11 @@ fn store(list: &str, entries: &[Entry]) {
 }
 
 /// Puts `entry` first in `list` (replacing an earlier one of the same title).
-fn promote(list: &str, entry: Entry) {
+fn promote(list: &str, entry: Entry, keep: usize) {
     let mut all = load(list);
     all.retain(|e| !(e.kind == entry.kind && e.id == entry.id));
     all.insert(0, entry);
-    all.truncate(SHELF);
+    all.truncate(keep);
     store(list, &all);
 }
 
@@ -98,6 +100,26 @@ fn remove(list: &str, kind: Title, id: u64) {
 /// The titles started and not finished, latest first.
 pub fn recent() -> Vec<Entry> {
     load("recent")
+}
+
+/// The titles saved to My List, latest first.
+pub fn mine() -> Vec<Entry> {
+    load("list")
+}
+
+pub fn is_mine(kind: Title, id: u64) -> bool {
+    mine().iter().any(|e| e.kind == kind && e.id == id)
+}
+
+/// Saves `entry` to My List, or takes it off if it is there. Returns whether it is now on it.
+pub fn toggle_mine(entry: Entry) -> bool {
+    if is_mine(entry.kind, entry.id) {
+        remove("list", entry.kind, entry.id);
+        false
+    } else {
+        promote("list", entry, LIST);
+        true
+    }
 }
 
 fn progress_key(key: &str) -> String {
@@ -157,6 +179,7 @@ pub fn save(key: &str, at: f64, total: f64, entry: Option<&Entry>) {
                 total,
                 ..e.clone()
             },
+            RECENT,
         );
     }
 }

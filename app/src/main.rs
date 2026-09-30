@@ -49,6 +49,8 @@ svg{width:1.1rem;height:1.1rem}
 .icon-btn{display:grid;place-items:center;flex:none;width:2rem;height:2rem;border-radius:50%;background:rgba(255,255,255,.12);color:#fff;font-size:1.1rem;line-height:1}
 .icon-btn:hover{background:rgba(255,255,255,.22)}
 .icon-btn svg{width:1rem;height:1rem}
+.icon-btn.on{color:var(--accent)}
+.icon-btn.on svg{fill:currentColor}
 "#,
     // Sign-in
     r#".login-page{display:grid;place-items:center;min-height:100vh;padding:1.4rem;background:radial-gradient(circle at 50% 0,rgba(225,29,72,.22),transparent 45%),var(--bg)}
@@ -458,6 +460,8 @@ const PIP: &str = "M4 5h16a1 1 0 011 1v7M3 6v11a1 1 0 001 1h6M13 14h7a1 1 0 011 
 const SORT: &str = "M3 6h11M3 12h7M3 18h4M17 6v12m0 0l-3-3m3 3l3-3";
 const CHECK: &str = "M5 12l5 5 9-10";
 const INFO: &str = "M12 3a9 9 0 100 18 9 9 0 000-18zM12 8h.01M11 12h1v5h1";
+const HEART: &str =
+    "M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0112 7.3a4.3 4.3 0 017.5 2.5C19.5 15.4 12 20 12 20z";
 const CLOSE: &str = "M6 6l12 12M18 6L6 18";
 const LIST: &str = "M4 6h16M4 12h16M4 18h10";
 const NEXT: &str = "M6 5l10 7-10 7V5zM19 5v14";
@@ -1127,7 +1131,7 @@ fn Browse() -> Element {
 
     // A shelf remembers a title's id, not its address (which carries the account's credentials).
     let c_shelf = client.clone();
-    let reopen = move |e: shelves::Entry| {
+    let reopen = use_callback(move |e: shelves::Entry| {
         let target = match e.kind {
             shelves::Title::Movie => Target::Movie {
                 id: e.id,
@@ -1145,7 +1149,7 @@ fn Browse() -> Element {
             score: None,
             target,
         });
-    };
+    });
 
     let cat_list = move || -> Element {
         match &*cats.read() {
@@ -1240,22 +1244,33 @@ fn Browse() -> Element {
                 }
             };
             // The shelves sit above the whole section, not above a category, search or later page.
-            let shelf = (kind() != Kind::Live && category().is_none() && q.is_empty() && now == 0)
-                .then(|| {
+            let shelves_now: Vec<_> =
+                if kind() != Kind::Live && category().is_none() && q.is_empty() && now == 0 {
                     let what = if kind() == Kind::Movies {
                         shelves::Title::Movie
                     } else {
                         shelves::Title::Series
                     };
-                    let mut entries = shelves::recent();
-                    entries.retain(|e| e.kind == what);
-                    entries
-                })
-                .filter(|e| !e.is_empty());
+                    [
+                        ("Continue watching", shelves::recent()),
+                        ("My List", shelves::mine()),
+                    ]
+                    .into_iter()
+                    .map(|(name, mut entries)| {
+                        entries.retain(|e| e.kind == what);
+                        (name, entries)
+                    })
+                    .filter(|(_, entries)| !entries.is_empty())
+                    .collect()
+                } else {
+                    vec![]
+                };
             rsx! {
                 div { class: "scroll", key: "{scope}",
-                    if let Some(entries) = shelf {
-                        Shelf { title: "Continue watching", entries, onpick: reopen }
+                    if !shelves_now.is_empty() {
+                        for (name, entries) in shelves_now {
+                            Shelf { key: "{name}", title: name, entries, onpick: reopen }
+                        }
                         h2 { class: "all-head", if kind() == Kind::Movies { "All movies" } else { "All series" } }
                     }
                     {list}
@@ -1785,6 +1800,14 @@ fn extension(url: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// What a shelf calls this title.
+fn identity(row: &Row) -> (shelves::Title, u64) {
+    match &row.target {
+        Target::Series(id) => (shelves::Title::Series, *id),
+        Target::Movie { id, .. } | Target::Live { id, .. } => (shelves::Title::Movie, *id),
+    }
+}
+
 /// A title as the shelves remember it.
 fn entry_of(
     row: &Row,
@@ -1793,11 +1816,7 @@ fn entry_of(
     ext: Option<String>,
     sub: Option<String>,
 ) -> shelves::Entry {
-    let (kind, id) = match &row.target {
-        Target::Movie { id, .. } => (shelves::Title::Movie, *id),
-        Target::Series(id) => (shelves::Title::Series, *id),
-        Target::Live { id, .. } => (shelves::Title::Movie, *id),
-    };
+    let (kind, id) = identity(row);
     shelves::Entry {
         kind,
         id,
@@ -2364,6 +2383,10 @@ fn DetailPage(
     let client = use_hook(|| session.read().clone().expect("logged in"));
     let mut expanded = use_signal(|| false);
     let mut chosen = use_signal(|| None::<u64>);
+    let mut listed = use_signal(|| {
+        let (kind, id) = identity(&row);
+        shelves::is_mine(kind, id)
+    });
     let mut backdrop_failed = use_signal(|| false);
     let mut poster_failed = use_signal(|| false);
     let (c, target) = (client.clone(), row.target.clone());
@@ -2420,6 +2443,16 @@ fn DetailPage(
     let cast = details.cast.clone().unwrap_or_default();
     let trailer = details.trailer.as_deref().and_then(youtube_id);
     let is_movie = matches!(row.target, Target::Movie { .. });
+    let for_list = entry_of(
+        &row,
+        &title,
+        poster.clone(),
+        match &row.target {
+            Target::Movie { url, .. } => extension(url),
+            _ => None,
+        },
+        None,
+    );
 
     let mut facts: Vec<(&str, String)> = vec![];
     if let Some(secs) = details.runtime_secs {
@@ -2533,6 +2566,14 @@ fn DetailPage(
                                     if total > at { " · {runtime_label((total - at) as u64)} left" }
                                 } else { "Play" }
                             }
+                        }
+                        button {
+                            class: if listed() { "icon-btn on" } else { "icon-btn" },
+                            title: if listed() { "Remove from My List" } else { "Add to My List" },
+                            aria_label: "My List",
+                            aria_pressed: "{listed()}",
+                            onclick: move |_| listed.set(shelves::toggle_mine(for_list.clone())),
+                            Icon { d: HEART }
                         }
                         if let Some(id) = &trailer {
                             a { class: "icon-btn", href: "https://www.youtube.com/watch?v={id}", target: "_blank", rel: "noopener noreferrer", title: "Trailer on YouTube", aria_label: "Trailer on YouTube", Icon { d: EXTERNAL } }
