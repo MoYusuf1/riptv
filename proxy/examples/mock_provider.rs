@@ -12,13 +12,30 @@ use std::{
 use axum::{
     Json, Router,
     extract::{Path, Query},
-    http::header,
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Redirect, Response},
     routing::get,
 };
 use serde_json::{Value, json};
 
 static STARTED: OnceLock<Instant> = OnceLock::new();
+
+/// A file of your own to try (`MOCK_MOVIE=/path/film.mkv`), listed as movie 6: a real film, with
+/// whatever sound and index it really has, is the best test of the player's seeking.
+static OWN: OnceLock<Option<(&'static [u8], &'static str)>> = OnceLock::new();
+
+fn own() -> Option<(&'static [u8], &'static str)> {
+    *OWN.get_or_init(|| {
+        let path = std::env::var("MOCK_MOVIE").ok()?;
+        let bytes = std::fs::read(&path).ok()?;
+        let kind = if path.ends_with(".mkv") {
+            "video/x-matroska"
+        } else {
+            "video/mp4"
+        };
+        Some((Box::leak(bytes.into_boxed_slice()) as &'static [u8], kind))
+    })
+}
 
 /// Anamorphic PAL (720x576, 64:45 pixels): must display as 16:9, not stretched to 5:4.
 const PAL: &[u8] = include_bytes!("../fixtures/pal_anamorphic.ts");
@@ -27,8 +44,12 @@ const PAL: &[u8] = include_bytes!("../fixtures/pal_anamorphic.ts");
 /// video with AC-3 sound, and H.264 with AC-3 sound. The proxy's ffmpeg mode has to fix both.
 const HEVC_AC3: &[u8] = include_bytes!("../fixtures/hevc_ac3.ts");
 const H264_AC3: &[u8] = include_bytes!("../fixtures/h264_ac3.ts");
-/// A movie whose sound is AC-3: it plays, silently, until the page notices and converts it.
-const MOVIE_AC3: &[u8] = include_bytes!("../fixtures/h264_ac3.mp4");
+/// Movies whose sound a browser on Linux can't decode, in the containers providers really use: the
+/// same 16 s clip (H.264 with B-frames, 5.1 AC-3) as MP4 and as MKV, and a 3 s clip with DTS sound,
+/// which nothing here decodes, so the proxy's ffmpeg has to.
+const MOVIE_AC3_MP4: &[u8] = include_bytes!("../fixtures/movie_ac3.mp4");
+const MOVIE_AC3_MKV: &[u8] = include_bytes!("../fixtures/movie_ac3.mkv");
+const MOVIE_DTS_MKV: &[u8] = include_bytes!("../fixtures/movie_dts.mkv");
 
 const PLAYLIST: [(header::HeaderName, &str); 1] =
     [(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")];
@@ -75,6 +96,43 @@ const FLOWER: &str = "https://interactive-examples.mdn.mozilla.net/media/cc0-vid
 /// Artwork (Wikimedia Commons, CC-BY) so the poster grid and detail pages have something to show.
 const POSTER: &str = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Big_buck_bunny_poster_big.jpg/500px-Big_buck_bunny_poster_big.jpg";
 const HLS: &str = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
+
+/// A file, with byte ranges the way real providers serve them (players seek by asking for one).
+fn ranged(headers: &HeaderMap, body: &'static [u8], kind: &'static str) -> Response {
+    let len = body.len();
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("bytes="))
+        .and_then(|r| r.split_once('-'))
+        .and_then(|(a, b)| match (a.parse::<usize>(), b.parse::<usize>()) {
+            (Ok(a), Ok(b)) => Some((a, b.min(len - 1))),
+            (Ok(a), Err(_)) => Some((a, len - 1)),
+            (Err(_), Ok(n)) => Some((len.saturating_sub(n), len - 1)),
+            _ => None,
+        })
+        .filter(|(a, b)| a <= b && *a < len);
+    match range {
+        Some((a, b)) => (
+            StatusCode::PARTIAL_CONTENT,
+            [
+                (header::CONTENT_TYPE, kind.to_string()),
+                (header::ACCEPT_RANGES, "bytes".into()),
+                (header::CONTENT_RANGE, format!("bytes {a}-{b}/{len}")),
+            ],
+            body[a..=b].to_vec(),
+        )
+            .into_response(),
+        None => (
+            [
+                (header::CONTENT_TYPE, kind.to_string()),
+                (header::ACCEPT_RANGES, "bytes".into()),
+            ],
+            body,
+        )
+            .into_response(),
+    }
+}
 
 fn transport(name: &str) -> &'static [u8] {
     if name == "hevc.ts" {
@@ -127,6 +185,27 @@ fn schedule(stream_id: u64) -> Vec<Value> {
     listings
 }
 
+fn vod_streams() -> Value {
+    let mut movies = vec![
+        json!({"stream_id": 1, "name": "Flower (CC0 sample)", "container_extension": "mp4",
+               "rating": "5", "category_id": "10", "added": "1790000000", "stream_icon": POSTER}),
+        json!({"stream_id": 2, "name": "AC-3 sound in an MP4", "container_extension": "mp4",
+               "rating": "6.5", "category_id": "10", "added": "1780000000", "stream_icon": POSTER}),
+        json!({"stream_id": 3, "name": "An older title", "container_extension": "mp4",
+               "rating": "8.2", "category_id": "10", "added": "1700000000"}),
+        json!({"stream_id": 4, "name": "AC-3 sound in an MKV", "container_extension": "mkv",
+               "rating": "7.1", "category_id": "10", "added": "1785000000", "stream_icon": POSTER}),
+        json!({"stream_id": 5, "name": "DTS sound (needs ffmpeg)", "container_extension": "mkv",
+               "rating": "4.0", "category_id": "10", "added": "1775000000"}),
+    ];
+    if own().is_some() {
+        movies.push(json!({"stream_id": 6, "name": "Your own file (MOCK_MOVIE)",
+                           "container_extension": "mkv", "rating": "9.0", "category_id": "10",
+                           "added": "1795000000"}));
+    }
+    Value::Array(movies)
+}
+
 async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
     let get = |k: &str| q.get(k).map(String::as_str);
     if get("username") != Some("demo") || get("password") != Some("demo") {
@@ -152,27 +231,33 @@ async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
         Some("get_vod_categories") => {
             json!([{"category_id": "10", "category_name": "Test Movies"}])
         }
-        Some("get_vod_streams") => json!([
-            {"stream_id": 1, "name": "Flower (CC0 sample)", "container_extension": "mp4",
-             "rating": "5", "category_id": "10", "added": "1790000000", "stream_icon": POSTER},
-            {"stream_id": 2, "name": "AC-3 sound test", "container_extension": "mp4",
-             "rating": "6.5", "category_id": "10", "added": "1780000000"},
-            {"stream_id": 3, "name": "An older title", "container_extension": "mp4",
-             "rating": "8.2", "category_id": "10", "added": "1700000000"}
-        ]),
-        Some("get_vod_info") => json!({
-            "info": {
-                "name": "Flower (CC0 sample)", "genre": "Documentary", "releasedate": "2017-05-12",
-                "movie_image": POSTER, "backdrop_path": [POSTER],
-                "duration": "00:00:05", "country": "United States of America",
-                "cast": "A flower, some bees", "director": "MDN Web Docs", "rating": "5",
-                "plot": "A five second time-lapse of a flower opening, published by MDN as a CC0 sample. \
-                         It is here so the movie page has enough text to show how a long description is \
-                         clipped and expanded: nothing else happens in the film, and it does not get \
-                         any longer than this, however many times it is played."
-            },
-            "movie_data": {"stream_id": 1, "name": "Flower (CC0 sample)", "container_extension": "mp4"}
-        }),
+        Some("get_vod_streams") => vod_streams(),
+        Some("get_vod_info") => {
+            let id = get("vod_id").unwrap_or("1");
+            let name = match id {
+                "2" => "AC-3 sound in an MP4",
+                "4" => "AC-3 sound in an MKV",
+                "5" => "DTS sound (needs ffmpeg)",
+                _ => "Flower (CC0 sample)",
+            };
+            json!({
+                "info": {
+                    "name": name, "genre": "Documentary, Animation, Short", "releasedate": "2017-05-12",
+                    "movie_image": POSTER, "backdrop_path": [POSTER],
+                    "duration": "02:53:12", "duration_secs": 10392, "country": "United States of America",
+                    "cast": "Jan Morgenstern, Sacha Goedegebure, Ton Roosendaal, Pablo Vazquez, Aleks Kourbatov",
+                    "director": "Sacha Goedegebure", "rating": "7.6", "mpaa_rating": "PG",
+                    "youtube_trailer": "aqz-KE-bpKQ",
+                    "video": {"codec_name": "h264", "width": 1920, "height": 1080},
+                    "audio": {"codec_name": "ac3", "channels": 6},
+                    "plot": "A giant rabbit with a heart bigger than himself takes revenge on the three bullies \
+                             who ruined his morning. The page has enough text to show how a long description \
+                             is clipped and expanded: nothing else happens in the film, and it does not get \
+                             any longer than this, however many times it is played."
+                },
+                "movie_data": {"stream_id": 1, "name": name, "container_extension": "mp4"}
+            })
+        }
         Some("get_series_categories") => {
             json!([{"category_id": "20", "category_name": "Test Series"}])
         }
@@ -182,14 +267,20 @@ async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
                     "last_modified": "1790000000", "cover": POSTER}])
         }
         Some("get_series_info") => json!({
-            "info": {"name": "Flower: The Series", "genre": "Drama", "releaseDate": "2021-03-01",
-                     "cover": POSTER, "backdrop_path": [POSTER],
-                     "cast": "Petal, Stem", "director": "The Bees", "rating": "7.5",
-                     "plot": "Two seasons of the same five seconds."},
+            "info": {"name": "Flower: The Series", "genre": "Drama, Nature", "releaseDate": "2021-03-01",
+                     "cover": POSTER, "backdrop_path": [POSTER], "episode_run_time": "45",
+                     "cast": "Petal, Stem, A very patient bee", "director": "The Bees", "rating": "7.5",
+                     "youtube_trailer": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+                     "plot": "Two seasons of the same short film."},
             "episodes": {
-                "1": [{"id": "101", "episode_num": 1, "title": "Bloom", "container_extension": "mp4"},
-                      {"id": "102", "episode_num": 2, "title": "Petals", "container_extension": "mp4"}],
-                "2": [{"id": "201", "episode_num": 1, "title": "Return", "container_extension": "mp4"}]
+                "1": [{"id": "101", "episode_num": 1, "title": "Bloom", "container_extension": "mp4",
+                       "info": {"plot": "It starts, as these things do, with a bud.", "movie_image": POSTER,
+                                "duration_secs": 16, "releasedate": "2021-03-01"}},
+                      {"id": "102", "episode_num": 2, "title": "Petals", "container_extension": "mkv",
+                       "info": {"plot": "The same clip again, now in a different container.",
+                                "duration_secs": 16, "releasedate": "2021-03-08"}}],
+                "2": [{"id": "201", "episode_num": 1, "title": "Return", "container_extension": "mp4",
+                       "info": []}]
             }
         }),
         Some("get_simple_data_table") => json!({"epg_listings": schedule(stream_id)}),
@@ -228,18 +319,32 @@ async fn main() {
         .route(
             "/movie/{user}/{pass}/{file}",
             get(
-                |Path((_u, _p, file)): Path<(String, String, String)>| async move {
-                    if file.starts_with("2.") {
-                        ([(header::CONTENT_TYPE, "video/mp4")], MOVIE_AC3).into_response()
-                    } else {
-                        Redirect::temporary(FLOWER).into_response()
+                |Path((_u, _p, file)): Path<(String, String, String)>, headers: HeaderMap| async move {
+                    let (n, _) = file.split_once('.').unwrap_or((&file, ""));
+                    match n {
+                        "2" => ranged(&headers, MOVIE_AC3_MP4, "video/mp4"),
+                        "4" => ranged(&headers, MOVIE_AC3_MKV, "video/x-matroska"),
+                        "5" => ranged(&headers, MOVIE_DTS_MKV, "video/x-matroska"),
+                        "6" if own().is_some() => {
+                            let (bytes, kind) = own().expect("checked");
+                            ranged(&headers, bytes, kind)
+                        }
+                        _ => Redirect::temporary(FLOWER).into_response(),
                     }
                 },
             ),
         )
         .route(
             "/series/{user}/{pass}/{file}",
-            get(|| async { Redirect::temporary(FLOWER) }),
+            get(
+                |Path((_u, _p, file)): Path<(String, String, String)>, headers: HeaderMap| async move {
+                    match file.split_once('.').map_or(file.as_str(), |f| f.0) {
+                        "101" => ranged(&headers, MOVIE_AC3_MP4, "video/mp4"),
+                        "102" => ranged(&headers, MOVIE_AC3_MKV, "video/x-matroska"),
+                        _ => Redirect::temporary(FLOWER).into_response(),
+                    }
+                },
+            ),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:8081")
         .await

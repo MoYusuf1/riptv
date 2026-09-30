@@ -2208,8 +2208,9 @@ dependencies = [
 [[package]]
 name = "rffmpeg"
 version = "0.1.0"
-source = "git+ssh://git@github.com/MoYusuf1/rffmpeg.git#9774f3ac6df8b61b562aac3a1c37f0acd4335703"
+source = "git+ssh://git@github.com/MoYusuf1/rffmpeg.git#9d96581a89d60acd1e4d4290daecc5bd466e2d4a"
 dependencies = [
+ "futures-core",
  "js-sys",
  "oxideav-ac3",
  "oxideav-core",

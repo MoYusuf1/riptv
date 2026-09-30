@@ -6,13 +6,19 @@
 //! MPEG-TS segments (H.264 + AAC).
 
 use dioxus::prelude::*;
-use std::{cell::RefCell, collections::HashMap, rc::Rc, time::Duration};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::Rc,
+    time::Duration,
+};
 
+use rffmpeg::vod::Verdict;
 use web_sys::{
     js_sys,
     wasm_bindgen::{JsCast, JsValue, closure::Closure},
 };
-use xtream::{Client, Details, EpgListing, LiveStream, Season, VodStream};
+use xtream::{Client, Details, EpgListing, Episode, LiveStream, Season, VodStream};
 
 /// Rows built per "page"; scrolling near the bottom adds another page.
 const SHOW: usize = 200;
@@ -118,30 +124,62 @@ svg{width:1.1rem;height:1.1rem}
 .score::before{content:'★ ';color:#ffcc4d}
 .card strong{display:-webkit-box;margin-top:.5rem;overflow:hidden;color:var(--dim);font-size:.74rem;font-weight:500;-webkit-box-orient:vertical;-webkit-line-clamp:2}
 "#,
-    // Movie and series pages
-    r#".detail{position:absolute;z-index:3;inset:0;overflow:hidden auto;border-radius:16px;background:var(--bg);scrollbar-width:thin}
-.backdrop{position:absolute;inset:0 0 auto;width:100%;height:26rem;object-fit:cover;filter:blur(30px) brightness(.5) saturate(1.2);transform:scale(1.15);-webkit-mask-image:linear-gradient(#000 40%,transparent);mask-image:linear-gradient(#000 40%,transparent)}
-.back{position:absolute;z-index:2;top:1rem;left:1rem;background:rgba(0,0,0,.4)}
-.hero{position:relative;display:flex;align-items:flex-start;gap:1.8rem;padding:4rem 2.2rem 1.2rem}
-.poster-lg{flex:none;width:11.5rem;aspect-ratio:2/3;object-fit:cover;border-radius:14px;background:var(--row);box-shadow:0 18px 50px rgba(0,0,0,.55)}
-.info{min-width:0;max-width:48rem}
-.info h1{margin:0 0 .7rem;font-size:2.4rem;letter-spacing:-.03em;line-height:1.05}
-.chips{display:flex;flex-wrap:wrap;gap:.4rem;margin-bottom:.9rem}
-.chip{padding:.15rem .6rem;border-radius:7px;background:rgba(255,255,255,.1);font-size:.75rem}
+    // Movie and series pages: a full-bleed backdrop under the floating chrome
+    r#".detail{position:fixed;z-index:15;inset:0;overflow:hidden auto;background:var(--bg);scrollbar-width:thin}
+.back{position:fixed;z-index:18;top:4.6rem;left:1.35rem;background:rgba(0,0,0,.45);backdrop-filter:blur(10px)}
+.d-hero{position:relative;display:flex;flex-direction:column;justify-content:flex-end;min-height:100vh;padding:7rem 3rem 3.4rem 6.2rem}
+.d-art{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 20%}
+.d-art.soft{filter:blur(40px) brightness(.55) saturate(1.2);transform:scale(1.2)}
+.d-shade{position:absolute;inset:0;background:linear-gradient(90deg,rgba(11,7,9,.94),rgba(11,7,9,.4) 58%,rgba(11,7,9,.55)),linear-gradient(transparent 40%,var(--bg))}
+.d-main{position:relative;max-width:41rem}
+.d-title{margin:0 0 .7rem;font-size:clamp(2.4rem,5.4vw,4.4rem);font-weight:800;line-height:.98;letter-spacing:-.035em;text-wrap:balance;text-shadow:0 4px 34px rgba(0,0,0,.55)}
+.d-genres{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;font-weight:500}
+.d-genres span+span::before{content:'•';margin-right:.5rem;color:var(--faint)}
+.d-actions{display:flex;align-items:center;gap:.6rem;margin:1.3rem 0 1.4rem}
+.play{display:inline-flex;align-items:center;gap:.5rem;height:2.9rem;padding:0 1.5rem 0 1.2rem;border-radius:999px;background:#fff;color:#111;font-weight:600;white-space:nowrap}
+.play svg{fill:currentColor}
+.play:hover{background:#ece4e8}
+.d-actions .icon-btn{width:2.9rem;height:2.9rem}
+.d-meta{display:flex;flex-wrap:wrap;align-items:center;gap:.7rem;font-size:.92rem}
+.badge{padding:0 .4rem;border:1px solid rgba(255,255,255,.55);border-radius:4px;font-size:.72rem;font-weight:600;line-height:1.55}
+.star{color:#ffcc4d}
+.d-by{margin:.6rem 0 .8rem;color:var(--dim)}
+.d-by b{color:var(--text);font-weight:500}
 .plot{margin:0;color:#e6dbe0;line-height:1.55}
-.plot.clamp{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:4}
-.more{margin-top:.3rem;font-size:.72rem;font-weight:600;letter-spacing:.05em}
-.facts{display:flex;flex-wrap:wrap;gap:.6rem 2.2rem;margin:1rem 0}
-.facts small{display:block;color:var(--faint);font-size:.72rem}
-.facts strong{font-weight:500}
-.actions{display:flex;align-items:center;gap:.6rem;margin-top:1.2rem}
-.play{display:inline-flex;align-items:center;gap:.5rem;padding:.7rem 1.4rem;border-radius:14px;background:#fff;color:#111;font-weight:600}
-.actions .icon-btn{width:2.9rem;height:2.9rem;border-radius:14px}
-.episodes{position:relative;padding:0 1.4rem 2rem}
-.episodes h3{margin:1rem 0 .4rem;color:var(--dim);font-size:.75rem;letter-spacing:.06em;text-transform:uppercase}
-.ep{display:flex;align-items:center;gap:.5rem;padding-right:.4rem;border-radius:10px}
-.ep:hover{background:var(--row)}
-.ep button{flex:1;padding:.7rem .6rem}
+.plot.clamp{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:3}
+.more{margin-top:.3rem;font-size:.72rem;font-weight:600;color:var(--dim)}
+.more:hover{color:var(--text)}
+.d-facts{position:absolute;right:2.6rem;bottom:3.4rem;width:19rem;margin:0;overflow:hidden;border:1px solid var(--hair);border-radius:12px;background:var(--glass);backdrop-filter:blur(24px)}
+.d-facts div{display:flex;justify-content:space-between;gap:1rem;padding:.6rem .9rem;font-size:.75rem}
+.d-facts div+div{border-top:1px solid var(--hair)}
+.d-facts dt{color:var(--faint)}
+.d-facts dd{margin:0;text-align:right}
+.d-sec{position:relative;padding:1.4rem 3rem 1.2rem 6.2rem}
+.d-sec h2{margin:0 0 1rem;font-size:1.25rem;letter-spacing:-.01em}
+.cast{display:flex;gap:1.3rem;overflow-x:auto;padding-bottom:.6rem;scrollbar-width:thin}
+.person{flex:none;width:5.8rem;text-align:center}
+.face{display:grid;place-items:center;width:4.7rem;height:4.7rem;margin:0 auto .55rem;border-radius:50%;color:#fff;font-size:1.15rem;font-weight:700;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12)}
+.person strong{display:block;font-size:.74rem;font-weight:500;line-height:1.3}
+.trailer{position:relative;display:block;width:16rem;color:#fff;aspect-ratio:16/9;overflow:hidden;border-radius:12px;background:var(--row)}
+.trailer img{width:100%;height:100%;object-fit:cover;transition:transform .2s}
+.trailer:hover img{transform:scale(1.04)}
+.trailer span{position:absolute;inset:auto 0 0;padding:1.6rem .8rem .6rem;background:linear-gradient(transparent,rgba(0,0,0,.8));font-size:.78rem;font-weight:600}
+.seasons{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1.1rem}
+.seasons button{padding:.4rem .95rem;border-radius:999px;background:var(--row);color:var(--dim);font-size:.8rem}
+.seasons button:hover{color:var(--text)}
+.seasons button.on{background:#fff;color:#111;font-weight:600}
+.eps{display:grid;grid-template-columns:repeat(auto-fill,minmax(17rem,1fr));gap:1.4rem 1.2rem}
+.epc{min-width:0}
+.thumb{position:relative;display:grid;place-items:center;width:100%;aspect-ratio:16/9;overflow:hidden;border-radius:12px;background:var(--row);color:var(--faint);font-size:1.4rem;font-weight:700}
+.thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.thumb .go{position:absolute;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.4);color:#fff;opacity:0;transition:opacity .15s}
+.thumb .go svg{width:2rem;height:2rem;fill:currentColor}
+.thumb:hover .go,.thumb:focus-visible .go{opacity:1}
+.thumb .len{position:absolute;right:.45rem;bottom:.45rem;padding:.05rem .4rem;border-radius:6px;background:rgba(0,0,0,.7);color:#fff;font-size:.68rem;font-variant-numeric:tabular-nums}
+.epc-head{display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;margin-top:.6rem}
+.epc h4{margin:0;font-size:.9rem;font-weight:600;line-height:1.3}
+.epc small{display:block;margin-top:.1rem;color:var(--faint);font-size:.72rem}
+.epc p{display:-webkit-box;margin:.35rem 0 0;overflow:hidden;color:var(--dim);font-size:.78rem;line-height:1.45;-webkit-box-orient:vertical;-webkit-line-clamp:2}
 "#,
     // Live TV: channel list, player, timeline guide
     r#".live{display:grid;flex:1;grid-template-columns:18rem minmax(0,1fr);min-width:0;min-height:0;overflow:hidden;border:1px solid var(--hair);border-radius:16px}
@@ -168,7 +206,6 @@ svg{width:1.1rem;height:1.1rem}
 .player:not(.active):not(.paused){cursor:none}
 .player video{width:100%;height:100%;object-fit:contain}
 .sound-note{position:absolute;left:1rem;bottom:4.6rem;max-width:calc(100% - 2rem);padding:.35rem .8rem;border-radius:10px;background:rgba(0,0,0,.68);color:#ffd48a;font-size:.78rem;backdrop-filter:blur(10px)}
-.sound-note.inline{position:static;max-width:none;padding:.7rem 1rem;border-radius:0;background:rgba(255,180,84,.12);backdrop-filter:none}
 .stats{position:absolute;top:.8rem;left:.8rem;padding:.3rem .7rem;border-radius:8px;background:rgba(0,0,0,.66);color:#fff;font:600 .72rem ui-monospace,monospace;backdrop-filter:blur(8px)}
 .hud{position:absolute;inset:0;display:grid;place-items:center;color:#fff;pointer-events:none}
 .hud span{padding:.4rem .9rem;border-radius:999px;background:rgba(0,0,0,.6);backdrop-filter:blur(10px)}
@@ -206,25 +243,62 @@ svg{width:1.1rem;height:1.1rem}
 .now-line{position:absolute;z-index:2;top:0;bottom:0;width:2px;background:var(--fill)}
 .now-line span{position:absolute;top:0;left:-1.3rem;padding:.02rem .35rem;border-radius:5px;background:var(--fill);color:#fff;font-size:.65rem;font-weight:600}
 "#,
-    // Sheets: movie player and the category picker
+    // The category picker sheet
     r#".overlay{position:fixed;z-index:50;inset:0;display:grid;place-items:center;padding:4vh 4vw;background:rgba(0,0,0,.6);backdrop-filter:blur(10px)}
 .overlay.bottom{place-items:end center;padding:0}
 .sheet{width:min(100%,64rem);max-height:92vh;overflow:auto;border-radius:20px;background:var(--panel);box-shadow:0 30px 90px rgba(0,0,0,.6)}
-.sheet video{display:block;width:100%;max-height:64vh;background:#000}
 .sheet.cats{width:100%;max-height:78vh;border-radius:22px 22px 0 0}
 .sheet-body{padding:0 .8rem 1rem}
-.vod{position:relative;background:#000}
-.vod.fill{position:fixed;z-index:60;inset:0}
-.vod.fill video,.vod:fullscreen video{height:100%;max-height:none}
-.vod .controls{opacity:1}
-.scrub{flex:1;min-width:4rem;margin:0 .5rem;accent-color:var(--accent)}
-.time{margin:0 .3rem;color:#fff;font-size:.78rem;font-variant-numeric:tabular-nums;white-space:nowrap}
 .bar{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.8rem 1rem}
 .bar strong{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.bar div{display:flex;align-items:center;gap:.5rem}
+"#,
+    // The full-page player for movies and episodes
+    r#".watch{position:fixed;z-index:60;inset:0;overflow:hidden;background:#000;color:#fff;outline:0}
+.watch video{position:absolute;inset:0;width:100%;height:100%;background:#000;object-fit:contain}
+.watch:not(.active):not(.paused){cursor:none}
+.w-load,.w-fail{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:1rem;padding:2rem;text-align:center;color:var(--dim)}
+.w-load img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(40px) brightness(.35);transform:scale(1.2)}
+.w-load>*,.w-fail>*{position:relative}
+.w-top,.w-bottom{position:absolute;inset-inline:0;opacity:0;pointer-events:none;transition:opacity .25s}
+.w-top{top:0;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:1rem;padding:1rem 1.4rem 3rem;background:linear-gradient(rgba(0,0,0,.8),transparent)}
+.w-top .icon-btn{background:rgba(255,255,255,.14)}
+.w-top .end{display:flex;justify-content:flex-end}
+.w-title{min-width:0;text-align:center}
+.w-title strong,.w-title small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.w-title small{color:var(--dim);font-size:.75rem}
+.w-bottom{bottom:0;padding:3.6rem 1.4rem .9rem;background:linear-gradient(transparent,rgba(0,0,0,.88))}
+.watch.active .w-top,.watch.active .w-bottom,.watch.paused .w-top,.watch.paused .w-bottom,.w-bottom:focus-within{opacity:1;pointer-events:auto}
+.w-seek{display:block;width:100%;height:1.2rem;margin:0;background:none;cursor:pointer;-webkit-appearance:none;appearance:none}
+.w-seek::-webkit-slider-runnable-track{height:4px;border-radius:99px;background:linear-gradient(90deg,var(--fill) var(--p),rgba(255,255,255,.5) var(--p) var(--b),rgba(255,255,255,.2) var(--b))}
+.w-seek::-moz-range-track{height:4px;border-radius:99px;background:linear-gradient(90deg,var(--fill) var(--p),rgba(255,255,255,.5) var(--p) var(--b),rgba(255,255,255,.2) var(--b))}
+.w-seek::-webkit-slider-thumb{-webkit-appearance:none;width:0;height:0}
+.w-seek::-moz-range-thumb{width:0;height:0;border:0}
+.w-seek:hover::-webkit-slider-runnable-track,.w-seek:focus-visible::-webkit-slider-runnable-track{height:6px}
+.w-seek:hover::-webkit-slider-thumb,.w-seek:focus-visible::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;margin-top:-4px;border-radius:50%;background:#fff}
+.w-seek:hover::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:#fff}
+.w-seek:disabled{cursor:default}
+.w-row{display:flex;align-items:center;gap:.3rem}
+.w-row .ctl{width:2.6rem;height:2.6rem}
+.w-time{margin-left:.5rem;font-size:.82rem;font-variant-numeric:tabular-nums;white-space:nowrap}
+.w-time span{color:var(--dim)}
+.next-btn{display:inline-flex;align-items:center;gap:.4rem;height:2.4rem;margin-right:.3rem;padding:0 .9rem;border-radius:999px;background:rgba(255,255,255,.16);font-size:.8rem;font-weight:600}
+.next-btn:hover{background:rgba(255,255,255,.26)}
+.w-menu{position:absolute;z-index:40;right:1.4rem;bottom:5.6rem;width:15rem;padding:.4rem;border-radius:14px;background:rgba(28,20,24,.94);box-shadow:0 18px 50px rgba(0,0,0,.6);backdrop-filter:blur(20px)}
+.w-menu h5{margin:.5rem .7rem .3rem;color:var(--faint);font-size:.68rem;font-weight:600;letter-spacing:.07em;text-transform:uppercase}
+.w-menu button{display:flex;align-items:center;justify-content:space-between;width:100%;padding:.5rem .7rem;border-radius:9px;font-size:.85rem}
+.w-menu button:hover{background:var(--soft)}
+.w-menu button.on{color:var(--accent);font-weight:600}
+.w-menu p{margin:.2rem .7rem .5rem;color:var(--dim);font-size:.75rem;line-height:1.4}
+.toast{position:absolute;left:50%;bottom:7rem;display:flex;align-items:center;gap:.9rem;padding:.55rem .6rem .55rem 1rem;border-radius:999px;background:rgba(20,13,16,.86);font-size:.82rem;transform:translateX(-50%);backdrop-filter:blur(14px)}
+.toast button{padding:.25rem .8rem;border-radius:999px;background:rgba(255,255,255,.16);font-weight:600}
+.upnext{position:absolute;right:1.6rem;bottom:6.4rem;display:grid;gap:.4rem;width:16rem;padding:1rem;border-radius:16px;background:rgba(20,13,16,.9);backdrop-filter:blur(16px)}
+.upnext small{color:var(--dim)}
+.upnext div{display:flex;gap:.5rem;margin-top:.4rem}
+.upnext button{flex:1;padding:.5rem;border-radius:10px;background:rgba(255,255,255,.14);text-align:center;font-weight:600}
+.upnext button.go{background:#fff;color:#111}
 "#,
     // Narrow screens: the rail becomes a floating tab bar, categories a button
-    r#"@media(max-width:820px){.brand span,.who b{display:none}.topbar{gap:.5rem}.rail{top:auto;bottom:.8rem;left:50%;flex-direction:row;transform:translateX(-50%)}.rail button{width:auto;min-width:4.4rem;height:3rem;padding:0 .8rem}.rail span{display:block}.workspace{inset:4.2rem 0 0;grid-template-columns:1fr;padding:0 .6rem .6rem}.sidebar{display:none}.cats-btn{display:inline-flex}.scroll,.episodes{padding-bottom:5.5rem}.hero{flex-direction:column;align-items:center;padding:4rem 1rem 1rem;text-align:center}.poster-lg{width:9rem}.info h1{font-size:1.7rem}.chips,.facts,.actions{justify-content:center}}
+    r#"@media(max-width:820px){.brand span,.who b{display:none}.topbar{gap:.5rem}.rail{top:auto;bottom:.8rem;left:50%;flex-direction:row;transform:translateX(-50%)}.rail button{width:auto;min-width:4.4rem;height:3rem;padding:0 .8rem}.rail span{display:block}.workspace{inset:4.2rem 0 0;grid-template-columns:1fr;padding:0 .6rem .6rem}.sidebar{display:none}.cats-btn{display:inline-flex}.scroll,.episodes{padding-bottom:5.5rem}.back{left:1rem}.d-hero{min-height:auto;padding:7rem 1rem 1.6rem}.d-facts{position:relative;inset:auto;width:auto;margin-top:1.4rem}.d-sec{padding:1rem 1rem .8rem}.w-top{padding:.8rem .8rem 2.5rem}.w-bottom{padding:3rem .8rem .6rem}.w-row .vol,.w-row .volume{display:none}.w-menu{right:.8rem;bottom:5.2rem}}
 /* Live TV on a phone, like a video app: the picture on top and full width, its guide under it, the channel list below. */
 @media(max-width:820px){.live{display:flex;flex-direction:column;margin:0 -.6rem;border:0;border-radius:0}.stage{order:-1;flex:none}.stage.idle{display:none}.live-stage{display:block;height:auto}.player{margin:0;border-radius:0;aspect-ratio:16/9}.player.fill{aspect-ratio:auto}.controls{padding:2.2rem .5rem .3rem}.ctl{width:2.8rem;height:2.8rem}.vol{display:none}.bigplay{width:4.2rem;height:4.2rem}.sound-note{bottom:3.9rem}.guide{min-height:0;padding:.7rem .9rem .8rem;border-top:0;background:var(--bg)}.tl{height:5.6rem}.channels{flex:1;border:0;background:none}.channels .head{padding:.8rem 1rem .4rem}.channels .scroll{padding-bottom:5.5rem}}
 /* A phone turned sideways while watching: just the picture. */
@@ -252,6 +326,9 @@ const CHECK: &str = "M5 12l5 5 9-10";
 const INFO: &str = "M12 3a9 9 0 100 18 9 9 0 000-18zM12 8h.01M11 12h1v5h1";
 const CLOSE: &str = "M6 6l12 12M18 6L6 18";
 const LIST: &str = "M4 6h16M4 12h16M4 18h10";
+const NEXT: &str = "M6 5l10 7-10 7V5zM19 5v14";
+const EXTERNAL: &str = "M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5";
+const GEAR: &str = "M12 9a3 3 0 100 6 3 3 0 000-6zM19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z";
 
 /// Pixels on the guide timeline are this many seconds wide (90 px per hour).
 const SECS_PER_PX: u64 = 40;
@@ -414,9 +491,8 @@ fn go_live() {
 }
 
 /// Picture-in-picture. web-sys has no bindings for it, so it is called through JS reflection.
-fn toggle_pip() {
-    let (Some(video), Some(doc)) = (video_el(), web_sys::window().and_then(|w| w.document()))
-    else {
+fn toggle_pip(video: Option<web_sys::HtmlVideoElement>) {
+    let (Some(video), Some(doc)) = (video, web_sys::window().and_then(|w| w.document())) else {
         return;
     };
     let call = |target: &JsValue, method: &str| {
@@ -433,15 +509,6 @@ fn toggle_pip() {
     } else {
         call(video.as_ref(), "requestPictureInPicture");
     }
-}
-
-fn sheet_video() -> Option<web_sys::HtmlVideoElement> {
-    web_sys::window()?
-        .document()?
-        .query_selector(".sheet video")
-        .ok()??
-        .dyn_into()
-        .ok()
 }
 
 fn toggle_mute() -> Option<bool> {
@@ -857,13 +924,10 @@ fn Browse() -> Element {
     let mut category = use_signal(|| None::<u64>);
     let mut search = use_signal(String::new);
     let mut category_search = use_signal(String::new);
-    let mut playing = use_signal(|| None::<(String, String)>); // (title, url)
+    let mut playing = use_signal(|| None::<Play>);
+    let mut queue = use_signal(Vec::<Play>::new); // the episodes after the one playing
     let mut live = use_signal(|| None::<(u64, String, String)>); // (id, title, playlist url)
     let mut open = use_signal(|| None::<Row>); // the movie or series page
-    // A title whose sound the browser can't play: what we tell the viewer, and the converted
-    // stream that replaces the original once the proxy has one.
-    let mut movie_note = use_signal(|| None::<String>);
-    let mut movie_conv = use_signal(|| None::<(xtream::Converted, u64)>);
     let mut sort = use_signal(|| Sort::Provider);
     let mut sort_open = use_signal(|| false);
     let mut account_open = use_signal(|| false);
@@ -1042,55 +1106,26 @@ fn Browse() -> Element {
         _ => rsx! { div { class: "empty", "Loading your library…" } },
     };
 
-    let player = playing().map(|(title, url)| {
-        let (converter, original) = (client.clone(), url.clone());
+    let player = playing().map(|play| {
+        let next = queue()
+            .first()
+            .map(|p| p.subtitle.clone().unwrap_or_else(|| p.title.clone()));
         rsx! {
-            div { class: "overlay",
-                div { class: "sheet",
-                    div { class: "bar",
-                        strong { "{title}" }
-                        div {
-                            Download { title: title.clone(), url: url.clone() }
-                            button { class: "icon-btn", aria_label: "Close", onclick: move |_| playing.set(None), Icon { d: CLOSE } }
-                        }
+            Watch {
+                key: "{play.url}",
+                play,
+                next,
+                onclose: move |_| {
+                    playing.set(None);
+                    queue.set(vec![]);
+                },
+                onnext: move |_| {
+                    let mut rest = queue();
+                    if !rest.is_empty() {
+                        playing.set(Some(rest.remove(0)));
+                        queue.set(rest);
                     }
-                    if let Some((converted, from)) = movie_conv() {
-                        // Converted for sound: the browser's own bar can't seek in that, ours can.
-                        ConvertedPlayer { key: "{converted.at(0)}", converted, from }
-                    } else {
-                        video {
-                            key: "{url}",
-                            controls: true,
-                            autoplay: true,
-                            src: "{url}",
-                            ontimeupdate: move |_| {
-                                if movie_note().is_none()
-                                    && let Some(v) = sheet_video()
-                                    && no_audio_decoded(&v)
-                                {
-                                    // Silent: have the proxy convert it, and carry on from here.
-                                    let from = v.current_time() as u64;
-                                    movie_note.set(Some("Fixing the sound: converting for your browser…".into()));
-                                    let (converter, original) = (converter.clone(), original.clone());
-                                    wasm_bindgen_futures::spawn_local(async move {
-                                        match converter.convert(&xtream::Url::parse(&original).expect("ours")).await {
-                                            Ok(converted) => {
-                                                movie_note.set(None);
-                                                movie_conv.set(Some((converted, from)));
-                                            }
-                                            Err(e) => movie_note.set(Some(format!(
-                                                "No sound: this title's audio format (often AC-3 or DTS) can't be decoded by your browser. {e}"
-                                            ))),
-                                        }
-                                    });
-                                }
-                            },
-                        }
-                        if let Some(note) = movie_note() {
-                            p { class: "sound-note inline", "{note}" }
-                        }
-                    }
-                }
+                },
             }
         }
     });
@@ -1277,22 +1312,21 @@ fn Browse() -> Element {
                         {body}
                     }
                 }
-                if let Some(row) = open() {
-                    DetailPage {
-                        key: "{row.key}",
-                        row,
-                        onback: move |_| open.set(None),
-                        onplay: move |t: (String, String)| {
-                            movie_note.set(None);
-                            movie_conv.set(None);
-                            playing.set(Some(t));
-                        },
-                    }
-                }
             }
-            {player}
             {cats_sheet}
         }
+        if let Some(row) = open() {
+            DetailPage {
+                key: "{row.key}",
+                row,
+                onback: move |_| open.set(None),
+                onplay: move |(play, rest): (Play, Vec<Play>)| {
+                    playing.set(Some(play));
+                    queue.set(rest);
+                },
+            }
+        }
+        {player}
     }
 }
 
@@ -1306,125 +1340,6 @@ fn Download(title: String, url: String) -> Element {
             title: "Download",
             aria_label: "Download",
             Icon { d: DOWNLOAD }
-        }
-    }
-}
-
-/// A movie or episode the proxy converted to fix its sound. That stream is one continuous piece
-/// with no index, so the browser's own bar can't seek in it; this one can: picking a place starts a
-/// new conversion from that second.
-#[component]
-fn ConvertedPlayer(converted: xtream::Converted, from: u64) -> Element {
-    let mut start = use_signal(move || from); // the second of the movie where this stream begins
-    let mut pos = use_signal(move || from); // the second being shown
-    let mut scrubbing = use_signal(|| false);
-    let mut paused = use_signal(|| false);
-    let mut muted = use_signal(|| false);
-    let mut volume = use_signal(|| 100_u32);
-    let expanded = use_signal(|| false);
-    let src = converted.at(start()).to_string();
-    let total = converted.duration;
-
-    // Always a new conversion from there: the browser treats this stream as unseekable, even the
-    // part it has already loaded, so moving the playhead in place does nothing.
-    let mut seek = move |t: u64| {
-        pos.set(t);
-        start.set(t);
-    };
-
-    rsx! {
-        div { class: if expanded() { "vod fill" } else { "vod" }, id: "vod-player",
-            video {
-                key: "{src}",
-                autoplay: true,
-                src: "{src}",
-                onplay: move |_| paused.set(false),
-                onpause: move |_| paused.set(true),
-                onclick: move |_| {
-                    if let Some(v) = sheet_video() {
-                        toggle(&v);
-                    }
-                },
-                ontimeupdate: move |_| {
-                    if !scrubbing()
-                        && let Some(v) = sheet_video()
-                    {
-                        pos.set(start() + v.current_time() as u64);
-                    }
-                },
-            }
-            div { class: "controls",
-                button {
-                    class: "ctl",
-                    aria_label: "Play or pause",
-                    onclick: move |_| {
-                        if let Some(v) = sheet_video() {
-                            toggle(&v);
-                        }
-                    },
-                    Icon { d: if paused() { PLAY } else { PAUSE } }
-                }
-                div { class: "volume",
-                    button {
-                        class: "ctl",
-                        aria_label: "Mute",
-                        onclick: move |_| {
-                            if let Some(v) = sheet_video() {
-                                v.set_muted(!v.muted());
-                                muted.set(v.muted());
-                            }
-                        },
-                        Icon { d: if muted() { MUTED } else { VOLUME } }
-                    }
-                    input {
-                        class: "vol",
-                        r#type: "range",
-                        min: "0",
-                        max: "100",
-                        aria_label: "Volume",
-                        value: "{volume}",
-                        oninput: move |e| {
-                            let level: u32 = e.value().parse().unwrap_or(100);
-                            volume.set(level);
-                            muted.set(level == 0);
-                            if let Some(v) = sheet_video() {
-                                v.set_volume(f64::from(level) / 100.0);
-                                v.set_muted(level == 0);
-                            }
-                        }
-                    }
-                }
-                span { class: "time",
-                    "{hms(pos())}"
-                    if let Some(total) = total { " / {hms(total)}" }
-                }
-                if let Some(total) = total {
-                    input {
-                        class: "scrub",
-                        r#type: "range",
-                        min: "0",
-                        max: "{total}",
-                        aria_label: "Seek",
-                        value: "{pos}",
-                        oninput: move |e| {
-                            scrubbing.set(true);
-                            pos.set(e.value().parse().unwrap_or(0));
-                        },
-                        onchange: move |e| {
-                            scrubbing.set(false);
-                            seek(e.value().parse().unwrap_or(0));
-                        }
-                    }
-                } else {
-                    span { class: "grow" }
-                }
-                button {
-                    class: "ctl",
-                    aria_label: "Fullscreen",
-                    onclick: move |_| toggle_fullscreen("vod-player", expanded),
-                    Icon { d: FULLSCREEN }
-                }
-            }
         }
     }
 }
@@ -1475,16 +1390,735 @@ fn Card(row: Row, onpick: EventHandler<Row>) -> Element {
     }
 }
 
-/// The page for one movie or series: backdrop, poster, facts, and either Play or the episodes.
+/// Something to watch: a movie or an episode.
+#[derive(Clone, PartialEq)]
+struct Play {
+    /// Remembers where the viewer got to (`movie:12`, `episode:340`).
+    key: String,
+    title: String,
+    /// "S1 E3 · Title" for an episode.
+    subtitle: Option<String>,
+    /// What a download is called.
+    file: String,
+    url: String,
+    backdrop: Option<String>,
+}
+
+/// What a key press asks the player's page to do, from outside Dioxus (see `Watch`).
+#[derive(Clone, Copy, PartialEq)]
+enum Act {
+    Close,
+    Next,
+}
+
+/// What plays a movie or episode. It is settled before anything plays (see [`choose`]), so sound
+/// is never "fixed" while the viewer waits.
+#[derive(Clone)]
+enum Engine {
+    /// The browser plays the file itself.
+    Native,
+    /// rffmpeg reads the file and decodes its sound in Rust.
+    Rust(Rc<rffmpeg::vod::Movie>, xtream::Url),
+    /// The proxy's ffmpeg converts it; the text says what needed that.
+    Converted(xtream::Converted, String),
+    Failed(String),
+}
+
+async fn choose(c: &Client, url: &str) -> Engine {
+    let Ok(media) = xtream::Url::parse(url) else {
+        return Engine::Failed("that address is not valid".into());
+    };
+    // A file we can't read is left to the browser, which will say if it can't play it either.
+    let Ok(movie) = rffmpeg::mse::probe(&media).await else {
+        return Engine::Native;
+    };
+    match movie.verdict(&rffmpeg::mse::can_play) {
+        Verdict::Native => Engine::Native,
+        Verdict::Rust => Engine::Rust(movie, media),
+        Verdict::Convert(why) => convert(c, &media, why).await,
+    }
+}
+
+async fn convert(c: &Client, media: &xtream::Url, why: String) -> Engine {
+    match c.convert(media).await {
+        Ok(converted) => Engine::Converted(converted, why),
+        Err(e) => Engine::Failed(format!(
+            "This has {why}, which your browser can't play, and it could not be converted: {e}"
+        )),
+    }
+}
+
+/// Hands a title over to the proxy's ffmpeg from `at` seconds in (a last resort after the browser
+/// or the Rust player turned out not to cope).
+fn switch_to_convert(
+    c: Client,
+    url: String,
+    why: String,
+    at: f64,
+    mut engine: Signal<Option<Engine>>,
+    mut start: Signal<u64>,
+) {
+    // Not Dioxus's `spawn`: callers run outside its runtime (player callbacks).
+    wasm_bindgen_futures::spawn_local(async move {
+        let Ok(media) = xtream::Url::parse(&url) else {
+            return;
+        };
+        let converted = convert(&c, &media, why).await;
+        // The viewer may have left while the proxy was looking at the file.
+        if engine.try_peek().is_ok() {
+            start.set(at as u64);
+            engine.set(Some(converted));
+        }
+    });
+}
+
+fn watch_video() -> Option<web_sys::HtmlVideoElement> {
+    web_sys::window()?
+        .document()?
+        .get_element_by_id("watch-video")?
+        .dyn_into()
+        .ok()
+}
+
+/// Seconds buffered up to, in the range the playhead is in.
+fn buffered_end(v: &web_sys::HtmlVideoElement) -> f64 {
+    let (b, t) = (v.buffered(), v.current_time());
+    (0..b.length())
+        .filter_map(|i| Some((b.start(i).ok()?, b.end(i).ok()?)))
+        .find(|(s, e)| *s <= t + 0.1 && t <= *e)
+        .map_or(0.0, |r| r.1)
+}
+
+fn fullscreen_watch() {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    if doc.fullscreen_element().is_some() {
+        doc.exit_fullscreen();
+    } else if let Some(el) = doc.get_element_by_id("watch") {
+        let _ = el.request_fullscreen();
+    }
+}
+
+fn position_key(key: &str) -> String {
+    format!("riptv.at.{key}")
+}
+
+/// Where the viewer stopped last time, in seconds (0 if not started or finished).
+fn saved_position(key: &str) -> f64 {
+    storage()
+        .and_then(|s| s.get_item(&position_key(key)).ok().flatten())
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.0)
+}
+
+/// Remembers the position, unless the viewer is at the very start or has all but finished.
+fn save_position(key: &str, at: f64, total: f64) {
+    let Some(s) = storage() else { return };
+    let finished = total > 0.0 && at > total * 0.95;
+    if at < 30.0 || finished {
+        let _ = s.remove_item(&position_key(key));
+    } else {
+        let _ = s.set_item(&position_key(key), &(at as u64).to_string());
+    }
+}
+
+/// "2h 53m" or "42m".
+fn runtime_label(secs: u64) -> String {
+    let (h, m) = (secs / 3600, secs / 60 % 60);
+    if h > 0 {
+        format!("{h}h {m}m")
+    } else {
+        format!("{}m", m.max(1))
+    }
+}
+
+/// The local time, `secs` from now: "2:23 PM".
+fn ends_at(secs: u64) -> String {
+    let d = js_sys::Date::new(&JsValue::from_f64(
+        js_sys::Date::now() + secs as f64 * 1000.0,
+    ));
+    let h = d.get_hours();
+    format!(
+        "{}:{:02} {}",
+        if h.is_multiple_of(12) { 12 } else { h % 12 },
+        d.get_minutes(),
+        if h < 12 { "AM" } else { "PM" }
+    )
+}
+
+/// "Jul 14, 2026" from "2026-07-14"; anything else as it came.
+fn long_date(raw: &str) -> String {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let mut parts = raw.get(..10).unwrap_or(raw).split('-');
+    if let (Some(y), Some(m), Some(d)) = (parts.next(), parts.next(), parts.next())
+        && y.len() == 4
+        && let (Ok(m @ 1..=12), Ok(d)) = (m.parse::<usize>(), d.parse::<u32>())
+    {
+        return format!("{} {d}, {y}", MONTHS[m - 1]);
+    }
+    raw.to_owned()
+}
+
+/// The names in a cast list ("A, B / C").
+fn people(list: &str) -> Vec<&str> {
+    list.split([',', '/', ';'])
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .take(24)
+        .collect()
+}
+
+fn initials(name: &str) -> String {
+    name.split_whitespace()
+        .filter_map(|w| w.chars().next())
+        .take(2)
+        .collect::<String>()
+        .to_uppercase()
+}
+
+/// A colour of its own for each name, so the faces in a row look different.
+fn face_color(name: &str) -> String {
+    let hue = name
+        .bytes()
+        .fold(7_u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)))
+        % 360;
+    format!("background:hsl({hue} 32% 30%)")
+}
+
+/// The id in a YouTube address or a bare id.
+fn youtube_id(text: &str) -> Option<String> {
+    let ok = |s: &str| {
+        s.len() == 11
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    };
+    let text = text.trim();
+    [
+        text,
+        text.split("v=").nth(1).unwrap_or(""),
+        text.rsplit('/').next().unwrap_or(""),
+    ]
+    .iter()
+    .map(|s| s.split(['&', '?']).next().unwrap_or(""))
+    .find(|s| ok(s))
+    .map(str::to_owned)
+}
+
+/// "3. Title", or the title alone when it already says which episode it is.
+fn episode_name(ep: &Episode, nth: usize) -> String {
+    let num = ep.episode_num.unwrap_or(nth as u64 + 1);
+    if ep.title.to_uppercase().contains(&format!("E{num:02}")) {
+        ep.title.clone()
+    } else {
+        format!("{num}. {}", ep.title)
+    }
+}
+
+/// The full-page player for a movie or episode: the picture, a bar along the top with the title,
+/// and one along the bottom with the seek bar. Which engine plays it is [`choose`]'s decision.
+#[component]
+fn Watch(
+    play: Play,
+    next: Option<String>,
+    onclose: EventHandler<()>,
+    onnext: EventHandler<()>,
+) -> Element {
+    let session = use_context::<Signal<Option<Client>>>();
+    let client = use_hook(|| session.read().clone().expect("logged in"));
+    let key = play.key.clone();
+    let resume = use_hook(|| saved_position(&key));
+    let has_next = next.is_some();
+
+    let mut engine = use_signal(|| None::<Engine>);
+    // A converted stream has no index a `<video>` could seek in, so the page restarts it: this is
+    // the second of the movie where it begins.
+    let mut start = use_signal(move || resume as u64);
+    let mut pos = use_signal(move || resume);
+    let mut total = use_signal(|| 0.0_f64);
+    let mut ahead = use_signal(|| 0.0_f64);
+    let mut paused = use_signal(|| false);
+    let mut waiting = use_signal(|| true);
+    let mut muted = use_signal(|| false);
+    let mut volume = use_signal(|| 100_u32);
+    let mut rate = use_signal(|| 1.0_f64);
+    let mut scrubbing = use_signal(|| false);
+    let mut menu = use_signal(|| false);
+    let mut resumed = use_signal(move || (resume > 0.0).then_some(resume as u64));
+    let mut up_next = use_signal(|| None::<u32>);
+    let mut active = use_signal(|| true);
+    let mut activity = use_signal(|| 0_u32);
+    let mut wake = move || {
+        activity += 1;
+        active.set(true);
+        let mine = activity();
+        spawn(async move {
+            rffmpeg::mse::sleep(Duration::from_millis(2800)).await;
+            if activity() == mine {
+                active.set(false);
+            }
+        });
+    };
+    let handle = use_hook(|| Rc::new(RefCell::new(None::<rffmpeg::mse::Player>)));
+    let saved = use_hook(|| Rc::new(Cell::new(resume)));
+
+    // Decide what plays it, before any of it plays.
+    let (c, url) = (client.clone(), play.url.clone());
+    use_future(move || {
+        let (c, url) = (c.clone(), url.clone());
+        async move { engine.set(Some(choose(&c, &url).await)) }
+    });
+    // The hint about resuming fades on its own.
+    use_future(move || async move {
+        rffmpeg::mse::sleep(Duration::from_secs(7)).await;
+        resumed.set(None);
+    });
+
+    // The Rust engine drives a `<video>` of its own making; the others are plain attributes.
+    let (c, url) = (client.clone(), play.url.clone());
+    use_effect(move || {
+        let Some(Engine::Rust(movie, media)) = engine() else {
+            handle.borrow_mut().take();
+            return;
+        };
+        let Some(video) = watch_video() else { return };
+        let (c, url) = (c.clone(), url.clone());
+        *handle.borrow_mut() = Some(rffmpeg::mse::play_movie(
+            video,
+            movie,
+            media,
+            *pos.peek(),
+            move |s| match s {
+                rffmpeg::mse::Status::Playing => waiting.set(false),
+                rffmpeg::mse::Status::NeedsConversion(why) => {
+                    switch_to_convert(c.clone(), url.clone(), why, *pos.peek(), engine, start)
+                }
+                rffmpeg::mse::Status::Failed(e) => engine.set(Some(Engine::Failed(e))),
+                rffmpeg::mse::Status::Note(_) | rffmpeg::mse::Status::Ended => {}
+            },
+        ));
+    });
+
+    // What the `<video>` reports, as seconds of the movie.
+    let mut sync = move || {
+        let Some(v) = watch_video() else { return };
+        let (offset, known) = match engine.peek().as_ref() {
+            Some(Engine::Converted(c, _)) => (*start.peek() as f64, c.duration.map(|d| d as f64)),
+            Some(Engine::Rust(m, _)) => (0.0, Some(m.duration)),
+            _ => (0.0, None),
+        };
+        if !*scrubbing.peek() {
+            pos.set(offset + v.current_time());
+        }
+        let d = v.duration();
+        let length = if d.is_finite() && d > 0.0 && offset == 0.0 {
+            d
+        } else {
+            known.unwrap_or(0.0)
+        };
+        if length != *total.peek() {
+            total.set(length);
+        }
+        ahead.set(offset + buffered_end(&v));
+    };
+    let mut seek_to = move |t: f64| {
+        let length = *total.peek();
+        let t = if length > 0.0 {
+            t.clamp(0.0, length)
+        } else {
+            t.max(0.0)
+        };
+        pos.set(t);
+        if matches!(engine.peek().as_ref(), Some(Engine::Converted(..))) {
+            start.set(t as u64);
+            waiting.set(true);
+        } else if let Some(v) = watch_video() {
+            v.set_current_time(t);
+        }
+    };
+    let mut set_level = move |level: u32| {
+        volume.set(level);
+        muted.set(level == 0);
+        if let Some(v) = watch_video() {
+            v.set_volume(f64::from(level) / 100.0);
+            v.set_muted(level == 0);
+        }
+    };
+    let toggle_watch = move || {
+        if let Some(v) = watch_video() {
+            toggle(&v);
+        }
+    };
+
+    // Keys, on the whole page (a plain listener: Dioxus's keyboard events add ~26 KB of wasm). The
+    // listener runs outside Dioxus, where only signals may be touched: no `spawn`, no
+    // `EventHandler`. So it asks, and an effect (inside Dioxus) does.
+    let mut act = use_signal(|| None::<Act>);
+    use_effect(move || {
+        if let Some(what) = act() {
+            act.set(None);
+            match what {
+                Act::Close => onclose.call(()),
+                Act::Next => onnext.call(()),
+            }
+        }
+    });
+    let mut poke = move || {
+        activity += 1;
+        active.set(true);
+        let mine = activity();
+        wasm_bindgen_futures::spawn_local(async move {
+            rffmpeg::mse::sleep(Duration::from_millis(2800)).await;
+            // The player may be gone by now, and its signals with it.
+            let current = activity.try_peek().map(|a| *a == mine).unwrap_or(false);
+            if current {
+                active.set(false);
+            }
+        });
+    };
+    let listener = use_hook(|| {
+        Rc::new(RefCell::new(
+            None::<Closure<dyn FnMut(web_sys::KeyboardEvent)>>,
+        ))
+    });
+    let installed = listener.clone();
+    use_effect(move || {
+        let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+            return;
+        };
+        let on_key =
+            Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
+                if e.ctrl_key() || e.meta_key() || e.alt_key() {
+                    return;
+                }
+                let key = e.key().to_ascii_lowercase();
+                // Values are read into locals first: a `peek()` guard lives to the end of its
+                // statement, and these calls write the same signals.
+                let (now, level) = (pos(), volume());
+                match key.as_str() {
+                    " " | "k" => toggle_watch(),
+                    "arrowleft" | "j" => seek_to(now - 10.0),
+                    "arrowright" | "l" => seek_to(now + 10.0),
+                    "arrowup" => set_level((level + 10).min(100)),
+                    "arrowdown" => set_level(level.saturating_sub(10)),
+                    "m" => {
+                        if let Some(v) = watch_video() {
+                            v.set_muted(!v.muted());
+                        }
+                    }
+                    "f" => fullscreen_watch(),
+                    "n" if has_next => act.set(Some(Act::Next)),
+                    "escape" => act.set(Some(Act::Close)),
+                    _ => return,
+                }
+                e.prevent_default();
+                poke();
+            });
+        let _ = doc.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref());
+        *installed.borrow_mut() = Some(on_key);
+    });
+    use_drop(move || {
+        if let (Some(on_key), Some(doc)) = (
+            listener.borrow_mut().take(),
+            web_sys::window().and_then(|w| w.document()),
+        ) {
+            let _ =
+                doc.remove_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref());
+        }
+    });
+
+    let (engine_now, kind, src) = match engine() {
+        Some(Engine::Native) => (true, "native", Some(play.url.clone())),
+        Some(Engine::Rust(..)) => (true, "rust", None),
+        Some(Engine::Converted(c, _)) => (true, "converted", Some(c.at(start()).to_string())),
+        _ => (false, "", None),
+    };
+    let about = match engine() {
+        Some(Engine::Native) => "Played by your browser.".to_string(),
+        Some(Engine::Rust(m, _)) => format!(
+            "Played in Rust{}: nothing is converted, so nothing waits.",
+            m.audio
+                .as_ref()
+                .filter(|a| a.codec.is_empty() || a.name == "AC-3" || a.name == "E-AC-3")
+                .map_or(String::new(), |a| format!(
+                    ", with {} sound decoded here",
+                    a.name
+                ))
+        ),
+        Some(Engine::Converted(_, why)) => {
+            format!("Converted by ffmpeg because of {why}. A seek takes a moment.")
+        }
+        _ => String::new(),
+    };
+    let (p, b) = {
+        let t = total().max(1.0);
+        (
+            (pos() / t * 100.0).clamp(0.0, 100.0),
+            (ahead() / t * 100.0).clamp(0.0, 100.0),
+        )
+    };
+    let shown_volume = if muted() { 0 } else { volume() };
+    let class = format!(
+        "watch{}{}",
+        if paused() { " paused" } else { "" },
+        if active() { " active" } else { "" }
+    );
+    let (c, url, key, saved) = (
+        client.clone(),
+        play.url.clone(),
+        play.key.clone(),
+        saved.clone(),
+    );
+    let native_url = play.url.clone();
+    rsx! {
+        div {
+            class: "{class}",
+            id: "watch",
+            tabindex: "0",
+            onmousemove: move |_| wake(),
+            ondoubleclick: move |_| fullscreen_watch(),
+            if !engine_now {
+                if let Some(Engine::Failed(why)) = engine() {
+                    div { class: "w-fail",
+                        strong { "This can't be played" }
+                        p { "{why}" }
+                    }
+                } else {
+                    div { class: "w-load",
+                        if let Some(art) = play.backdrop.as_deref().filter(|s| s.starts_with("http")) { img { src: "{art}" } }
+                        i { class: "spinner" }
+                        "Getting it ready…"
+                    }
+                }
+            } else {
+                video {
+                    key: "{kind}:{src.as_deref().unwrap_or_default()}",
+                    id: "watch-video",
+                    autoplay: true,
+                    src: src,
+                    onclick: move |_| { menu.set(false); toggle_watch(); },
+                    onplay: move |_| paused.set(false),
+                    onpause: move |_| paused.set(true),
+                    onwaiting: move |_| waiting.set(true),
+                    onplaying: move |_| { waiting.set(false); paused.set(false); },
+                    oncanplay: move |_| waiting.set(false),
+                    onloadedmetadata: move |_| {
+                        // A plain file starts where the viewer left off; the other engines were told.
+                        let native = matches!(engine.peek().as_ref(), Some(Engine::Native));
+                        if resume > 0.0
+                            && native
+                            && let Some(v) = watch_video()
+                        {
+                            v.set_current_time(resume);
+                        }
+                        sync();
+                    },
+                    ondurationchange: move |_| sync(),
+                    onprogress: move |_| sync(),
+                    onratechange: move |_| {
+                        if let Some(v) = watch_video() { rate.set(v.playback_rate()); }
+                    },
+                    onvolumechange: move |_| {
+                        if let Some(v) = watch_video() {
+                            muted.set(v.muted());
+                            volume.set((v.volume() * 100.0).round() as u32);
+                        }
+                    },
+                    ontimeupdate: {
+                        let (c, url, key, saved) = (c.clone(), url.clone(), key.clone(), saved.clone());
+                        move |_| {
+                            sync();
+                            // Some of the file's sound the browser can't decode after all: go
+                            // round through the converter rather than leave the film silent.
+                            let native = matches!(engine.peek().as_ref(), Some(Engine::Native));
+                            if native
+                                && let Some(v) = watch_video()
+                                && no_audio_decoded(&v)
+                            {
+                                switch_to_convert(c.clone(), url.clone(), "sound the browser can't decode".into(), *pos.peek(), engine, start);
+                            }
+                            if (*pos.peek() - saved.get()).abs() >= 5.0 {
+                                saved.set(*pos.peek());
+                                save_position(&key, *pos.peek(), *total.peek());
+                            }
+                        }
+                    },
+                    onerror: {
+                        let (c, url) = (c.clone(), url.clone());
+                        move |_| {
+                            let native = matches!(engine.peek().as_ref(), Some(Engine::Native));
+                            let converted = matches!(engine.peek().as_ref(), Some(Engine::Converted(..)));
+                            if native {
+                                switch_to_convert(c.clone(), url.clone(), "a format the browser can't play".into(), *pos.peek(), engine, start);
+                            } else if converted {
+                                engine.set(Some(Engine::Failed("The converted stream stopped: the source may have ended.".into())));
+                            }
+                        }
+                    },
+                    onended: move |_| {
+                        paused.set(true);
+                        save_position(&key, 0.0, 0.0);
+                        if has_next {
+                            up_next.set(Some(8));
+                            spawn(async move {
+                                while let Some(n) = up_next() {
+                                    if n == 0 {
+                                        onnext.call(());
+                                        break;
+                                    }
+                                    rffmpeg::mse::sleep(Duration::from_secs(1)).await;
+                                    if up_next().is_some() { up_next.set(Some(n - 1)); }
+                                }
+                            });
+                        }
+                    },
+                }
+                if waiting() && !paused() { div { class: "hud", i { class: "spinner" } } }
+                if paused() && !waiting() && up_next().is_none() {
+                    button { class: "bigplay", aria_label: "Play", onclick: move |_| toggle_watch(), Icon { d: PLAY } }
+                }
+            }
+            div { class: "w-top",
+                div { button { class: "icon-btn", aria_label: "Back", title: "Back (Esc)", onclick: move |_| onclose.call(()), Icon { d: BACK } } }
+                div { class: "w-title",
+                    strong { "{play.title}" }
+                    if let Some(sub) = &play.subtitle { small { "{sub}" } }
+                }
+                div { class: "end", Download { title: play.file.clone(), url: native_url } }
+            }
+            if engine_now {
+                if menu() {
+                    button { class: "scrim", aria_label: "Close menu", onclick: move |_| menu.set(false) }
+                    div { class: "w-menu",
+                        h5 { "Speed" }
+                        for r in [0.5_f64, 0.75, 1.0, 1.25, 1.5, 2.0] {
+                            button {
+                                key: "{r}",
+                                class: if rate() == r { "on" } else { "" },
+                                onclick: move |_| {
+                                    if let Some(v) = watch_video() { v.set_playback_rate(r); }
+                                    rate.set(r);
+                                },
+                                span { if r == 1.0 { "Normal" } else { "{r}×" } }
+                                if rate() == r { Icon { d: CHECK } }
+                            }
+                        }
+                        h5 { "Playback" }
+                        p { "{about}" }
+                    }
+                }
+                if let Some(t) = resumed() {
+                    div { class: "toast",
+                        "Resumed at {hms(t)}"
+                        button { onclick: move |_| { seek_to(0.0); resumed.set(None); }, "Start over" }
+                    }
+                }
+                if let (Some(n), Some(label)) = (up_next(), next.clone()) {
+                    div { class: "upnext",
+                        small { "Up next in {n}" }
+                        strong { "{label}" }
+                        div {
+                            button { onclick: move |_| up_next.set(None), "Cancel" }
+                            button { class: "go", onclick: move |_| onnext.call(()), "Play now" }
+                        }
+                    }
+                }
+                div { class: "w-bottom",
+                    input {
+                        class: "w-seek",
+                        r#type: "range",
+                        min: "0",
+                        max: "{total() as u64}",
+                        step: "1",
+                        value: "{pos() as u64}",
+                        style: "--p:{p}%;--b:{b}%",
+                        disabled: total() <= 0.0,
+                        aria_label: "Seek",
+                        oninput: move |e| {
+                            scrubbing.set(true);
+                            pos.set(e.value().parse().unwrap_or(0.0));
+                        },
+                        onchange: move |e| {
+                            scrubbing.set(false);
+                            seek_to(e.value().parse().unwrap_or(0.0));
+                        },
+                    }
+                    div { class: "w-row",
+                        button { class: "ctl", aria_label: "Play or pause", title: "Play or pause (Space)", onclick: move |_| toggle_watch(),
+                            Icon { d: if paused() { PLAY } else { PAUSE } }
+                        }
+                        button { class: "ctl", aria_label: "Back 10 seconds", title: "Back 10 seconds (←)", onclick: move |_| seek_to(pos() - 10.0), Skip { back: true } }
+                        button { class: "ctl", aria_label: "Forward 10 seconds", title: "Forward 10 seconds (→)", onclick: move |_| seek_to(pos() + 10.0), Skip { back: false } }
+                        div { class: "volume",
+                            button {
+                                class: "ctl",
+                                aria_label: "Mute",
+                                title: "Mute (M)",
+                                onclick: move |_| {
+                                    if let Some(v) = watch_video() { v.set_muted(!v.muted()); }
+                                },
+                                Icon { d: if muted() { MUTED } else { VOLUME } }
+                            }
+                            input {
+                                class: "vol",
+                                r#type: "range",
+                                min: "0",
+                                max: "100",
+                                aria_label: "Volume",
+                                value: "{shown_volume}",
+                                oninput: move |e| set_level(e.value().parse().unwrap_or(100)),
+                            }
+                        }
+                        span { class: "w-time",
+                            "{hms(pos() as u64)}"
+                            if total() > 0.0 { span { " / {hms(total().round() as u64)}" } }
+                        }
+                        span { class: "grow" }
+                        if has_next {
+                            button { class: "next-btn", title: "Next episode (N)", onclick: move |_| onnext.call(()),
+                                Icon { d: NEXT } "Next"
+                            }
+                        }
+                        button { class: "ctl", aria_label: "Settings", title: "Settings", onclick: move |_| menu.set(!menu()), Icon { d: GEAR } }
+                        button { class: "ctl", aria_label: "Picture in picture", title: "Picture in picture", onclick: move |_| toggle_pip(watch_video()), Icon { d: PIP } }
+                        button { class: "ctl", aria_label: "Fullscreen", title: "Fullscreen (F)", onclick: move |_| fullscreen_watch(), Icon { d: FULLSCREEN } }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The skip-ten-seconds arrow.
+#[component]
+fn Skip(back: bool) -> Element {
+    rsx! {
+        svg {
+            view_box: "0 0 24 24",
+            fill: "none",
+            stroke: "currentColor",
+            stroke_width: "2",
+            stroke_linecap: "round",
+            stroke_linejoin: "round",
+            path { d: if back { "M4 11a8 8 0 103-6.2M4 4v5h5" } else { "M20 11a8 8 0 11-3-6.2M20 4v5h-5" } }
+            text { x: "12", y: "16", text_anchor: "middle", font_size: "7.5", font_weight: "700", fill: "currentColor", stroke: "none", "10" }
+        }
+    }
+}
+
+/// The page for one movie or series: backdrop, title, facts, cast, trailer, and Play or the episodes.
 #[component]
 fn DetailPage(
     row: Row,
     onback: EventHandler<()>,
-    onplay: EventHandler<(String, String)>,
+    onplay: EventHandler<(Play, Vec<Play>)>,
 ) -> Element {
     let session = use_context::<Signal<Option<Client>>>();
     let client = use_hook(|| session.read().clone().expect("logged in"));
     let mut expanded = use_signal(|| false);
+    let mut chosen = use_signal(|| None::<u64>);
     let (c, target) = (client.clone(), row.target.clone());
     let info = use_resource(move || {
         let (c, target) = (c.clone(), target.clone());
@@ -1508,48 +2142,141 @@ fn DetailPage(
         details.name.clone()
     };
     let poster = details.poster.clone().or_else(|| row.icon.clone());
-    let backdrop = details.backdrop.clone().or_else(|| poster.clone());
-    let genres = details.genre.as_ref().map(|g| {
-        g.split(',')
-            .take(2)
-            .map(str::trim)
-            .collect::<Vec<_>>()
-            .join(", ")
-    });
-    let chips: Vec<String> = [
-        details.year.clone(),
-        genres,
-        details.duration.clone(),
-        details.country.clone(),
-        score(&details.rating).map(|r| format!("★ {r}")),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    let real_backdrop = details.backdrop.clone();
+    let backdrop = real_backdrop.clone().or_else(|| poster.clone());
+    let genres: Vec<String> = details
+        .genre
+        .as_deref()
+        .map(|g| {
+            g.split(',')
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .take(3)
+                .collect()
+        })
+        .unwrap_or_default();
+    let quality = details
+        .video
+        .as_deref()
+        .and_then(|v| v.split(" · ").next())
+        .filter(|q| q.ends_with('p') || *q == "4K")
+        .map(str::to_owned);
     let long = details
         .plot
         .as_ref()
-        .is_some_and(|p| p.chars().count() > 280);
-    let movie_url = match &row.target {
-        Target::Movie { url, .. } => Some(url.clone()),
-        _ => None,
+        .is_some_and(|p| p.chars().count() > 240);
+    let cast = details.cast.clone().unwrap_or_default();
+    let trailer = details.trailer.as_deref().and_then(youtube_id);
+    let is_movie = matches!(row.target, Target::Movie { .. });
+
+    let mut facts: Vec<(&str, String)> = vec![];
+    if let Some(secs) = details.runtime_secs {
+        facts.push((
+            "Runtime",
+            if is_movie {
+                format!("{} · Ends {}", runtime_label(secs), ends_at(secs))
+            } else {
+                format!("{} per episode", runtime_label(secs))
+            },
+        ));
+    }
+    if let Some(date) = &details.release_date {
+        facts.push(("Release date", long_date(date)));
+    }
+    if let Some(country) = &details.country {
+        facts.push(("Country", country.clone()));
+    }
+    if let Some(v) = &details.video {
+        facts.push(("Video", v.clone()));
+    }
+    if let Some(a) = &details.audio {
+        facts.push(("Audio", a.clone()));
+    }
+
+    // Everything there is to watch, in order: a movie is one, a series is its episodes.
+    let mut all: Vec<Play> = vec![];
+    let mut spans: Vec<(u64, std::ops::Range<usize>)> = vec![];
+    match (&row.target, &*guard) {
+        (Target::Movie { id, url }, _) => all.push(Play {
+            key: format!("movie:{id}"),
+            title: title.clone(),
+            subtitle: None,
+            file: title.clone(),
+            url: url.clone(),
+            backdrop: backdrop.clone(),
+        }),
+        (Target::Series(_), Some(Ok((_, seasons)))) => {
+            for season in seasons {
+                let from = all.len();
+                for (n, ep) in season.episodes.iter().enumerate() {
+                    let num = ep.episode_num.unwrap_or(n as u64 + 1);
+                    let ext = ep
+                        .container_extension
+                        .as_deref()
+                        .filter(|e| !e.is_empty())
+                        .unwrap_or("mp4");
+                    all.push(Play {
+                        key: format!("episode:{}", ep.id),
+                        title: title.clone(),
+                        subtitle: Some(format!("S{} E{num} · {}", season.number, ep.title)),
+                        file: format!("{title} S{}E{num}: {}", season.number, ep.title),
+                        url: client.episode_url(ep.id, ext).to_string(),
+                        backdrop: ep.info.image.clone().or_else(|| backdrop.clone()),
+                    });
+                }
+                spans.push((season.number, from..all.len()));
+            }
+        }
+        _ => {}
+    }
+    let all = Rc::new(all);
+    let play_at = {
+        let all = all.clone();
+        move |i: usize| onplay.call((all[i].clone(), all[i + 1..].to_vec()))
     };
+    let resume_at = all
+        .first()
+        .map(|p| saved_position(&p.key))
+        .filter(|s| *s > 0.0 && is_movie);
+    let season_now = chosen().or_else(|| spans.first().map(|s| s.0));
 
     rsx! {
         section { class: "detail",
-            if let Some(src) = backdrop.as_deref().filter(|s| s.starts_with("http")) { img { class: "backdrop", src: "{src}" } }
             button { class: "icon-btn back", aria_label: "Back", onclick: move |_| onback.call(()), Icon { d: BACK } }
-            div { class: "hero",
-                if let Some(src) = poster.as_deref().filter(|s| s.starts_with("http")) { img { class: "poster-lg", src: "{src}" } }
-                div { class: "info",
-                    h1 { "{title}" }
-                    if !chips.is_empty() {
-                        div { class: "chips", for c in chips { span { class: "chip", key: "{c}", "{c}" } } }
+            div { class: "d-hero",
+                if let Some(src) = backdrop.as_deref().filter(|s| s.starts_with("http")) {
+                    img { class: if real_backdrop.is_some() { "d-art" } else { "d-art soft" }, src: "{src}" }
+                }
+                div { class: "d-shade" }
+                div { class: "d-main",
+                    h1 { class: "d-title", "{title}" }
+                    if !genres.is_empty() {
+                        div { class: "d-genres", for g in genres.iter() { span { key: "{g}", "{g}" } } }
                     }
+                    div { class: "d-actions",
+                        if !all.is_empty() {
+                            button { class: "play", onclick: { let play_at = play_at.clone(); move |_| play_at(0) },
+                                Icon { d: PLAY }
+                                if resume_at.is_some() { "Resume" } else { "Play" }
+                            }
+                        }
+                        if let Some(id) = &trailer {
+                            a { class: "icon-btn", href: "https://www.youtube.com/watch?v={id}", target: "_blank", rel: "noopener noreferrer", title: "Trailer on YouTube", aria_label: "Trailer on YouTube", Icon { d: EXTERNAL } }
+                        }
+                        if is_movie && let Some(p) = all.first() { Download { title: p.file.clone(), url: p.url.clone() } }
+                    }
+                    div { class: "d-meta",
+                        if let Some(y) = &details.year { span { "{y}" } }
+                        if let Some(secs) = details.runtime_secs { span { "{runtime_label(secs)}" } }
+                        if let Some(age) = &details.age { span { class: "badge", "{age}" } }
+                        if let Some(q) = &quality { span { class: "badge", "{q}" } }
+                        if let Some(r) = score(&details.rating) { span { span { class: "star", "★ " } "{r}" } }
+                    }
+                    if let Some(director) = &details.director { p { class: "d-by", "Director: " b { "{director}" } } }
                     if let Some(plot) = &details.plot {
                         p { class: if expanded() || !long { "plot" } else { "plot clamp" }, "{plot}" }
                         if long {
-                            button { class: "more", onclick: move |_| expanded.set(!expanded()), if expanded() { "LESS" } else { "MORE" } }
+                            button { class: "more", onclick: move |_| expanded.set(!expanded()), if expanded() { "Show less" } else { "Read more" } }
                         }
                     }
                     match &*guard {
@@ -1557,53 +2284,76 @@ fn DetailPage(
                         Some(Err(e)) => rsx! { p { class: "err", "{e}" } },
                         Some(Ok(_)) => rsx! {},
                     }
-                    div { class: "facts",
-                        if let Some(cast) = &details.cast { div { small { "Actors" } strong { "{cast}" } } }
-                        if let Some(director) = &details.director { div { small { "Director" } strong { "{director}" } } }
+                }
+                if !facts.is_empty() {
+                    dl { class: "d-facts",
+                        for (name, value) in facts { div { key: "{name}", dt { "{name}" } dd { "{value}" } } }
                     }
-                    if let Some(url) = movie_url {
-                        div { class: "actions",
-                            button {
-                                class: "play",
-                                onclick: {
-                                    let (title, url) = (title.clone(), url.clone());
-                                    move |_| onplay.call((title.clone(), url.clone()))
-                                },
-                                Icon { d: PLAY } "Play"
+                }
+            }
+            if !cast.is_empty() {
+                div { class: "d-sec",
+                    h2 { "Cast" }
+                    div { class: "cast",
+                        for name in people(&cast) {
+                            div { class: "person", key: "{name}",
+                                div { class: "face", style: "{face_color(name)}", "{initials(name)}" }
+                                strong { "{name}" }
                             }
-                            Download { title: title.clone(), url: url.clone() }
                         }
                     }
                 }
             }
-            if let Some(Ok((_, seasons))) = &*guard {
-                div { class: "episodes",
-                    for season in seasons.iter() {
-                        h3 { key: "s{season.number}", "Season {season.number}" }
-                        for (n, ep) in season.episodes.iter().enumerate() {
-                            {
-                                let num = ep.episode_num.unwrap_or(n as u64 + 1);
-                                let ext = ep.container_extension.as_deref().filter(|e| !e.is_empty()).unwrap_or("mp4");
-                                let url = client.episode_url(ep.id, ext).to_string();
-                                let name = format!("{title} S{}E{num}: {}", season.number, ep.title);
-                                rsx! {
-                                    div { key: "{ep.id}", class: "ep",
-                                        button {
-                                            onclick: { let (name, url) = (name.clone(), url.clone()); move |_| onplay.call((name.clone(), url.clone())) },
-                                            if ep.title.to_uppercase().contains(&format!("E{num:02}")) {
-                                                "{ep.title}"
-                                            } else {
-                                                "{num}. {ep.title}"
-                                            }
-                                        }
-                                        Download { title: name.clone(), url: url.clone() }
+            if let Some(id) = &trailer {
+                div { class: "d-sec",
+                    h2 { "Trailer" }
+                    a { class: "trailer", href: "https://www.youtube.com/watch?v={id}", target: "_blank", rel: "noopener noreferrer",
+                        img { src: "https://img.youtube.com/vi/{id}/hqdefault.jpg", loading: "lazy" }
+                        span { "Watch the trailer" }
+                    }
+                }
+            }
+            if !spans.is_empty() {
+                div { class: "d-sec",
+                    h2 { "Episodes" }
+                    if spans.len() > 1 {
+                        div { class: "seasons",
+                            for (number, _) in spans.iter() {
+                                button {
+                                    key: "{number}",
+                                    class: if Some(*number) == season_now { "on" } else { "" },
+                                    onclick: { let n = *number; move |_| chosen.set(Some(n)) },
+                                    "Season {number}"
+                                }
+                            }
+                        }
+                    }
+                    div { class: "eps",
+                        if let (Some((_, range)), Some(Ok((_, seasons)))) = (spans.iter().find(|s| Some(s.0) == season_now), &*guard) {
+                            for (i, ep) in seasons.iter().flat_map(|s| s.episodes.iter()).enumerate().filter(|(i, _)| range.contains(i)) {
+                                div { class: "epc", key: "{ep.id}",
+                                    button { class: "thumb", aria_label: "Play", onclick: { let play_at = play_at.clone(); move |_| play_at(i) },
+                                        if let Some(img) = ep.info.image.as_deref().filter(|s| s.starts_with("http")) {
+                                            img { src: "{img}", loading: "lazy" }
+                                        } else { "E{ep.episode_num.unwrap_or(0)}" }
+                                        span { class: "go", Icon { d: PLAY } }
+                                        if let Some(secs) = ep.info.runtime_secs { span { class: "len", "{hms(secs)}" } }
                                     }
+                                    div { class: "epc-head",
+                                        div {
+                                            h4 { "{episode_name(ep, i - range.start)}" }
+                                            if let Some(date) = &ep.info.release_date { small { "{long_date(date)}" } }
+                                        }
+                                        Download { title: all[i].file.clone(), url: all[i].url.clone() }
+                                    }
+                                    if let Some(plot) = &ep.info.plot { p { "{plot}" } }
                                 }
                             }
                         }
                     }
                 }
             }
+            div { class: "d-sec" }
         }
     }
 }
@@ -1863,7 +2613,7 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
                     button { class: "live-pill", title: "Jump to live", onclick: move |_| { go_live(); if paused() { toggle_play(); } }, "LIVE" }
                     span { class: "grow" }
                     button { class: "ctl", aria_label: "Stream info", title: "Stream info (I)", onclick: move |_| show_stats.set(!show_stats()), Icon { d: INFO } }
-                    button { class: "ctl", aria_label: "Picture in picture", title: "Picture in picture", onclick: move |_| toggle_pip(), Icon { d: PIP } }
+                    button { class: "ctl", aria_label: "Picture in picture", title: "Picture in picture", onclick: move |_| toggle_pip(video_el()), Icon { d: PIP } }
                     button { class: "ctl", aria_label: "Fullscreen", title: "Fullscreen (F)", onclick: move |_| toggle_fullscreen("live-player", expanded), Icon { d: FULLSCREEN } }
                 }
             }

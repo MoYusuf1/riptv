@@ -124,6 +124,30 @@ pub struct Episode {
     pub title: String,
     #[serde(default, deserialize_with = "flex_string")]
     pub container_extension: Option<String>,
+    #[serde(default, deserialize_with = "episode_info")]
+    pub info: EpisodeInfo,
+}
+
+/// What a panel knows about one episode (its `info` object, which is `[]` when it knows nothing).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EpisodeInfo {
+    pub plot: Option<String>,
+    pub image: Option<String>,
+    pub runtime_secs: Option<u64>,
+    pub release_date: Option<String>,
+    pub rating: Option<String>,
+}
+
+fn episode_info<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<EpisodeInfo, D::Error> {
+    let v = Value::deserialize(d)?;
+    let v = Some(&v);
+    Ok(EpisodeInfo {
+        plot: pick(v, &["plot", "description"]),
+        image: pick(v, &["movie_image", "cover_big", "cover"]),
+        runtime_secs: runtime_secs(v),
+        release_date: pick(v, &["releasedate", "releaseDate", "air_date"]),
+        rating: pick(v, &["rating"]),
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -153,16 +177,83 @@ pub struct Details {
     pub cast: Option<String>,
     pub director: Option<String>,
     pub rating: Option<String>,
+    /// The whole release date as the panel wrote it (`year` is its first four digits).
+    pub release_date: Option<String>,
+    /// Content rating, such as "PG-13" or "16".
+    pub age: Option<String>,
+    /// A YouTube video id or address.
+    pub trailer: Option<String>,
+    /// Length in seconds (for a series, the usual episode).
+    pub runtime_secs: Option<u64>,
+    /// "1080p · H264", if the panel has probed the file.
+    pub video: Option<String>,
+    /// "AC3 · 5.1", likewise.
+    pub audio: Option<String>,
+}
+
+/// A trimmed, non-empty text under the first of `names` that has one.
+fn pick(info: Option<&Value>, names: &[&str]) -> Option<String> {
+    let s = value_string(info.unwrap_or(&Value::Null), names);
+    let s = s.trim();
+    (!s.is_empty()).then(|| s.to_owned())
+}
+
+/// Length in seconds: `duration_secs`, else `duration` as `HH:MM:SS` or `MM:SS`, else the usual
+/// episode length in minutes.
+fn runtime_secs(info: Option<&Value>) -> Option<u64> {
+    let parsed = |names: &[&str]| pick(info, names)?.parse::<u64>().ok().filter(|n| *n > 0);
+    parsed(&["duration_secs"])
+        .or_else(|| {
+            let text = pick(info, &["duration"])?;
+            let parts: Vec<u64> = text
+                .split(':')
+                .map(|p| p.trim().parse().ok())
+                .collect::<Option<_>>()?;
+            let secs = match parts[..] {
+                [h, m, s] => h * 3600 + m * 60 + s,
+                [m, s] => m * 60 + s,
+                _ => return None,
+            };
+            (secs > 0).then_some(secs)
+        })
+        .or_else(|| parsed(&["episode_run_time"]).map(|minutes| minutes * 60))
+}
+
+/// "4K", "1080p" and so on for a picture that many pixels tall.
+fn resolution(height: u64) -> String {
+    match height {
+        2000.. => "4K".into(),
+        h => format!("{h}p"),
+    }
+}
+
+/// `info.video` / `info.audio` are objects when the panel has probed the file, `[]` when not.
+fn stream_label(info: Option<&Value>, key: &str) -> Option<String> {
+    let s = info?.get(key).filter(|s| s.is_object());
+    let number = |name: &str| {
+        s?.get(name)
+            .and_then(|v| v.as_u64().or_else(|| v.as_str()?.parse().ok()))
+    };
+    let codec = pick(s, &["codec_name"]).map(|c| c.to_uppercase());
+    let detail = if key == "video" {
+        number("height").filter(|h| *h > 0).map(resolution)
+    } else {
+        number("channels").map(|c| match c {
+            1 => "Mono".to_owned(),
+            2 => "Stereo".to_owned(),
+            6 => "5.1".to_owned(),
+            8 => "7.1".to_owned(),
+            n => format!("{n} ch"),
+        })
+    };
+    let parts: Vec<String> = [detail, codec].into_iter().flatten().collect();
+    (!parts.is_empty()).then(|| parts.join(" · "))
 }
 
 /// Reads `info` (an object; some panels send `[]` when they know nothing) under the names the
 /// movie and series responses use.
 fn parse_details(info: Option<&Value>) -> Details {
-    let text = |names: &[&str]| {
-        let s = value_string(info.unwrap_or(&Value::Null), names);
-        let s = s.trim();
-        (!s.is_empty()).then(|| s.to_owned())
-    };
+    let text = |names: &[&str]| pick(info, names);
     // `backdrop_path` is an array of URLs, a bare URL, or an empty array.
     let backdrop = match info.and_then(|i| i.get("backdrop_path")) {
         Some(Value::Array(a)) => a.iter().find_map(Value::as_str).map(str::to_owned),
@@ -170,14 +261,15 @@ fn parse_details(info: Option<&Value>) -> Details {
         _ => None,
     }
     .filter(|s| !s.is_empty());
-    let year = text(&["releasedate", "releaseDate", "release_date", "year"])
+    let release_date = text(&["releasedate", "releaseDate", "release_date", "year"]);
+    let year = release_date
+        .as_ref()
         .map(|d| d.chars().take(4).collect::<String>())
         .filter(|y| y.len() == 4 && y.chars().all(|c| c.is_ascii_digit()));
+    let runtime_secs = runtime_secs(info);
     let duration = text(&["duration"]).or_else(|| {
-        let secs = value_string(info.unwrap_or(&Value::Null), &["duration_secs"])
-            .parse::<u64>()
-            .ok()
-            .filter(|s| *s > 0)?;
+        let secs =
+            runtime_secs.filter(|_| info.is_some_and(|i| i.get("duration_secs").is_some()))?;
         Some(format!(
             "{:02}:{:02}:{:02}",
             secs / 3600,
@@ -197,6 +289,12 @@ fn parse_details(info: Option<&Value>) -> Details {
         cast: text(&["cast", "actors"]),
         director: text(&["director"]),
         rating: text(&["rating"]),
+        release_date,
+        age: text(&["mpaa_rating", "age"]).filter(|a| a != "0"),
+        trailer: text(&["youtube_trailer", "trailer"]),
+        runtime_secs,
+        video: stream_label(info, "video"),
+        audio: stream_label(info, "audio"),
     }
 }
 
@@ -848,7 +946,8 @@ mod tests {
             "info": {"name": "S", "plot": null},
             "episodes": {
                 "2": [{"id": "22", "title": "b", "container_extension": "mkv"}],
-                "1": [{"id": "11", "episode_num": "1", "title": "a"}, {"id": 12, "title": "a2"}]
+                "1": [{"id": "11", "episode_num": "1", "title": "a", "info": {"plot": "p", "movie_image": "i.jpg", "duration_secs": 2700}},
+                      {"id": 12, "title": "a2", "info": []}]
             }
         });
         let i = parse_series_info(keyed).unwrap();
@@ -868,6 +967,18 @@ mod tests {
             ),
             (1, 2, 22)
         );
+        // What each episode knows of itself, and `[]` or nothing when it knows nothing.
+        let first = &i.seasons[0].episodes[0].info;
+        assert_eq!(
+            (
+                first.plot.as_deref(),
+                first.image.as_deref(),
+                first.runtime_secs
+            ),
+            (Some("p"), Some("i.jpg"), Some(2700))
+        );
+        assert_eq!(i.seasons[0].episodes[1].info, EpisodeInfo::default());
+        assert_eq!(i.seasons[1].episodes[0].info, EpisodeInfo::default());
 
         // Array of seasons, and `info` as `[]`.
         let listy =
@@ -936,6 +1047,35 @@ mod tests {
             (Some("1999"), Some("01:02:05"))
         );
         assert_eq!((d.poster.as_deref(), d.backdrop), (Some("c.jpg"), None));
+
+        // The rest of what the new pages show.
+        let d = parse_details(Some(&json!({
+            "releasedate": "2006-12-22", "mpaa_rating": "PG-13", "youtube_trailer": "abc123DEF45",
+            "duration_secs": "7584",
+            "video": {"codec_name": "h264", "width": 1920, "height": "1080"},
+            "audio": {"codec_name": "ac3", "channels": 6}
+        })));
+        assert_eq!(
+            (
+                d.release_date.as_deref(),
+                d.age.as_deref(),
+                d.trailer.as_deref()
+            ),
+            (Some("2006-12-22"), Some("PG-13"), Some("abc123DEF45"))
+        );
+        assert_eq!(d.runtime_secs, Some(7584));
+        assert_eq!(
+            (d.video.as_deref(), d.audio.as_deref()),
+            (Some("1080p · H264"), Some("5.1 · AC3"))
+        );
+        // Lengths also come as clock text, or as minutes for a series; probes as `[]`.
+        let clock = |v: Value| parse_details(Some(&v)).runtime_secs;
+        assert_eq!(clock(json!({"duration": "01:42:38"})), Some(6158));
+        assert_eq!(clock(json!({"duration": "42:10"})), Some(2530));
+        assert_eq!(clock(json!({"episode_run_time": "45"})), Some(2700));
+        assert_eq!(clock(json!({"duration": "garbage"})), None);
+        let d = parse_details(Some(&json!({"video": [], "audio": [], "age": "0"})));
+        assert_eq!((d.video, d.audio, d.age), (None, None, None));
 
         // Panels answer `[]` or nothing when they know nothing.
         assert_eq!(parse_details(Some(&json!([]))), Details::default());
