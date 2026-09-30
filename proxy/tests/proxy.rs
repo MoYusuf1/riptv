@@ -293,10 +293,10 @@ async fn serves_web_app_with_csp_and_spa_fallback() {
     std::fs::remove_dir_all(dir).ok();
 }
 
-const HEVC_AC3: &[u8] = include_bytes!("../../player/tests/fixtures/hevc_ac3.ts");
-const H264_AC3: &[u8] = include_bytes!("../../player/tests/fixtures/h264_ac3.ts");
-const INTERLACED: &[u8] = include_bytes!("../../player/tests/fixtures/interlaced_576i.ts");
-const MOVIE: &[u8] = include_bytes!("../../player/tests/fixtures/h264_ac3.mp4");
+const HEVC_AC3: &[u8] = include_bytes!("../fixtures/hevc_ac3.ts");
+const H264_AC3: &[u8] = include_bytes!("../fixtures/h264_ac3.ts");
+const INTERLACED: &[u8] = include_bytes!("../fixtures/interlaced_576i.ts");
+const MOVIE: &[u8] = include_bytes!("../fixtures/h264_ac3.mp4");
 
 fn have(tool: &str) -> bool {
     std::process::Command::new(tool)

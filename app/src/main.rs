@@ -460,7 +460,7 @@ fn toggle_fullscreen(id: &'static str, mut expanded: Signal<bool>) {
         }
         // Not Dioxus's `spawn`: the key listener calls this from outside its runtime.
         wasm_bindgen_futures::spawn_local(async move {
-            player::mse::sleep(Duration::from_millis(600)).await;
+            rffmpeg::mse::sleep(Duration::from_millis(600)).await;
             if doc.fullscreen_element().is_none() {
                 expanded.set(true);
             }
@@ -1585,13 +1585,13 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
         active.set(true);
         let mine = activity();
         spawn(async move {
-            player::mse::sleep(Duration::from_millis(2500)).await;
+            rffmpeg::mse::sleep(Duration::from_millis(2500)).await;
             if activity() == mine {
                 active.set(false);
             }
         });
     };
-    let handle = use_hook(|| Rc::new(RefCell::new(None::<player::mse::Player>)));
+    let handle = use_hook(|| Rc::new(RefCell::new(None::<rffmpeg::mse::Player>)));
 
     let mut feed = use_signal(|| Feed::Native);
     // A readout for telling a slow stream from a slow decoder: what the picture really is,
@@ -1601,7 +1601,7 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
     use_future(move || async move {
         let mut last = (0_u32, js_sys::Date::now());
         loop {
-            player::mse::sleep(Duration::from_secs(1)).await;
+            rffmpeg::mse::sleep(Duration::from_secs(1)).await;
             let Some(v) = video_el().filter(|_| show_stats()) else {
                 continue;
             };
@@ -1652,15 +1652,15 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
             return;
         };
         let (c, converter, media) = (client.clone(), client.clone(), playlist.clone());
-        *handle.borrow_mut() = Some(player::mse::start(
+        *handle.borrow_mut() = Some(rffmpeg::mse::start(
             video,
             playlist,
             move |u| c.proxied(u),
             partial,
             move |s| match s {
-                player::mse::Status::Playing => status.set("Live".into()),
-                player::mse::Status::Note(n) => note.set(Some(n)),
-                player::mse::Status::NeedsConversion(reason) => {
+                rffmpeg::mse::Status::Playing => status.set("Live".into()),
+                rffmpeg::mse::Status::Note(n) => note.set(Some(n)),
+                rffmpeg::mse::Status::NeedsConversion(reason) => {
                     status.set("Converting for your browser…".into());
                     let (converter, media) = (converter.clone(), media.clone());
                     // Not Dioxus's `spawn`: this callback runs outside its runtime.
@@ -1679,8 +1679,8 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
                         }
                     });
                 }
-                player::mse::Status::Ended => status.set("Stream ended".into()),
-                player::mse::Status::Failed(e) => status.set(format!("Playback failed: {e}")),
+                rffmpeg::mse::Status::Ended => status.set("Stream ended".into()),
+                rffmpeg::mse::Status::Failed(e) => status.set(format!("Playback failed: {e}")),
             },
         ));
     });
@@ -1822,7 +1822,7 @@ fn Guide(id: u64, title: String) -> Element {
     let mut tick = use_signal(|| 0_u32);
     use_future(move || async move {
         loop {
-            player::mse::sleep(Duration::from_secs(30)).await;
+            rffmpeg::mse::sleep(Duration::from_secs(30)).await;
             tick += 1;
         }
     });
@@ -1840,7 +1840,7 @@ fn Guide(id: u64, title: String) -> Element {
     use_effect(move || {
         if table.read().is_some() {
             spawn(async move {
-                player::mse::sleep(Duration::from_millis(60)).await;
+                rffmpeg::mse::sleep(Duration::from_millis(60)).await;
                 let timeline = web_sys::window()
                     .and_then(|w| w.document())
                     .and_then(|d| d.get_element_by_id("timeline"));

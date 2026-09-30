@@ -21,14 +21,14 @@ use serde_json::{Value, json};
 static STARTED: OnceLock<Instant> = OnceLock::new();
 
 /// Anamorphic PAL (720x576, 64:45 pixels): must display as 16:9, not stretched to 5:4.
-const PAL: &[u8] = include_bytes!("../../player/tests/fixtures/pal_anamorphic.ts");
+const PAL: &[u8] = include_bytes!("../fixtures/pal_anamorphic.ts");
 
 /// Streams like the ones providers really send, which Chrome on Linux can't play as they are: HEVC
 /// video with AC-3 sound, and H.264 with AC-3 sound. The proxy's ffmpeg mode has to fix both.
-const HEVC_AC3: &[u8] = include_bytes!("../../player/tests/fixtures/hevc_ac3.ts");
-const H264_AC3: &[u8] = include_bytes!("../../player/tests/fixtures/h264_ac3.ts");
+const HEVC_AC3: &[u8] = include_bytes!("../fixtures/hevc_ac3.ts");
+const H264_AC3: &[u8] = include_bytes!("../fixtures/h264_ac3.ts");
 /// A movie whose sound is AC-3: it plays, silently, until the page notices and converts it.
-const MOVIE_AC3: &[u8] = include_bytes!("../../player/tests/fixtures/h264_ac3.mp4");
+const MOVIE_AC3: &[u8] = include_bytes!("../fixtures/h264_ac3.mp4");
 
 const PLAYLIST: [(header::HeaderName, &str); 1] =
     [(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")];
@@ -147,7 +147,7 @@ async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
             {"stream_id": 2, "name": "Simulated live (sliding window)", "category_id": "1"},
             {"stream_id": 3, "name": "Anamorphic PAL (720x576, 64:45)", "category_id": "1"},
             {"stream_id": 4, "name": "HEVC video + AC-3 sound (needs conversion)", "category_id": "1"},
-            {"stream_id": 5, "name": "H.264 video + AC-3 sound (needs conversion)", "category_id": "1"}
+            {"stream_id": 5, "name": "H.264 video + AC-3 sound", "category_id": "1"}
         ]),
         Some("get_vod_categories") => {
             json!([{"category_id": "10", "category_name": "Test Movies"}])

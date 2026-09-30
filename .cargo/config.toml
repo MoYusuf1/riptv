@@ -1,2 +1,6 @@
 [alias]
 riptv = "run --release -p riptv --"
+
+# rffmpeg is a private git dependency; the git CLI already has your SSH access, cargo's built-in client does not.
+[net]
+git-fetch-with-cli = true

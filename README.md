@@ -6,12 +6,14 @@ RIPTV is an Xtream Codes IPTV client, all Rust and small enough to ignore: the w
 | Crate | What it is |
 |---|---|
 | `xtream` | API client: login, live/movie/series lists, episodes, stream URLs. Native and wasm. |
-| `player` | HLS + MPEG-TS to fMP4 transmuxer and the MediaSource glue that plays it in a `<video>`. |
 | `proxy` | Localhost pass-through proxy (browsers can't reach IPTV servers directly) that also serves the web app. |
 | `app` | Dioxus web UI, compiled to WebAssembly. |
 
-The live player also loads the selected channel's short Xtream EPG on demand, showing its current
-and upcoming programmes without downloading guide data for the rest of a large channel list.
+Video and sound handling is not in this repository: it is [rffmpeg](https://github.com/MoYusuf1/rffmpeg), a separate pure-Rust
+library (HLS and MPEG-TS in, fMP4 out, AC-3/E-AC-3/MP2 sound decoded in Rust, and the MediaSource glue
+that plays it in a `<video>`). `app` pulls it from its private GitHub repo (cargo uses your git SSH
+access, see `.cargo/config.toml`). To work on both at once, clone it next to this folder and build with
+`--config 'patch."ssh://git@github.com/MoYusuf1/rffmpeg.git".rffmpeg.path="../rffmpeg"'`.
 
 Everything you write is Rust. The only non-Rust file in the build output is the small JS loader that
 `wasm-bindgen` generates (browsers can't start WebAssembly without one); it is never edited by hand.
@@ -23,18 +25,18 @@ Everything you write is Rust. The only non-Rust file in the build output is the 
  ┌───────────────────────┐  /proxy   ┌───────────────────┐            ┌────────────────┐
  │ app    screens, state │ ────────▶ │ riptv             │ ─────────▶ │ IPTV provider  │
  │ ├ xtream  API client  │  ?url=…   │ serves the app,   │  public    │ and its CDNs   │
- │ └ player  live TV     │ ◀──────── │ relays the bytes  │  addresses └────────────────┘
+ │ └ rffmpeg live TV     │ ◀──────── │ relays the bytes  │  addresses └────────────────┘
  └───────────────────────┘           └───────────────────┘  public hosts only
 ```
 
 | Component | Job | Checked by |
 |---|---|---|
 | `xtream` | Speaks the Xtream Codes API and builds stream URLs, routing everything through the proxy when asked. Lists are decoded record by record straight from the response bytes: a 30,000-title list peaks at ~7 MB of heap instead of ~70 MB. | Unit tests on real-world JSON quirks |
-| `player` | Playlist → MPEG-TS demux → fMP4 → the browser's MediaSource. Only `mse` touches the browser; the rest is plain Rust that runs and tests natively. | Real HLS segments, decoded by `ffmpeg` |
+| `rffmpeg` | Playlist → MPEG-TS demux → fMP4 → the browser's MediaSource. Only `mse` touches the browser; the rest is plain Rust that runs and tests natively. | Real HLS segments, decoded by `ffmpeg` |
 | `proxy` (`riptv`) | The one native program. Serves the built app and relays requests for the app alone, to public addresses only, with `Range`, redirect checks and a strict CSP. | End-to-end tests through a real proxy |
 | `app` | Screens and state only, with no protocol or media code. | Driven in a browser |
 
-Where a change belongs: protocol quirks in `xtream`, anything about video bytes in `player`, anything
+Where a change belongs: protocol quirks in `xtream`, anything about video bytes in `rffmpeg`, anything
 at the network boundary in `proxy`, and `app` only arranges them.
 
 ## Run
@@ -80,8 +82,9 @@ browser download through the proxy). Live channels are endless streams, so they 
 
 ## Compatibility mode (ffmpeg)
 
-Many browsers, Chrome on Linux among them, can't decode HEVC (every 4K channel), AC-3, MP2 or
-AAC-Main sound, interlaced video smoothly, or raw MPEG-TS streams. When a stream is one of those the
+Many browsers, Chrome on Linux among them, can't decode HEVC (every 4K channel), AAC-Main sound,
+interlaced video smoothly, raw MPEG-TS streams, or AC-3/MP2 sound in a movie file (on live channels
+rffmpeg decodes those itself). When a stream is one of those the
 player hands it to the proxy, which uses `ffmpeg` (if installed) to turn it into H.264 + AAC on the
 fly: the video is copied untouched when it's already fine, and only HEVC or interlaced video is
 re-encoded (NVENC if you have an NVIDIA card, otherwise x264), deinterlaced to full motion rate and
@@ -99,16 +102,17 @@ frames and buffer, which tells a slow stream from a slow decoder.
 
 ## What plays
 
-Movies and series are plain files played by the browser. Live TV goes through `player`:
-HLS with MPEG-TS segments carrying **H.264 video and AAC audio**. Anything else is reported, not
-misplayed: HEVC, AES-128, fMP4 segments and continuous (non-HLS) `.ts` streams are not supported, and
-AC-3/MP2 audio plays as video only with a note. There is no adaptive bitrate: one variant is picked up front.
+Movies and series are plain files played by the browser. Live TV goes through `rffmpeg`:
+HLS with MPEG-TS segments carrying **H.264 video and AAC, AC-3, E-AC-3 or MP2 audio**; the last three
+are decoded in Rust (5.1 is mixed down to stereo) and played as FLAC. Anything else is reported, not
+misplayed: HEVC, AES-128, fMP4 segments and continuous (non-HLS) `.ts` streams are not supported
+(compatibility mode covers them), and other audio plays as video only with a note. There is no adaptive bitrate: one variant is picked up front.
 
 ## Test
 
 ```sh
-cargo test        # xtream, proxy, player (the wasm-only app is built with dx)
+cargo test        # xtream and proxy (the wasm-only app is built with dx; rffmpeg has its own tests)
 ```
 
-The player tests run a real HLS segment through the transmuxer and have `ffmpeg` decode the result
-(skipped if `ffmpeg` isn't installed).
+rffmpeg's own tests (`cargo test` in its folder) run real HLS segments through the transmuxer and have
+`ffmpeg` decode the result (skipped if `ffmpeg` isn't installed).

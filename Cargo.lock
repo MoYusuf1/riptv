@@ -13,7 +13,7 @@ name = "app"
 version = "0.1.0"
 dependencies = [
  "dioxus",
- "player",
+ "rffmpeg",
  "wasm-bindgen-futures",
  "web-sys",
  "xtream",
@@ -186,6 +186,12 @@ name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+
+[[package]]
+name = "bytemuck"
+version = "1.25.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
 
 [[package]]
 name = "byteorder"
@@ -1814,6 +1820,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
+name = "oxideav-ac3"
+version = "0.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "efb5f931133bf47e30ed9d809ae1cc6b2c95f5643a73b39fc75fffc0329184be"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
+name = "oxideav-core"
+version = "0.1.37"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8de32b40e24dd0f22ec37a0cb723ad499c05b43aa391971b7621c9a1c96fb15"
+dependencies = [
+ "bytemuck",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "oxideav-mp2"
+version = "0.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19c132641af52d4dce3d1f56e92325f0c682e9b49d1dceadc96bd6d02fa74ee1"
+dependencies = [
+ "oxideav-core",
+]
+
+[[package]]
 name = "parking_lot"
 version = "0.12.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1873,18 +1908,6 @@ name = "pkg-config"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
-
-[[package]]
-name = "player"
-version = "0.1.0"
-dependencies = [
- "js-sys",
- "reqwest 0.13.5",
- "thiserror 2.0.21",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
 
 [[package]]
 name = "powerfmt"
@@ -2179,6 +2202,22 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-streams 0.5.0",
+ "web-sys",
+]
+
+[[package]]
+name = "rffmpeg"
+version = "0.1.0"
+source = "git+ssh://git@github.com/MoYusuf1/rffmpeg.git#623245fa0fd685e4ee307bb8ce31db14ab7f5627"
+dependencies = [
+ "js-sys",
+ "oxideav-ac3",
+ "oxideav-core",
+ "oxideav-mp2",
+ "reqwest 0.13.5",
+ "thiserror 2.0.21",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
 ]
 
