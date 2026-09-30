@@ -1,9 +1,13 @@
 //! Fake Xtream provider for local development. Login: demo / demo. Streams redirect to public
-//! test media (MDN's CC0 flower.mp4, Mux's Big Buck Bunny HLS), so the proxy needs
-//! IPTV_ALLOW=interactive-examples.mdn.mozilla.net,test-streams.mux.dev to follow them.
-//!   cargo run -p iptv-proxy --example mock_provider     (listens on 127.0.0.1:8081)
+//! test media (MDN's CC0 flower.mp4, Mux's Big Buck Bunny HLS), so the proxy needs to allow
+//! interactive-examples.mdn.mozilla.net and test-streams.mux.dev to follow them.
+//!   cargo run -p riptv --example mock_provider     (listens on 127.0.0.1:8081)
 
-use std::{collections::HashMap, sync::OnceLock, time::Instant};
+use std::{
+    collections::HashMap,
+    sync::OnceLock,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 
 use axum::{
     Json, Router,
@@ -16,10 +20,22 @@ use serde_json::{Value, json};
 
 static STARTED: OnceLock<Instant> = OnceLock::new();
 
+/// Anamorphic PAL (720x576, 64:45 pixels): must display as 16:9, not stretched to 5:4.
+const PAL: &[u8] = include_bytes!("../../player/tests/fixtures/pal_anamorphic.ts");
+
+const PLAYLIST: [(header::HeaderName, &str); 1] =
+    [(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")];
+
 /// Channel 1 redirects to a real VOD-style HLS master playlist. Channel 2 is a simulated live
 /// stream: a 3-segment sliding window over the same 64 Big Buck Bunny segments that advances every
 /// 10 s and wraps around (which shows up as a timestamp jump, like a real stream restart).
+/// Channel 3 is one anamorphic PAL segment.
 async fn live(Path((_user, _pass, file)): Path<(String, String, String)>) -> Response {
+    if file.starts_with("3.") {
+        let body = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n\
+                    #EXTINF:1.000,\nhttp://127.0.0.1:8081/pal.ts\n#EXT-X-ENDLIST\n";
+        return (PLAYLIST, body).into_response();
+    }
     if !file.starts_with("2.") {
         return Redirect::temporary(HLS).into_response();
     }
@@ -32,21 +48,63 @@ async fn live(Path((_user, _pass, file)): Path<(String, String, String)>) -> Res
             846 + i % 64
         );
     }
-    (
-        [(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")],
-        body,
-    )
-        .into_response()
+    (PLAYLIST, body).into_response()
 }
 
 const FLOWER: &str = "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4";
+/// Artwork (Wikimedia Commons, CC-BY) so the poster grid and detail pages have something to show.
+const POSTER: &str = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Big_buck_bunny_poster_big.jpg/500px-Big_buck_bunny_poster_big.jpg";
 const HLS: &str = "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8";
+
+fn b64(s: &str) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for c in s.as_bytes().chunks(3) {
+        let at = |i: usize| u32::from(*c.get(i).unwrap_or(&0));
+        let n = at(0) << 16 | at(1) << 8 | at(2);
+        let sextet = |shift: u32| T[(n >> shift) as usize & 63] as char;
+        out.push(sextet(18));
+        out.push(sextet(12));
+        out.push(if c.len() > 1 { sextet(6) } else { '=' });
+        out.push(if c.len() > 2 { sextet(0) } else { '=' });
+    }
+    out
+}
+
+/// A day of programmes around now: six hours back, eighteen ahead, one of them airing right now.
+fn schedule(stream_id: u64) -> Vec<Value> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let (kinds, lengths) = (
+        ["News", "Match", "Documentary", "Film", "Magazine"],
+        [30, 60, 45, 90, 60],
+    );
+    let mut t = now / 3600 * 3600 - 6 * 3600;
+    let mut listings = vec![];
+    for k in stream_id as usize.. {
+        let end = t + lengths[k % 5] * 60;
+        listings.push(json!({
+            "title": b64(&format!("{} {}", kinds[k % 5], k % 97)),
+            "description": b64("A made-up programme for the mock provider, long enough to show how descriptions wrap in the guide."),
+            "start_timestamp": t.to_string(),
+            "stop_timestamp": end.to_string(),
+            "start": "", "end": "",
+        }));
+        t = end;
+        if t > now + 18 * 3600 {
+            return listings;
+        }
+    }
+    listings
+}
 
 async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
     let get = |k: &str| q.get(k).map(String::as_str);
     if get("username") != Some("demo") || get("password") != Some("demo") {
         return Json(json!({"user_info": {"auth": 0}}));
     }
+    let stream_id: u64 = get("stream_id").and_then(|s| s.parse().ok()).unwrap_or(1);
     Json(match get("action") {
         None => json!({
             "user_info": {"username": "demo", "auth": 1, "status": "Active", "exp_date": null,
@@ -58,39 +116,60 @@ async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
         }
         Some("get_live_streams") => json!([
             {"stream_id": 1, "name": "Big Buck Bunny (HLS via redirect)", "category_id": "1"},
-            {"stream_id": 2, "name": "Simulated live (sliding window)", "category_id": "1"}
+            {"stream_id": 2, "name": "Simulated live (sliding window)", "category_id": "1"},
+            {"stream_id": 3, "name": "Anamorphic PAL (720x576, 64:45)", "category_id": "1"}
         ]),
         Some("get_vod_categories") => {
             json!([{"category_id": "10", "category_name": "Test Movies"}])
         }
         Some("get_vod_streams") => json!([
-            {"stream_id": 1, "name": "Flower (CC0 sample)", "container_extension": "mp4", "rating": "5", "category_id": "10"}
+            {"stream_id": 1, "name": "Flower (CC0 sample)", "container_extension": "mp4",
+             "rating": "5", "category_id": "10", "added": "1790000000", "stream_icon": POSTER}
         ]),
+        Some("get_vod_info") => json!({
+            "info": {
+                "name": "Flower (CC0 sample)", "genre": "Documentary", "releasedate": "2017-05-12",
+                "movie_image": POSTER, "backdrop_path": [POSTER],
+                "duration": "00:00:05", "country": "United States of America",
+                "cast": "A flower, some bees", "director": "MDN Web Docs", "rating": "5",
+                "plot": "A five second time-lapse of a flower opening, published by MDN as a CC0 sample. \
+                         It is here so the movie page has enough text to show how a long description is \
+                         clipped and expanded: nothing else happens in the film, and it does not get \
+                         any longer than this, however many times it is played."
+            },
+            "movie_data": {"stream_id": 1, "name": "Flower (CC0 sample)", "container_extension": "mp4"}
+        }),
         Some("get_series_categories") => {
             json!([{"category_id": "20", "category_name": "Test Series"}])
         }
         Some("get_series") => {
             json!([{"series_id": 1, "name": "Flower: The Series", "category_id": "20",
-                                      "plot": "Two seasons of the same five seconds."}])
+                    "plot": "Two seasons of the same five seconds.", "rating": "7.5",
+                    "last_modified": "1790000000", "cover": POSTER}])
         }
         Some("get_series_info") => json!({
-            "info": {"name": "Flower: The Series", "plot": "Two seasons of the same five seconds."},
+            "info": {"name": "Flower: The Series", "genre": "Drama", "releaseDate": "2021-03-01",
+                     "cover": POSTER, "backdrop_path": [POSTER],
+                     "cast": "Petal, Stem", "director": "The Bees", "rating": "7.5",
+                     "plot": "Two seasons of the same five seconds."},
             "episodes": {
                 "1": [{"id": "101", "episode_num": 1, "title": "Bloom", "container_extension": "mp4"},
                       {"id": "102", "episode_num": 2, "title": "Petals", "container_extension": "mp4"}],
                 "2": [{"id": "201", "episode_num": 1, "title": "Return", "container_extension": "mp4"}]
             }
         }),
-        Some("get_short_epg") => json!({"epg_listings": [
-            {"title": "Tm93OiBCaWcgQnVjayBCdW5ueQ==",
-             "description": "QSBiaWcgYnVubnksIGEgYmlnIGFkdmVudHVyZS4=",
-             "start": "18:00", "end": "18:30"},
-            {"title": "VXAgbmV4dDogQmxvb21pbmcgZ2FyZGVucw==",
-             "description": "QSBzbG93LCByZWxheGluZyBsb29rIGF0IG5hdHVyZS4=",
-             "start": "18:30", "end": "19:00"},
-            {"title": "RXZlbmluZyBjaW5lbWE=", "description": "RmVhdHVyZSBwcmVzZW50YXRpb24u",
-             "start": "19:00", "end": "21:00"}
-        ]}),
+        Some("get_simple_data_table") => json!({"epg_listings": schedule(stream_id)}),
+        Some("get_short_epg") => {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            let upcoming: Vec<Value> = schedule(stream_id)
+                .into_iter()
+                .filter(|l| l["stop_timestamp"].as_str().and_then(|s| s.parse().ok()) > Some(now))
+                .take(4)
+                .collect();
+            json!({"epg_listings": upcoming})
+        }
         _ => json!(false), // real panels answer `false` for empty lists
     })
 }
@@ -100,6 +179,10 @@ async fn main() {
     let app = Router::new()
         .route("/player_api.php", get(api))
         .route("/live/{user}/{pass}/{file}", get(live))
+        .route(
+            "/pal.ts",
+            get(|| async { ([(header::CONTENT_TYPE, "video/mp2t")], PAL) }),
+        )
         .route(
             "/movie/{user}/{pass}/{file}",
             get(|| async { Redirect::temporary(FLOWER) }),

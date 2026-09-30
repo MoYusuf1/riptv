@@ -67,7 +67,8 @@ fn js_err(e: JsValue) -> String {
         .unwrap_or_else(|| format!("{e:?}"))
 }
 
-async fn sleep(d: Duration) {
+/// Resolves after `d`, via the browser's timer.
+pub async fn sleep(d: Duration) {
     let p = js_sys::Promise::new(&mut |resolve, _| {
         if let Some(w) = web_sys::window() {
             let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
@@ -106,7 +107,7 @@ async fn fetch_once(http: &reqwest::Client, proxied: &Url) -> Result<Fetched, St
     if !status.is_success() {
         return Err(match status.as_u16() {
             403 => {
-                format!("the proxy refused {host}: restart it with IPTV_ALLOW including that host")
+                format!("the proxy refused {host}: restart it with that host added")
             }
             502 => format!(
                 "the proxy could not reach {host}: {}",

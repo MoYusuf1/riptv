@@ -94,6 +94,7 @@ impl Transmuxer {
                         pps,
                         width,
                         height,
+                        pixel_aspect: avc::pixel_aspect(sps).unwrap_or((1, 1)),
                     },
                     d.aac.as_ref(),
                 ),

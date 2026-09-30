@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use axum::{Json, Router, extract::Query, response::Redirect, routing::get};
-use iptv_proxy::{AppState, router};
 use reqwest::Url;
+use riptv::{AppState, router};
 use serde_json::{Value, json};
 use tower_http::services::ServeFile;
 
@@ -15,7 +15,7 @@ async fn serve(app: Router) -> u16 {
 
 #[tokio::test]
 async fn range_passthrough_and_allowlist() {
-    let file = std::env::temp_dir().join(format!("iptv-proxy-test-{}.bin", std::process::id()));
+    let file = std::env::temp_dir().join(format!("riptv-test-{}.bin", std::process::id()));
     std::fs::write(&file, (0..=255u8).collect::<Vec<_>>()).unwrap();
 
     let upstream = serve(
@@ -75,7 +75,7 @@ async fn range_passthrough_and_allowlist() {
     // The refusal names the offending host, and only the host (the URL carries credentials).
     let why = evil.text().await.unwrap();
     assert!(
-        why.contains("blocked.invalid") && why.contains("IPTV_ALLOW") && !why.contains("http"),
+        why.contains("blocked.invalid") && why.contains("allow list") && !why.contains("http"),
         "{why}"
     );
     assert_eq!(fetch("not a url".into(), None).await.status(), 400);
@@ -102,7 +102,7 @@ async fn fake_api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
 /// The exact path the browser app takes: `xtream::Client` in proxy mode, through the real proxy.
 #[tokio::test]
 async fn client_via_proxy_end_to_end() {
-    let file = std::env::temp_dir().join(format!("iptv-proxy-e2e-{}.bin", std::process::id()));
+    let file = std::env::temp_dir().join(format!("riptv-e2e-{}.bin", std::process::id()));
     std::fs::write(&file, (0..=255u8).collect::<Vec<_>>()).unwrap();
     let upstream = serve(
         Router::new()
@@ -146,7 +146,7 @@ async fn client_via_proxy_end_to_end() {
 
 #[tokio::test]
 async fn serves_web_app_with_csp_and_spa_fallback() {
-    let dir = std::env::temp_dir().join(format!("iptv-proxy-web-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("riptv-web-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("index.html"), "<!doctype html><title>app</title>").unwrap();
     let port = serve(router(AppState::new(Vec::<String>::new()).with_web(&dir))).await;

@@ -2,10 +2,7 @@
 name = "riptv"
 version = "0.1.0"
 edition = "2024"
-description = "Localhost pass-through proxy + dev page for the IPTV client"
-
-[lib]
-name = "iptv_proxy"
+description = "Localhost pass-through proxy that also serves the RIPTV web app"
 
 [dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "query"] }

@@ -138,7 +138,7 @@ async fn proxy(
         Err(e) => {
             let why = std::error::Error::source(&e)
                 .filter(|_| e.is_redirect())
-                .map(|s| format!("{s} (add its host to IPTV_ALLOW)"))
+                .map(|s| format!("{s} (add its host to the allow list)"))
                 .unwrap_or_else(|| "upstream unreachable".into());
             return (StatusCode::BAD_GATEWAY, why).into_response();
         }

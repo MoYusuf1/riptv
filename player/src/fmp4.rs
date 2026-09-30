@@ -89,7 +89,7 @@ fn minf(media_header: Vec<u8>, sample_entry: Vec<u8>) -> Vec<u8> {
     bx(b"minf", &[&media_header, &dinf, &stbl])
 }
 
-fn avc1(sps: &[u8], pps: &[u8], w: u16, h: u16) -> Vec<u8> {
+fn avc1(sps: &[u8], pps: &[u8], w: u16, h: u16, (hs, vs): (u32, u32)) -> Vec<u8> {
     let avcc = bx(
         b"avcC",
         &[
@@ -103,6 +103,11 @@ fn avc1(sps: &[u8], pps: &[u8], w: u16, h: u16) -> Vec<u8> {
     );
     let mut name = [0u8; 32];
     name[0] = 0; // empty compressor name
+    let pasp = if hs == vs {
+        vec![] // square pixels are the default
+    } else {
+        bx(b"pasp", &[&hs.to_be_bytes(), &vs.to_be_bytes()])
+    };
     bx(
         b"avc1",
         &[
@@ -119,6 +124,7 @@ fn avc1(sps: &[u8], pps: &[u8], w: u16, h: u16) -> Vec<u8> {
             &0x0018u16.to_be_bytes(), // depth
             &0xFFFFu16.to_be_bytes(),
             &avcc,
+            &pasp,
         ],
     )
 }
@@ -159,6 +165,8 @@ pub struct VideoParams<'a> {
     pub pps: &'a [u8],
     pub width: u32,
     pub height: u32,
+    /// Pixel shape (horizontal, vertical spacing); equal numbers mean square.
+    pub pixel_aspect: (u32, u32),
 }
 
 /// `ftyp` + `moov` for an fMP4 stream. Audio is optional.
@@ -202,6 +210,7 @@ pub fn init_segment(video: &VideoParams, audio: Option<&AacConfig>) -> Vec<u8> {
                         video.pps,
                         video.width as u16,
                         video.height as u16,
+                        video.pixel_aspect,
                     ),
                 ),
             ),
@@ -378,6 +387,7 @@ mod tests {
             pps: &[0x68, 0xee],
             width: 848,
             height: 480,
+            pixel_aspect: (1, 1),
         };
         let init = init_segment(
             &v,

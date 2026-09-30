@@ -130,3 +130,28 @@ fn ffmpeg_decodes_the_output_without_errors() {
     );
     std::fs::remove_file(file).ok();
 }
+
+/// Anamorphic PAL (720x576 with 64:45 pixels) has to reach the browser as such, or it plays
+/// stretched to 5:4 instead of 16:9. The init segment states it in a `pasp` box.
+#[test]
+fn anamorphic_pixels_are_declared_in_the_init_segment() {
+    let init = Transmuxer::default()
+        .push(include_bytes!("fixtures/pal_anamorphic.ts"))
+        .unwrap()
+        .init
+        .unwrap()
+        .bytes;
+    let p = init
+        .windows(4)
+        .position(|w| w == b"pasp")
+        .expect("pasp box");
+    assert_eq!(&init[p + 4..p + 12], &[0, 0, 0, 64, 0, 0, 0, 45]);
+    // Square-pixel streams stay as they were.
+    let square = Transmuxer::default()
+        .push(SEGMENT)
+        .unwrap()
+        .init
+        .unwrap()
+        .bytes;
+    assert!(!square.windows(4).any(|w| w == b"pasp"));
+}

@@ -1,15 +1,21 @@
-//! Env: IPTV_ALLOW (hostnames the proxy may reach, comma-separated, including redirect targets),
-//! IPTV_PORT (default 3000), IPTV_WEB (built web app, default: the `dx build` output).
+//! Usage: `riptv [host...]`: hostnames the proxy may reach, including redirect targets (CDNs).
+//! Env: IPTV_ALLOW (more hosts, comma-separated), IPTV_PORT (default 3000),
+//! IPTV_WEB (built web app, default: the `dx build` output).
 
-use iptv_proxy::{AppState, router};
+use riptv::{AppState, router};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let env = |k: &str| std::env::var(k).ok();
 
-    let allow: Vec<String> = env("IPTV_ALLOW")
-        .unwrap_or_default()
-        .split(',')
+    let allow: Vec<String> = std::env::args()
+        .skip(1)
+        .chain(
+            env("IPTV_ALLOW")
+                .unwrap_or_default()
+                .split(',')
+                .map(String::from),
+        )
         .map(|h| h.trim().to_ascii_lowercase())
         .filter(|h| !h.is_empty())
         .collect();

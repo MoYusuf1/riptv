@@ -60,10 +60,50 @@ fn unescape(nal: &[u8]) -> Vec<u8> {
 /// Width and height in pixels from an SPS NAL unit (header byte included, no start code).
 pub fn dimensions(sps_nal: &[u8]) -> Option<(u32, u32)> {
     let rbsp = unescape(sps_nal.get(1..)?);
+    read_size(&mut Bits {
+        data: &rbsp,
+        pos: 0,
+    })
+}
+
+/// Shape of one pixel (width, height) from the SPS's VUI data. Broadcast SD is anamorphic: a
+/// 720x576 picture is 16:9 on screen only if the player knows the pixels are 64:45, and without
+/// this the picture shows stretched. `None` means "not stated", which players treat as square.
+pub fn pixel_aspect(sps_nal: &[u8]) -> Option<(u32, u32)> {
+    let rbsp = unescape(sps_nal.get(1..)?);
     let mut r = Bits {
         data: &rbsp,
         pos: 0,
     };
+    read_size(&mut r)?;
+    if r.bit()? == 0 || r.bit()? == 0 {
+        return None; // no VUI, or no aspect ratio in it
+    }
+    let (w, h) = match r.bits(8)? {
+        1 => (1, 1),
+        2 => (12, 11),
+        3 => (10, 11),
+        4 => (16, 11),
+        5 => (40, 33),
+        6 => (24, 11),
+        7 => (20, 11),
+        8 => (32, 11),
+        9 => (80, 33),
+        10 => (18, 11),
+        11 => (15, 11),
+        12 => (64, 33),
+        13 => (160, 99),
+        14 => (4, 3),
+        15 => (3, 2),
+        16 => (2, 1),
+        255 => (r.bits(16)?, r.bits(16)?),
+        _ => return None,
+    };
+    (w > 0 && h > 0).then_some((w, h))
+}
+
+/// Reads the SPS up to and including the cropping fields, leaving `r` at the VUI flag.
+fn read_size(r: &mut Bits) -> Option<(u32, u32)> {
     let profile = r.bits(8)?;
     r.bits(16)?; // constraint flags + level
     r.ue()?; // SPS id
@@ -182,10 +222,23 @@ mod tests {
         }
     }
 
+    /// The 480p test stream says 1:1 outright; the anamorphic PAL fixture (`setsar=64/45`, ffprobe
+    /// agrees) says 64:45; a stream with no VUI says nothing.
+    #[test]
+    fn reads_the_pixel_aspect() {
+        assert_eq!(
+            pixel_aspect(&hex("6764001facd940d43db011000003000100000300780f183196")),
+            Some((1, 1))
+        );
+        let pal = crate::ts::demux(include_bytes!("../tests/fixtures/pal_anamorphic.ts")).unwrap();
+        assert_eq!(pixel_aspect(&pal.sps.unwrap()), Some((64, 45)));
+    }
+
     #[test]
     fn garbage_and_truncation_are_none_not_panics() {
         assert_eq!(dimensions(&[]), None);
         assert_eq!(dimensions(&[0x67]), None);
+        assert_eq!(pixel_aspect(&[0x67, 0, 0]), None);
         assert_eq!(
             dimensions(&hex("6764001facd940d4")),
             None,
