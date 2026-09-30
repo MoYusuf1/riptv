@@ -4,8 +4,23 @@
 //! reqwest can't set one on wasm.
 
 pub use reqwest::Url;
-use serde::{Deserialize, Deserializer, de::DeserializeOwned};
+use serde::{
+    Deserialize, Deserializer,
+    de::{DeserializeOwned, IgnoredAny, MapAccess, SeqAccess, Visitor},
+};
 use serde_json::Value;
+use std::sync::Arc;
+
+mod art;
+#[cfg(test)]
+mod bench;
+mod playlist;
+mod stream;
+mod text;
+
+pub use art::{Art, sized as sized_art};
+use playlist::Playlist;
+pub use text::contains_lowercase;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -22,31 +37,151 @@ pub enum Error {
     Json(#[from] serde_json::Error),
     #[error("login rejected by server")]
     AuthFailed,
+    #[error("playlist: {0}")]
+    Playlist(&'static str),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
 
 // Providers mix strings, numbers, bools and nulls for the same field. Accept all of them.
+//
+// Read straight off the parser with a visitor: going through `serde_json::Value` first built a
+// throwaway tree (and a `String` for every numeric field written as text) for every field of every
+// record, which on a 30,000-title list was half of all the allocations there were.
+struct Text;
+
+impl<'de> Visitor<'de> for Text {
+    type Value = Option<String>;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("a string, number, bool or null")
+    }
+
+    fn visit_str<E>(self, v: &str) -> std::result::Result<Self::Value, E> {
+        Ok(Some(v.to_owned()))
+    }
+
+    fn visit_string<E>(self, v: String) -> std::result::Result<Self::Value, E> {
+        Ok(Some(v))
+    }
+
+    fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E> {
+        Ok(Some(v.to_string()))
+    }
+
+    fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E> {
+        Ok(Some(v.to_string()))
+    }
+
+    fn visit_f64<E>(self, v: f64) -> std::result::Result<Self::Value, E> {
+        // The same spelling `serde_json` gives a number ("8.0", not "8").
+        Ok(Some(
+            serde_json::Number::from_f64(v).map_or_else(|| v.to_string(), |n| n.to_string()),
+        ))
+    }
+
+    fn visit_bool<E>(self, v: bool) -> std::result::Result<Self::Value, E> {
+        Ok(Some(v.to_string()))
+    }
+
+    fn visit_unit<E>(self) -> std::result::Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_none<E>(self) -> std::result::Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_some<D: Deserializer<'de>>(self, d: D) -> std::result::Result<Self::Value, D::Error> {
+        d.deserialize_any(Text)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(
+        self,
+        mut seq: A,
+    ) -> std::result::Result<Self::Value, A::Error> {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(None)
+    }
+
+    fn visit_map<A: MapAccess<'de>>(
+        self,
+        mut map: A,
+    ) -> std::result::Result<Self::Value, A::Error> {
+        while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+        Ok(None)
+    }
+}
+
 fn flex_string<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<String>, D::Error> {
-    Ok(match Value::deserialize(d)? {
-        Value::String(s) => Some(s),
-        Value::Number(n) => Some(n.to_string()),
-        Value::Bool(b) => Some(b.to_string()),
-        _ => None,
-    })
+    d.deserialize_any(Text)
 }
 
 fn flex_str<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<String, D::Error> {
     Ok(flex_string(d)?.unwrap_or_default())
 }
 
+/// A whole number, from a number, a string of digits, or a bool; anything else is `None`.
+struct Count;
+
+impl<'de> Visitor<'de> for Count {
+    type Value = Option<u64>;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("a number, a string of digits, a bool or null")
+    }
+
+    fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E> {
+        Ok(Some(v))
+    }
+
+    fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E> {
+        Ok(u64::try_from(v).ok())
+    }
+
+    fn visit_f64<E>(self, _: f64) -> std::result::Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_str<E>(self, v: &str) -> std::result::Result<Self::Value, E> {
+        Ok(v.trim().parse().ok())
+    }
+
+    fn visit_bool<E>(self, v: bool) -> std::result::Result<Self::Value, E> {
+        Ok(Some(u64::from(v)))
+    }
+
+    fn visit_unit<E>(self) -> std::result::Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_none<E>(self) -> std::result::Result<Self::Value, E> {
+        Ok(None)
+    }
+
+    fn visit_some<D: Deserializer<'de>>(self, d: D) -> std::result::Result<Self::Value, D::Error> {
+        d.deserialize_any(Count)
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(
+        self,
+        mut seq: A,
+    ) -> std::result::Result<Self::Value, A::Error> {
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        Ok(None)
+    }
+
+    fn visit_map<A: MapAccess<'de>>(
+        self,
+        mut map: A,
+    ) -> std::result::Result<Self::Value, A::Error> {
+        while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+        Ok(None)
+    }
+}
+
 fn flex_u64<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<u64>, D::Error> {
-    Ok(match Value::deserialize(d)? {
-        Value::Number(n) => n.as_u64(),
-        Value::String(s) => s.trim().parse().ok(),
-        Value::Bool(b) => Some(b as u64),
-        _ => None,
-    })
+    d.deserialize_any(Count)
 }
 
 fn flex_id<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<u64, D::Error> {
@@ -487,7 +622,7 @@ fn vec_from_slice<T: DeserializeOwned>(bytes: &[u8]) -> Result<Vec<T>> {
     collect_lenient(
         split_records(bytes)?
             .into_iter()
-            .map(|r| serde_json::from_str(r.get())),
+            .map(|r| serde_json::from_slice(r.get().as_bytes())),
     )
 }
 
@@ -560,6 +695,7 @@ pub struct Client {
     pass: String,
     http: reqwest::Client,
     proxy: Option<Url>,
+    playlist: Option<Arc<Playlist>>,
 }
 
 impl Client {
@@ -575,7 +711,40 @@ impl Client {
             pass: pass.into(),
             http: reqwest::Client::new(),
             proxy: None,
+            playlist: None,
         })
+    }
+
+    /// Fetch an M3U channel list, or treat an HLS `.m3u8` manifest as one live channel.
+    /// The parsed list is shared across clones of this client; stream bytes still go through the
+    /// existing same-origin proxy. IPTV URLs are never stored in the browser's local storage.
+    pub async fn load_playlist(mut self) -> Result<Self> {
+        if !matches!(self.base.scheme(), "http" | "https") {
+            return Err(Error::Playlist("use an http(s) playlist URL"));
+        }
+        let response = checked(
+            self.http
+                .get(self.proxied(self.base.clone()))
+                .send()
+                .await
+                .map_err(http_error)?,
+        )?;
+        if response
+            .content_length()
+            .is_some_and(|n| n > playlist::MAX_BYTES)
+        {
+            return Err(Error::Playlist("file is too large"));
+        }
+        let body = response.bytes().await.map_err(http_error)?;
+        if body.len() as u64 > playlist::MAX_BYTES {
+            return Err(Error::Playlist("file is too large"));
+        }
+        self.playlist = Some(Arc::new(playlist::parse(&body, &self.base)?));
+        Ok(self)
+    }
+
+    pub fn is_playlist(&self) -> bool {
+        self.playlist.is_some()
     }
 
     /// Send every API request, and build every stream URL, through a pass-through proxy
@@ -726,8 +895,20 @@ impl Client {
             .map(|s| ("category_id", s))
             .into_iter()
             .collect();
-        self.get_with(self.api(Some(action), &extra), vec_from_slice::<T>)
-            .await
+        self.get_list(self.api(Some(action), &extra)).await
+    }
+
+    /// GET a list and read its records as they arrive (see `stream`).
+    async fn get_list<T: DeserializeOwned>(&self, url: Url) -> Result<Vec<T>> {
+        use futures_core::Stream;
+        let resp = self.http.get(self.proxied(url)).send().await;
+        let resp = checked(resp.map_err(http_error)?)?;
+        let mut chunks = std::pin::pin!(resp.bytes_stream());
+        let mut reader = stream::ListReader::<T>::new();
+        while let Some(chunk) = std::future::poll_fn(|cx| chunks.as_mut().poll_next(cx)).await {
+            reader.feed(&chunk.map_err(http_error)?)?;
+        }
+        reader.finish()
     }
 
     /// Fails with [`Error::AuthFailed`] on bad credentials.
@@ -736,27 +917,50 @@ impl Client {
     }
 
     pub async fn live_categories(&self) -> Result<Vec<Category>> {
+        if let Some(p) = &self.playlist {
+            return Ok(p.categories.clone());
+        }
         self.list("get_live_categories", None).await
     }
 
     /// `None` returns every channel, which can be tens of thousands.
     pub async fn live_streams(&self, category: Option<u64>) -> Result<Vec<LiveStream>> {
+        if let Some(p) = &self.playlist {
+            return Ok(p
+                .channels
+                .iter()
+                .filter(|s| category.is_none_or(|id| s.category_id == Some(id)))
+                .cloned()
+                .collect());
+        }
         self.list("get_live_streams", category).await
     }
 
     pub async fn vod_categories(&self) -> Result<Vec<Category>> {
+        if self.is_playlist() {
+            return Ok(vec![]);
+        }
         self.list("get_vod_categories", None).await
     }
 
     pub async fn vod_streams(&self, category: Option<u64>) -> Result<Vec<VodStream>> {
+        if self.is_playlist() {
+            return Ok(vec![]);
+        }
         self.list("get_vod_streams", category).await
     }
 
     pub async fn series_categories(&self) -> Result<Vec<Category>> {
+        if self.is_playlist() {
+            return Ok(vec![]);
+        }
         self.list("get_series_categories", None).await
     }
 
     pub async fn series(&self, category: Option<u64>) -> Result<Vec<Series>> {
+        if self.is_playlist() {
+            return Ok(vec![]);
+        }
         self.list("get_series", category).await
     }
 
@@ -779,6 +983,9 @@ impl Client {
 
     /// A channel's whole schedule (a day or more, past and future), for a timeline.
     pub async fn epg_table(&self, stream_id: u64) -> Result<Vec<EpgListing>> {
+        if self.is_playlist() {
+            return Ok(vec![]);
+        }
         let id = stream_id.to_string();
         parse_short_epg(
             self.get_json(self.api(Some("get_simple_data_table"), &[("stream_id", &id)]))
@@ -788,6 +995,9 @@ impl Client {
 
     /// Fetch a small, on-demand guide for one live channel.
     pub async fn short_epg(&self, stream_id: u64, limit: usize) -> Result<Vec<EpgListing>> {
+        if self.is_playlist() {
+            return Ok(vec![]);
+        }
         let id = stream_id.to_string();
         let limit = limit.to_string();
         parse_short_epg(
@@ -811,6 +1021,14 @@ impl Client {
 
     /// `ext` is `m3u8` (HLS) or `ts`. Browsers can only play `m3u8`.
     pub fn live_url(&self, stream_id: u64, ext: &str) -> Url {
+        if let Some(p) = &self.playlist {
+            return self.proxied(
+                p.urls
+                    .get(stream_id.saturating_sub(1) as usize)
+                    .unwrap_or(&self.base)
+                    .clone(),
+            );
+        }
         self.media_url("live", stream_id, ext)
     }
 

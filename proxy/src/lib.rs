@@ -44,13 +44,18 @@ use tower_http::{
 /// what lets the browser compile WebAssembly (it does not allow `eval`). Images may come from
 /// anywhere because providers host channel logos and posters themselves.
 const APP_CSP: &str = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'unsafe-inline'; \
-    img-src http: https: data:; media-src 'self' blob:; connect-src 'self'; base-uri 'none'; form-action 'none'; \
+    img-src http: https: data:; media-src 'self' blob: https:; connect-src 'self'; base-uri 'none'; form-action 'none'; \
     frame-ancestors 'none'";
 
 /// Response headers worth forwarding. Everything else (cookies, CORS, hop-by-hop) is dropped.
-const PASS: [HeaderName; 6] = [
+const PASS: [HeaderName; 7] = [
     header::CONTENT_TYPE,
-    header::CONTENT_LENGTH, // valid because reqwest is built without decompression
+    // Compression is the browser's to undo (natively, while the body streams in), so a provider
+    // that compresses its lists sends less over the slow hop. The proxy passes the bytes through
+    // as they came, and `Content-Length` stays true for them because reqwest is built without
+    // decompression.
+    header::CONTENT_ENCODING,
+    header::CONTENT_LENGTH,
     header::CONTENT_RANGE,
     header::ACCEPT_RANGES,
     header::ETAG,
@@ -322,6 +327,18 @@ async fn proxy(
             req = req.header(h, v);
         }
     }
+    // What the browser can decompress, so the provider may compress for it: a list of tens of
+    // thousands of titles is megabytes of repetitive JSON. A byte range is always of the bytes as
+    // they are (a range of a compressed body is not a range of the file), and a `<video>` asks for
+    // none, so those say `identity`.
+    let encoding = match (
+        headers.contains_key(header::RANGE),
+        headers.get(header::ACCEPT_ENCODING),
+    ) {
+        (false, Some(v)) => v.clone(),
+        _ => HeaderValue::from_static("identity"),
+    };
+    req = req.header(header::ACCEPT_ENCODING, encoding);
     // Error text would include the upstream URL and its credentials, so it is never passed on.
     // The exceptions are our own refusals, which name only a hostname.
     let up = match req.send().await {

@@ -1,2 +1,5 @@
+[application]
+asset_dir = "public"
+
 [web.app]
 title = "RIPTV"

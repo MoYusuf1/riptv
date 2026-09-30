@@ -151,6 +151,73 @@ async fn the_browsers_user_agent_reaches_the_provider() {
     assert!(ua("").await.contains("RIPTV"));
 }
 
+/// A provider that compresses is passed through as it is: the browser, which asked for it, undoes
+/// it as the body arrives. The proxy must neither decode it nor ask for what the browser didn't.
+#[tokio::test]
+async fn compression_is_left_to_the_browser() {
+    const GZIP: &[u8] = &[
+        31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 203, 72, 205, 201, 201, 87, 200, 64, 39, 1, 227, 81, 61,
+        141, 23, 0, 0, 0,
+    ];
+    let upstream = serve(Router::new().route(
+        "/list",
+        get(|headers: axum::http::HeaderMap| async move {
+            let asked = headers
+                .get("accept-encoding")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_owned();
+            let mut answer = axum::http::HeaderMap::new();
+            // What the provider was asked for, told in the body (the proxy passes no custom headers).
+            if headers.contains_key("range") {
+                return (answer, asked.into_bytes());
+            }
+            if asked.contains("gzip") {
+                answer.insert("content-encoding", "gzip".parse().unwrap());
+                (answer, GZIP.to_vec())
+            } else {
+                (answer, b"hello hello hello hello".to_vec())
+            }
+        }),
+    ))
+    .await;
+    let proxy = serve(router(AppState::new())).await;
+    assert_eq!(sign_in(proxy, "127.0.0.1").await, 204);
+    let target = format!("http://127.0.0.1:{upstream}/list");
+    // (This client is built without decompression too, so it sees what the proxy sent.)
+    let get = |encoding: &'static str| {
+        let req = reqwest::Client::new()
+            .get(proxied(proxy, &target))
+            .header("accept-encoding", encoding);
+        async move { req.send().await.unwrap() }
+    };
+
+    let r = get("gzip, br").await;
+    assert_eq!(r.headers()["content-encoding"], "gzip");
+    assert_eq!(r.headers()["content-length"], GZIP.len().to_string());
+    assert_eq!(
+        r.bytes().await.unwrap().as_ref(),
+        GZIP,
+        "not decoded on the way"
+    );
+
+    // A `<video>` says it wants no encoding at all, and is sent none.
+    let r = get("identity").await;
+    assert!(r.headers().get("content-encoding").is_none());
+    assert_eq!(r.text().await.unwrap(), "hello hello hello hello");
+
+    // A byte range is of the file itself, whatever the browser says it can decompress.
+    let ranged = reqwest::Client::new()
+        .get(proxied(proxy, &target))
+        .header("accept-encoding", "gzip")
+        .header("range", "bytes=0-4")
+        .send()
+        .await
+        .unwrap();
+    assert!(ranged.headers().get("content-encoding").is_none());
+    assert_eq!(ranged.text().await.unwrap(), "identity");
+}
+
 #[tokio::test]
 async fn only_the_app_can_use_or_change_the_proxy() {
     let upstream = serve(Router::new().route("/ok", get(|| async { "hello" }))).await;

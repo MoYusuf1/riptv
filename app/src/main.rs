@@ -13,7 +13,12 @@ use std::{
     time::Duration,
 };
 
-use rffmpeg::vod::Verdict;
+mod controls;
+mod fetch;
+
+use controls::{IdleHide, Skip};
+use fetch::Proxied;
+use rstreamkit::{Unsupported, vod::Verdict};
 use web_sys::{
     js_sys,
     wasm_bindgen::{JsCast, JsValue, closure::Closure},
@@ -50,6 +55,9 @@ svg{width:1.1rem;height:1.1rem}
 .login button{padding:.85rem;border-radius:12px;background:var(--fill);color:#fff;font-weight:600;text-align:center}
 .login button:disabled{opacity:.6;cursor:wait}
 .login button.ghost{background:none;color:var(--accent)}
+.login-modes{display:flex;gap:.2rem;padding:.2rem;border-radius:12px;background:var(--row)}
+.login .login-modes button{flex:1;padding:.55rem;border-radius:9px;background:none;color:var(--dim);font-size:.85rem}
+.login .login-modes button.on{background:var(--panel);color:var(--text);box-shadow:0 2px 8px rgba(0,0,0,.2)}
 "#,
     // Floating chrome: top bar, section rail, account menu
     r#".topbar,.rail{position:fixed;z-index:20;display:flex;border:1px solid var(--hair);background:var(--glass);box-shadow:0 10px 30px rgba(0,0,0,.35);backdrop-filter:blur(24px) saturate(180%)}
@@ -66,6 +74,12 @@ svg{width:1.1rem;height:1.1rem}
 .rail button.on{background:var(--soft);color:var(--accent)}
 .rail svg{width:1.3rem;height:1.3rem}
 .rail span{display:none;font-size:.62rem;font-weight:500}
+.topbar.detail-mode{inset:.65rem .7rem auto auto;width:auto;height:2.8rem;padding:.25rem;border-radius:999px;background:rgba(22,16,20,.82)}
+.topbar.detail-mode .grow{display:none}
+.topbar.detail-mode .who{background:transparent}
+.topbar.detail-mode .who b{display:none}
+.detail-return{position:fixed;z-index:18;top:.7rem;left:1rem;display:flex;align-items:center;gap:.35rem}
+.detail-return .icon-btn{background:rgba(0,0,0,.4)}
 .account{position:relative}
 .who{display:flex;align-items:center;gap:.5rem;height:2.1rem;padding:0 .7rem 0 .25rem;border-radius:999px;background:var(--row);font-size:.8rem;font-weight:500}
 .who.solo{padding:.25rem}
@@ -90,6 +104,7 @@ svg{width:1.1rem;height:1.1rem}
 .content{position:relative;display:flex;flex-direction:column;min-width:0;min-height:0}
 .main,.channels{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0}
 .main.covered{visibility:hidden}
+.workspace.detail-open{display:none}
 .head{display:flex;align-items:flex-end;justify-content:space-between;gap:1rem;padding:.4rem 1rem .7rem .4rem}
 .head h1{margin:0;font-size:1.6rem;letter-spacing:-.03em;line-height:1.1}
 .head span{color:var(--dim);font-size:.8rem}
@@ -113,7 +128,7 @@ svg{width:1.1rem;height:1.1rem}
 "#,
     // Posters and channel tiles
     r#".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(8.6rem,1fr));gap:1.5rem 1rem}
-.card{min-width:0;text-align:center;transition:transform .15s}
+.card{min-width:0;text-align:center;transition:transform .15s;content-visibility:auto;contain-intrinsic-size:auto 17rem}
 .card:hover{transform:scale(1.03)}
 .art{position:relative;display:grid;place-items:center;aspect-ratio:2/3;overflow:hidden;border-radius:12px;background:var(--row);box-shadow:0 6px 18px rgba(0,0,0,.35);color:var(--faint);font-size:1.6rem;font-weight:700}
 .tiles .art{aspect-ratio:16/10}
@@ -123,13 +138,13 @@ svg{width:1.1rem;height:1.1rem}
 .score::before{content:'★ ';color:#ffcc4d}
 .card strong{display:-webkit-box;margin-top:.5rem;overflow:hidden;color:var(--dim);font-size:.74rem;font-weight:500;-webkit-box-orient:vertical;-webkit-line-clamp:2}
 "#,
-    // Movie and series pages: a full-bleed backdrop under the floating chrome
+    // Movie and series pages: a full-bleed destination under the floating chrome
     r#".detail{position:fixed;z-index:15;inset:0;overflow:hidden auto;background:var(--bg);scrollbar-width:thin}
-.back{position:fixed;z-index:18;top:4.6rem;left:1.35rem;background:rgba(0,0,0,.45);backdrop-filter:blur(10px)}
-.d-hero{position:relative;display:flex;flex-direction:column;justify-content:flex-end;min-height:100vh;padding:7rem 3rem 3.4rem 6.2rem}
+.d-hero{position:relative;display:flex;flex-direction:column;justify-content:flex-end;min-height:72vh;padding:7rem 3rem 2.4rem 6.2rem;background:radial-gradient(ellipse at 78% 28%,#49313d 0%,transparent 42%),radial-gradient(ellipse at 28% 65%,#302c4c 0%,transparent 53%),linear-gradient(125deg,#201820,#11151f 65%,#130f17)}
+.d-hero.no-art::before{content:"";position:absolute;right:12%;top:18%;width:min(32vw,27rem);aspect-ratio:1;border:1px solid rgba(255,255,255,.07);border-radius:50%;box-shadow:0 0 0 5rem rgba(255,255,255,.015),0 0 0 10rem rgba(255,255,255,.01);pointer-events:none}
 .d-art{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 20%}
-.d-art.soft{filter:blur(40px) brightness(.55) saturate(1.2);transform:scale(1.2)}
-.d-shade{position:absolute;inset:0;background:linear-gradient(90deg,rgba(11,7,9,.94),rgba(11,7,9,.4) 58%,rgba(11,7,9,.55)),linear-gradient(transparent 40%,var(--bg))}
+.d-poster{position:absolute;top:8%;right:10%;width:min(24vw,19rem);max-height:72%;object-fit:contain;border-radius:14px;box-shadow:0 24px 70px rgba(0,0,0,.55)}
+.d-shade{position:absolute;inset:0;background:linear-gradient(90deg,rgba(11,7,9,.85),rgba(11,7,9,.28) 62%,rgba(11,7,9,.3)),linear-gradient(transparent 38%,rgba(11,7,9,.4) 76%,var(--bg))}
 .d-main{position:relative;max-width:41rem}
 .d-title{margin:0 0 .7rem;font-size:clamp(2.4rem,5.4vw,4.4rem);font-weight:800;line-height:.98;letter-spacing:-.035em;text-wrap:balance;text-shadow:0 4px 34px rgba(0,0,0,.55)}
 .d-genres{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;font-weight:500}
@@ -153,12 +168,11 @@ svg{width:1.1rem;height:1.1rem}
 .d-facts div+div{border-top:1px solid var(--hair)}
 .d-facts dt{color:var(--faint)}
 .d-facts dd{margin:0;text-align:right}
-.d-sec{position:relative;padding:1.4rem 3rem 1.2rem 6.2rem}
+.d-sec{position:relative;padding:1rem 3rem 1.2rem 6.2rem;content-visibility:auto;contain-intrinsic-size:auto 14rem}
 .d-sec h2{margin:0 0 1rem;font-size:1.25rem;letter-spacing:-.01em}
-.cast{display:flex;gap:1.3rem;overflow-x:auto;padding-bottom:.6rem;scrollbar-width:thin}
-.person{flex:none;width:5.8rem;text-align:center}
-.face{display:grid;place-items:center;width:4.7rem;height:4.7rem;margin:0 auto .55rem;border-radius:50%;color:#fff;font-size:1.15rem;font-weight:700;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12)}
-.person strong{display:block;font-size:.74rem;font-weight:500;line-height:1.3}
+.cast{display:flex;flex-wrap:wrap;gap:.55rem}
+.person{padding:.55rem .85rem;border:1px solid var(--hair);border-radius:999px;background:var(--row)}
+.person strong{font-size:.78rem;font-weight:500;line-height:1.3}
 .trailer{position:relative;display:block;width:16rem;color:#fff;aspect-ratio:16/9;overflow:hidden;border-radius:12px;background:var(--row)}
 .trailer img{width:100%;height:100%;object-fit:cover;transition:transform .2s}
 .trailer:hover img{transform:scale(1.04)}
@@ -167,16 +181,22 @@ svg{width:1.1rem;height:1.1rem}
 .seasons button{padding:.4rem .95rem;border-radius:999px;background:var(--row);color:var(--dim);font-size:.8rem}
 .seasons button:hover{color:var(--text)}
 .seasons button.on{background:#fff;color:#111;font-weight:600}
-.eps{display:grid;grid-template-columns:repeat(auto-fill,minmax(17rem,1fr));gap:1.4rem 1.2rem}
-.epc{min-width:0}
+.ep-heading{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1rem}
+.ep-heading h2{margin:0}
+.ep-tools{display:flex;align-items:center;gap:.6rem;color:var(--dim);font-size:.78rem}
+.season-select{max-width:10rem;padding:.5rem 1.8rem .5rem .8rem;border:1px solid var(--hair);border-radius:999px;background:var(--row);color:var(--text);outline:0;cursor:pointer}
+.season-select:focus-visible{outline:2px solid var(--accent)}
+.eps{display:flex;gap:1.15rem;overflow-x:auto;padding:.15rem .1rem 1rem;scrollbar-width:thin;scroll-snap-type:x proximity}
+.epc{flex:0 0 clamp(14rem,13vw,18rem);min-width:0;scroll-snap-align:start}
 .thumb{position:relative;display:grid;place-items:center;width:100%;aspect-ratio:16/9;overflow:hidden;border-radius:12px;background:var(--row);color:var(--faint);font-size:1.4rem;font-weight:700}
 .thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.thumb .ep-num{position:absolute;top:.45rem;left:.45rem;padding:.18rem .45rem;border:1px solid rgba(255,255,255,.35);border-radius:999px;background:rgba(0,0,0,.65);color:#fff;font-size:.67rem;font-weight:700;line-height:1}
 .thumb .go{position:absolute;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.4);color:#fff;opacity:0;transition:opacity .15s}
 .thumb .go svg{width:2rem;height:2rem;fill:currentColor}
 .thumb:hover .go,.thumb:focus-visible .go{opacity:1}
 .thumb .len{position:absolute;right:.45rem;bottom:.45rem;padding:.05rem .4rem;border-radius:6px;background:rgba(0,0,0,.7);color:#fff;font-size:.68rem;font-variant-numeric:tabular-nums}
-.epc-head{display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;margin-top:.6rem}
-.epc h4{margin:0;font-size:.9rem;font-weight:600;line-height:1.3}
+.epc-head{display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;margin-top:.65rem}
+.epc h4{margin:0;font-size:.85rem;font-weight:650;line-height:1.3}
 .epc small{display:block;margin-top:.1rem;color:var(--faint);font-size:.72rem}
 .epc p{display:-webkit-box;margin:.35rem 0 0;overflow:hidden;color:var(--dim);font-size:.78rem;line-height:1.45;-webkit-box-orient:vertical;-webkit-line-clamp:2}
 "#,
@@ -186,7 +206,7 @@ svg{width:1.1rem;height:1.1rem}
 .channels .head{padding:1rem 1rem .6rem}
 .channels .head h1{font-size:1.15rem}
 .channels .scroll{padding:0 .6rem 1rem}
-.row{display:flex;align-items:center;gap:.7rem;width:100%;padding:.5rem .6rem;border-radius:12px}
+.row{display:flex;align-items:center;gap:.7rem;width:100%;padding:.5rem .6rem;border-radius:12px;content-visibility:auto;contain-intrinsic-size:auto 3.6rem}
 .row:hover{background:var(--row)}
 .row.on{background:var(--soft)}
 .logo{display:grid;place-items:center;flex:none;width:2.5rem;height:2.5rem;overflow:hidden;border-radius:9px;background:var(--row);color:var(--faint);font-size:.6rem;font-weight:700}
@@ -208,6 +228,7 @@ svg{width:1.1rem;height:1.1rem}
 .stats{position:absolute;top:.8rem;left:.8rem;padding:.3rem .7rem;border-radius:8px;background:rgba(0,0,0,.66);color:#fff;font:600 .72rem ui-monospace,monospace;backdrop-filter:blur(8px)}
 .hud{position:absolute;inset:0;display:grid;place-items:center;color:#fff;pointer-events:none}
 .hud span{padding:.4rem .9rem;border-radius:999px;background:rgba(0,0,0,.6);backdrop-filter:blur(10px)}
+.loading-group{display:grid;justify-items:center;gap:.7rem}
 .spinner{width:2.6rem;height:2.6rem;border:3px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(1turn)}}
 .bigplay{position:absolute;top:50%;left:50%;display:grid;place-items:center;width:4.6rem;height:4.6rem;border-radius:50%;background:rgba(20,13,16,.55);color:#fff;transform:translate(-50%,-50%);backdrop-filter:blur(16px)}
@@ -255,9 +276,12 @@ svg{width:1.1rem;height:1.1rem}
     r#".watch{position:fixed;z-index:60;inset:0;overflow:hidden;background:#000;color:#fff;outline:0}
 .watch video{position:absolute;inset:0;width:100%;height:100%;background:#000;object-fit:contain}
 .watch:not(.active):not(.paused){cursor:none}
-.w-load,.w-fail{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:1rem;padding:2rem;text-align:center;color:var(--dim)}
-.w-load img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;filter:blur(40px) brightness(.35);transform:scale(1.2)}
-.w-load>*,.w-fail>*{position:relative}
+.watch:has(.w-load),.watch:has(.w-fail){cursor:default}
+.w-load,.w-fail{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:.7rem;padding:2rem;text-align:center;color:var(--dim);background:radial-gradient(circle at 50% 48%,rgba(255,125,146,.1),transparent 32%),#070607}
+.w-load .spinner{width:2rem;height:2rem;margin-bottom:.6rem;border-width:2px}
+.w-load strong{max-width:min(80vw,32rem);overflow:hidden;color:#fff;font-size:1.15rem;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.w-load small{max-width:min(80vw,32rem);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.w-load span{font-size:.78rem}
 .w-top,.w-bottom{position:absolute;inset-inline:0;opacity:0;pointer-events:none;transition:opacity .25s}
 .w-top{top:0;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:1rem;padding:1rem 1.4rem 3rem;background:linear-gradient(rgba(0,0,0,.8),transparent)}
 .w-top .icon-btn{background:rgba(255,255,255,.14)}
@@ -267,6 +291,7 @@ svg{width:1.1rem;height:1.1rem}
 .w-title small{color:var(--dim);font-size:.75rem}
 .w-bottom{bottom:0;padding:3.6rem 1.4rem .9rem;background:linear-gradient(transparent,rgba(0,0,0,.88))}
 .watch.active .w-top,.watch.active .w-bottom,.watch.paused .w-top,.watch.paused .w-bottom,.w-bottom:focus-within{opacity:1;pointer-events:auto}
+.watch:has(.w-load) .w-top,.watch:has(.w-fail) .w-top{opacity:1;pointer-events:auto}
 .w-seek{display:block;width:100%;height:1.2rem;margin:0;background:none;cursor:pointer;-webkit-appearance:none;appearance:none}
 .w-seek::-webkit-slider-runnable-track{height:4px;border-radius:99px;background:linear-gradient(90deg,var(--fill) var(--p),rgba(255,255,255,.5) var(--p) var(--b),rgba(255,255,255,.2) var(--b))}
 .w-seek::-moz-range-track{height:4px;border-radius:99px;background:linear-gradient(90deg,var(--fill) var(--p),rgba(255,255,255,.5) var(--p) var(--b),rgba(255,255,255,.2) var(--b))}
@@ -277,7 +302,9 @@ svg{width:1.1rem;height:1.1rem}
 .w-seek:hover::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:#fff}
 .w-seek:disabled{cursor:default}
 .w-row{display:flex;align-items:center;gap:.3rem}
-.w-row .ctl{width:2.6rem;height:2.6rem}
+.w-row .ctl{display:grid;place-items:center;flex:none;width:2.6rem;height:2.6rem}
+.w-row .ctl svg{display:block}
+.w-row .skip svg{width:1.55rem;height:1.55rem}
 .w-time{margin-left:.5rem;font-size:.82rem;font-variant-numeric:tabular-nums;white-space:nowrap}
 .w-time span{color:var(--dim)}
 .next-btn{display:inline-flex;align-items:center;gap:.4rem;height:2.4rem;margin-right:.3rem;padding:0 .9rem;border-radius:999px;background:rgba(255,255,255,.16);font-size:.8rem;font-weight:600}
@@ -297,9 +324,14 @@ svg{width:1.1rem;height:1.1rem}
 .upnext button.go{background:#fff;color:#111}
 "#,
     // Narrow screens: the rail becomes a floating tab bar, categories a button
-    r#"@media(max-width:820px){.brand span,.who b{display:none}.topbar{gap:.5rem}.rail{top:auto;bottom:.8rem;left:50%;flex-direction:row;transform:translateX(-50%)}.rail button{width:auto;min-width:4.4rem;height:3rem;padding:0 .8rem}.rail span{display:block}.workspace{inset:4.2rem 0 0;grid-template-columns:1fr;padding:0 .6rem .6rem}.sidebar{display:none}.cats-btn{display:inline-flex}.scroll,.episodes{padding-bottom:5.5rem}.back{left:1rem}.d-hero{min-height:auto;padding:7rem 1rem 1.6rem}.d-facts{position:relative;inset:auto;width:auto;margin-top:1.4rem}.d-sec{padding:1rem 1rem .8rem}.w-top{padding:.8rem .8rem 2.5rem}.w-bottom{padding:3rem .8rem .6rem}.w-row .vol,.w-row .volume{display:none}.w-menu{right:.8rem;bottom:5.2rem}}
-/* Live TV on a phone, like a video app: the picture on top and full width, its guide under it, the channel list below. */
+    r#"@media(max-width:820px){.brand span,.who b{display:none}.topbar{gap:.5rem}.rail{top:auto;bottom:.8rem;left:50%;flex-direction:row;transform:translateX(-50%)}.rail button{width:auto;min-width:4.4rem;height:3rem;padding:0 .8rem}.rail span{display:block}.workspace{inset:4.2rem 0 0;grid-template-columns:1fr;padding:0 .6rem .6rem}.sidebar{display:none}.cats-btn{display:inline-flex}.scroll,.episodes{padding-bottom:5.5rem}.d-hero{min-height:auto;padding:7rem 1rem 1.6rem}.d-facts{position:relative;inset:auto;width:auto;margin-top:1.4rem}.d-sec{padding:1rem 1rem .8rem}.w-top{padding:.8rem .8rem 2.5rem}.w-bottom{padding:3rem .8rem .6rem}.w-row .vol,.w-row .volume{display:none}.w-menu{right:.8rem;bottom:5.2rem}}
+/* Live TV on a phone: keep the picture above the channels, without squeezing in the guide. */
 @media(max-width:820px){.live{display:flex;flex-direction:column;margin:0 -.6rem;border:0;border-radius:0}.stage{order:-1;flex:none}.stage.idle{display:none}.live-stage{display:block;height:auto}.player{margin:0;border-radius:0;aspect-ratio:16/9}.player.fill{aspect-ratio:auto}.controls{padding:2.2rem .5rem .3rem}.ctl{width:2.8rem;height:2.8rem}.vol{display:none}.bigplay{width:4.2rem;height:4.2rem}.sound-note{bottom:3.9rem}.guide{min-height:0;padding:.7rem .9rem .8rem;border-top:0;background:var(--bg)}.tl{height:5.6rem}.channels{flex:1;border:0;background:none}.channels .head{padding:.8rem 1rem .4rem}.channels .scroll{padding-bottom:5.5rem}}
+@media(max-width:820px){.live.watching .stage{display:block;width:100%;background:#000}.live.watching .live-stage{display:block;width:100%}.live.watching .player{width:100%;min-height:0;aspect-ratio:16/9}.live.watching .player video{display:block}.live.watching .guide{display:none}.live.watching .channels{min-height:0;overflow:hidden}.live.watching .channels .scroll{min-height:0;overflow-y:auto}.live.watching .controls{gap:.1rem}.live.watching .controls .ctl{width:2.5rem;height:2.5rem}.live.watching .sound-note{font-size:.7rem}}
+/* A title is a page, not a sheet: portrait art, a legible fade, and actions within reach. */
+@media(max-width:820px){.detail .d-hero{min-height:100svh;padding:5.5rem 1.1rem 5.5rem}.detail .d-art{object-position:center top}.detail .d-shade{background:linear-gradient(180deg,rgba(11,7,9,.16) 0%,rgba(11,7,9,.1) 28%,rgba(11,7,9,.75) 62%,var(--bg) 100%)}.detail .d-main{max-width:none}.detail .d-title{font-size:clamp(2.1rem,9vw,3.5rem);text-align:center}.detail .d-genres,.detail .d-actions,.detail .d-meta{justify-content:center}.detail .d-by,.detail .plot,.detail .more{text-align:left}.detail .d-facts{margin-top:1.2rem}.detail .d-sec{padding:1rem 1.1rem}.detail .ep-heading{align-items:flex-start}.detail .epc{flex-basis:min(74vw,18rem)}}
+@media(max-width:820px){.detail .d-poster{top:5.5rem;right:50%;width:min(54vw,15rem);max-height:45svh;transform:translateX(50%)}.watch .w-row{gap:0}.watch .w-row .ctl{width:2.35rem;height:2.35rem}.watch .w-row .skip svg{width:1.45rem;height:1.45rem}}
+@media(max-width:820px){.detail-return{left:.75rem}}
 /* A phone turned sideways while watching: just the picture. */
 @media(max-height:500px) and (orientation:landscape){body:has(.live.watching) .topbar,body:has(.live.watching) .rail,.workspace:has(.live.watching) .sidebar,.live.watching .channels,.live.watching .guide{display:none}.workspace:has(.live.watching){inset:0;grid-template-columns:1fr;padding:0}.live.watching{grid-template-columns:1fr;margin:0}.live.watching .stage{flex:1}.live.watching .live-stage{height:100%}.live.watching .player{height:100%;aspect-ratio:auto}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
@@ -388,6 +420,12 @@ async fn login(url: &str, user: &str, pass: &str) -> xtream::Result<Client> {
     Ok(c)
 }
 
+async fn add_playlist(url: &str) -> xtream::Result<Client> {
+    let c = Client::new(url, "", "")?.via_proxy(&proxy_url())?;
+    c.approve().await?;
+    c.load_playlist().await
+}
+
 /// The error, plus what usually fixes it when the provider itself said no.
 fn explain(e: &xtream::Error) -> String {
     let s = e.to_string();
@@ -451,6 +489,29 @@ fn video_el() -> Option<web_sys::HtmlVideoElement> {
         .get_element_by_id("live-video")?
         .dyn_into()
         .ok()
+}
+
+/// Prefer the device's media pipeline for HTTPS HLS. The browser media element can fetch
+/// cross-origin video without CORS; Rust/proxy playback remains the fallback if it cannot.
+fn native_hls_source(client: &Client, url: &str) -> Option<String> {
+    let media = xtream::Url::parse(url).ok()?;
+    let upstream = client.upstream(&media);
+    if upstream.scheme() != "https" || !upstream.path().to_ascii_lowercase().ends_with(".m3u8") {
+        return None;
+    }
+    let video = web_sys::window()?
+        .document()?
+        .create_element("video")
+        .ok()?
+        .dyn_into::<web_sys::HtmlVideoElement>()
+        .ok()?;
+    if video
+        .can_play_type("application/vnd.apple.mpegurl")
+        .is_empty()
+    {
+        return None;
+    }
+    Some(upstream.to_string())
 }
 
 fn toggle(v: &web_sys::HtmlVideoElement) {
@@ -533,7 +594,7 @@ fn toggle_fullscreen(id: &'static str, mut expanded: Signal<bool>) {
         }
         // Not Dioxus's `spawn`: the key listener calls this from outside its runtime.
         wasm_bindgen_futures::spawn_local(async move {
-            rffmpeg::mse::sleep(Duration::from_millis(600)).await;
+            rstreamkit::mse::sleep(Duration::from_millis(600)).await;
             if doc.fullscreen_element().is_none() {
                 expanded.set(true);
             }
@@ -614,22 +675,38 @@ fn RustMark() -> Element {
 
 #[component]
 fn Login() -> Element {
+    #[derive(Clone, Copy, PartialEq)]
+    enum Mode {
+        Xtream,
+        Playlist,
+    }
+
     let mut session = use_context::<Signal<Option<Client>>>();
     let mut playlist = use_context::<Signal<String>>();
-    let mut url = use_signal(String::new);
+    let mut server_url = use_signal(String::new);
+    let mut playlist_url = use_signal(String::new);
     let mut user = use_signal(String::new);
     let mut pass = use_signal(String::new);
     let mut alias = use_signal(String::new);
+    let mut mode = use_signal(|| Mode::Xtream);
     let mut status = use_signal(|| None::<String>);
     let mut busy = use_signal(|| false);
 
-    let connect = move |(u, n, p, label): (String, String, String, String)| {
+    let connect = move |(selected, u, n, p, label): (Mode, String, String, String, String)| {
         spawn(async move {
             busy.set(true);
             status.set(None);
-            match login(&u, &n, &p).await {
+            let result = match selected {
+                Mode::Xtream => login(&u, &n, &p).await,
+                Mode::Playlist => add_playlist(&u).await,
+            };
+            match result {
                 Ok(c) => {
-                    playlist.set(label);
+                    playlist.set(if label.is_empty() && selected == Mode::Playlist {
+                        "Playlist".into()
+                    } else {
+                        label
+                    });
                     session.set(Some(c));
                 }
                 Err(e) => status.set(Some(explain(&e))),
@@ -643,18 +720,35 @@ fn Login() -> Element {
             form { class: "login",
                 onsubmit: move |e| {
                     e.prevent_default();
-                    connect((url(), user(), pass(), alias().trim().to_string()));
+                    let selected = mode();
+                    let url = if selected == Mode::Xtream { server_url() } else { playlist_url() };
+                    connect((selected, url, user(), pass(), alias().trim().to_string()));
                 },
                 div { class: "brand", RustMark {} span { "RIPTV" } }
-                h1 { "Sign in" }
-                input { aria_label: "Server URL", placeholder: "Server URL", value: "{url}", oninput: move |e| url.set(e.value()) }
-                input { aria_label: "Username", autocomplete: "username", placeholder: "Username", value: "{user}", oninput: move |e| user.set(e.value()) }
-                input { r#type: "password", aria_label: "Password", autocomplete: "current-password", placeholder: "Password", value: "{pass}", oninput: move |e| pass.set(e.value()) }
-                input { aria_label: "Account name", placeholder: "Account name (optional)", value: "{alias}", oninput: move |e| alias.set(e.value()) }
+                h1 { if mode() == Mode::Xtream { "Sign in" } else { "Add playlist" } }
+                div { class: "login-modes", aria_label: "Source type",
+                    button { r#type: "button", disabled: busy(), class: if mode() == Mode::Xtream { "on" } else { "" }, onclick: move |_| mode.set(Mode::Xtream), "Xtream" }
+                    button { r#type: "button", disabled: busy(), class: if mode() == Mode::Playlist { "on" } else { "" }, onclick: move |_| mode.set(Mode::Playlist), "M3U / M3U8" }
+                }
+                if mode() == Mode::Xtream {
+                    input { aria_label: "Server URL", placeholder: "Server URL", value: "{server_url}", oninput: move |e| server_url.set(e.value()) }
+                    input { aria_label: "Username", autocomplete: "username", placeholder: "Username", value: "{user}", oninput: move |e| user.set(e.value()) }
+                    input { r#type: "password", aria_label: "Password", autocomplete: "current-password", placeholder: "Password", value: "{pass}", oninput: move |e| pass.set(e.value()) }
+                } else {
+                    input { aria_label: "Playlist URL", placeholder: "Playlist URL", value: "{playlist_url}", oninput: move |e| playlist_url.set(e.value()) }
+                }
+                input { aria_label: "Playlist name", placeholder: "Name (optional)", value: "{alias}", oninput: move |e| alias.set(e.value()) }
                 button { r#type: "submit", disabled: busy(), if busy() { "Connecting…" } else { "Connect" } }
-                button { r#type: "button", class: "ghost",
-                    onclick: move |_| connect(("http://127.0.0.1:8081".into(), "demo".into(), "demo".into(), "Demo".into())),
-                    "Try the demo"
+                if mode() == Mode::Xtream {
+                    button { r#type: "button", class: "ghost", disabled: busy(),
+                        onclick: move |_| connect((Mode::Xtream, "http://127.0.0.1:8081".into(), "demo".into(), "demo".into(), "Demo".into())),
+                        "Try the demo"
+                    }
+                } else {
+                    button { r#type: "button", class: "ghost", disabled: busy(),
+                        onclick: move |_| connect((Mode::Playlist, "https://iptv-org.github.io/iptv/categories/public.m3u".into(), String::new(), String::new(), "Public TV".into())),
+                        "Try free channels"
+                    }
                 }
                 if let Some(msg) = status() { p { class: "err", "{msg}" } }
             }
@@ -747,44 +841,37 @@ impl Library {
     /// Positions in the list, in the order `sort` asks for. The list itself stays as the provider
     /// sent it; sorting 30,000 titles by name takes a few milliseconds, once per change of sort.
     fn order(&self, sort: Sort) -> Vec<u32> {
-        // What each kind of list sorts by, pulled out once so the sorting below isn't repeated
-        // (and compiled) for every kind of list.
-        let (names, dates, ratings): (Vec<&str>, Vec<Option<u64>>, Vec<u32>) = match &self.items {
-            Items::Live(v) => (
-                v.iter().map(|s| s.name.as_str()).collect(),
-                vec![None; v.len()],
-                vec![0; v.len()],
-            ),
-            Items::Movies(v) => (
-                v.iter().map(|s| s.name.as_str()).collect(),
-                v.iter().map(|s| s.added).collect(),
-                v.iter().map(|s| tenths(&s.rating)).collect(),
-            ),
-            Items::Series(v) => (
-                v.iter().map(|s| s.name.as_str()).collect(),
-                v.iter().map(|s| s.last_modified).collect(),
-                v.iter().map(|s| tenths(&s.rating)).collect(),
-            ),
+        // Build only the index plus the cached keys for the requested sort. The previous code
+        // allocated three full-length arrays even for provider order and alphabetical sorts.
+        let mut order: Vec<u32> = (0..self.len() as u32).collect();
+        let name = |i: u32| match &self.items {
+            Items::Live(v) => v[i as usize].name.as_str(),
+            Items::Movies(v) => v[i as usize].name.as_str(),
+            Items::Series(v) => v[i as usize].name.as_str(),
         };
-        let mut order: Vec<u32> = (0..names.len() as u32).collect();
         // Every numeric sort is "smallest key first"; titles with no date go last either way.
         let number = |i: u32| -> u64 {
             let i = i as usize;
+            let (date, rating) = match &self.items {
+                Items::Live(_) => (None, 0),
+                Items::Movies(v) => (v[i].added, tenths(&v[i].rating)),
+                Items::Series(v) => (v[i].last_modified, tenths(&v[i].rating)),
+            };
             match sort {
-                Sort::Newest => dates[i].map_or(u64::MAX, |d| u64::MAX - d),
-                Sort::Oldest => dates[i].unwrap_or(u64::MAX),
-                _ => u64::from(u32::MAX - ratings[i]),
+                Sort::Newest => date.map_or(u64::MAX, |d| u64::MAX - d),
+                Sort::Oldest => date.unwrap_or(u64::MAX),
+                _ => u64::from(u32::MAX - rating),
             }
         };
         match sort {
             Sort::Provider => {}
             Sort::AZ | Sort::ZA => {
-                order.sort_by_cached_key(|&i| names[i as usize].to_lowercase());
+                order.sort_by_cached_key(|&i| name(i).to_lowercase());
                 if sort == Sort::ZA {
                     order.reverse();
                 }
             }
-            _ => order.sort_by_key(|&i| number(i)),
+            _ => order.sort_by_cached_key(|&i| number(i)),
         }
         order
     }
@@ -837,19 +924,24 @@ fn rows(
 ) -> (Vec<Row>, usize) {
     fn take<T>(
         (list, order): (&[T], &[u32]),
-        (cat, q, limit): (Option<u64>, &str, usize),
+        (cat, q, limit, total_hint): (Option<u64>, &str, usize, Option<usize>),
         info: impl Fn(&T) -> (&str, Option<u64>),
         row: impl Fn(&T) -> Row,
     ) -> (Vec<Row>, usize) {
         let mut hits = order.iter().map(|&i| &list[i as usize]).filter(|t| {
             let (title, category) = info(t);
-            (cat.is_none() || category == cat) && (q.is_empty() || title.to_lowercase().contains(q))
+            (cat.is_none() || category == cat) && xtream::contains_lowercase(title, q)
         });
         let shown: Vec<Row> = hits.by_ref().take(limit).map(&row).collect();
-        let total = shown.len() + hits.count();
+        let total = total_hint.unwrap_or_else(|| shown.len() + hits.count());
         (shown, total)
     }
-    let filter = (cat, q, limit);
+    // Category totals are already counted on load. Avoid scanning thousands of remaining items
+    // every render when the viewer isn't searching.
+    let total_hint = q
+        .is_empty()
+        .then(|| cat.map_or(lib.len(), |id| lib.counts.get(&id).copied().unwrap_or(0)));
+    let filter = (cat, q, limit, total_hint);
     match &lib.items {
         Items::Live(v) => take(
             (v, order),
@@ -1021,7 +1113,7 @@ fn Browse() -> Element {
                         onclick: move |_| select(None),
                         span { "All" } small { "{thousands(total)}" }
                     }
-                    for c in list.iter().filter(|c| q.is_empty() || c.category_name.to_lowercase().contains(&q)) {
+                    for c in list.iter().filter(|c| q.is_empty() || xtream::contains_lowercase(&c.category_name, &q)) {
                         button {
                             key: "{c.category_id}",
                             class: if category() == Some(c.category_id) { "cat on" } else { "cat" },
@@ -1196,15 +1288,16 @@ fn Browse() -> Element {
     let account_name = playlist();
     let initial = account_name.chars().next();
     rsx! {
-        header { class: "topbar",
-            div { class: "brand", RustMark {} span { "RIPTV" } }
-            label { class: "search",
-                Icon { d: SEARCH }
-                input {
-                    aria_label: "Search this section",
-                    placeholder: "Search {page_name}",
-                    value: "{search}",
-                    oninput: move |e| { search.set(e.value()); limit.set(SHOW); }
+        header { class: if open().is_some() { "topbar detail-mode" } else { "topbar" },
+            if open().is_none() {
+                label { class: "search",
+                    Icon { d: SEARCH }
+                    input {
+                        aria_label: "Search this section",
+                        placeholder: "Search {page_name}",
+                        value: "{search}",
+                        oninput: move |e| { search.set(e.value()); limit.set(SHOW); }
+                    }
                 }
             }
             span { class: "grow" }
@@ -1257,10 +1350,12 @@ fn Browse() -> Element {
         }
         nav { class: "rail", aria_label: "Library",
             button { class: tab(Kind::Live), title: "Live TV", onclick: move |_| pick_kind(Kind::Live), Icon { d: LIVE_TV } span { "Live TV" } }
-            button { class: tab(Kind::Movies), title: "Movies", onclick: move |_| pick_kind(Kind::Movies), Icon { d: MOVIE } span { "Movies" } }
-            button { class: tab(Kind::Series), title: "Series", onclick: move |_| pick_kind(Kind::Series), Icon { d: SERIES } span { "Series" } }
+            if !client.is_playlist() {
+                button { class: tab(Kind::Movies), title: "Movies", onclick: move |_| pick_kind(Kind::Movies), Icon { d: MOVIE } span { "Movies" } }
+                button { class: tab(Kind::Series), title: "Series", onclick: move |_| pick_kind(Kind::Series), Icon { d: SERIES } span { "Series" } }
+            }
         }
-        main { class: "workspace",
+        main { class: if open().is_some() { "workspace detail-open" } else { "workspace" },
             aside { class: "sidebar", {cat_list()} }
             div { class: "content",
                 if three_pane {
@@ -1340,7 +1435,7 @@ fn ChannelRow(row: Row, active: bool, onpick: EventHandler<Row>) -> Element {
             onclick: move |_| onpick.call(r.clone()),
             span { class: "logo",
                 if let Some(src) = row.icon.as_deref().filter(|s| s.starts_with("http")) {
-                    img { src: "{src}", loading: "lazy" }
+                    img { src: "{src}", loading: "lazy", decoding: "async" }
                 } else { "TV" }
             }
             div {
@@ -1367,7 +1462,7 @@ fn Card(row: Row, onpick: EventHandler<Row>) -> Element {
             onclick: move |_| onpick.call(r.clone()),
             span { class: "art",
                 if let Some(src) = row.icon.as_deref().filter(|s| s.starts_with("http")) {
-                    img { src: "{src}", loading: "lazy" }
+                    img { src: "{xtream::sized_art(src, xtream::Art::Thumb)}", loading: "lazy", decoding: "async" }
                 } else { "{fallback}" }
                 if let Some(s) = &row.score { span { class: "score", "{s}" } }
             }
@@ -1387,7 +1482,6 @@ struct Play {
     /// What a download is called.
     file: String,
     url: String,
-    backdrop: Option<String>,
 }
 
 /// What a key press asks the player's page to do, from outside Dioxus (see `Watch`).
@@ -1403,8 +1497,8 @@ enum Act {
 enum Engine {
     /// The browser plays the file itself.
     Native,
-    /// rffmpeg reads the file and decodes its sound in Rust.
-    Rust(Rc<rffmpeg::vod::Movie>, xtream::Url),
+    /// rstreamkit reads the file and decodes its sound in Rust.
+    Rust(Rc<rstreamkit::vod::Movie>, xtream::Url),
     /// The proxy's ffmpeg converts it; the text says what needed that.
     Converted(xtream::Converted, String),
     Failed(String),
@@ -1414,14 +1508,16 @@ async fn choose(c: &Client, url: &str) -> Engine {
     let Ok(media) = xtream::Url::parse(url) else {
         return Engine::Failed("that address is not valid".into());
     };
+    let media = c.upstream(&media);
     // A file we can't read is left to the browser, which will say if it can't play it either.
-    let Ok(movie) = rffmpeg::mse::probe(&media).await else {
+    let Ok(movie) = rstreamkit::mse::probe(&Proxied(c.clone()), media.as_str()).await else {
         return Engine::Native;
     };
-    match movie.verdict(&rffmpeg::mse::can_play) {
+    match movie.verdict(&rstreamkit::mse::can_play) {
         Verdict::Native => Engine::Native,
         Verdict::Rust => Engine::Rust(movie, media),
-        Verdict::Convert(why) => convert(c, &media, why).await,
+        Verdict::Unsupported(why) => convert(c, &media, why.to_string()).await,
+        _ => Engine::Failed("unsupported movie format".into()),
     }
 }
 
@@ -1557,23 +1653,6 @@ fn people(list: &str) -> Vec<&str> {
         .collect()
 }
 
-fn initials(name: &str) -> String {
-    name.split_whitespace()
-        .filter_map(|w| w.chars().next())
-        .take(2)
-        .collect::<String>()
-        .to_uppercase()
-}
-
-/// A colour of its own for each name, so the faces in a row look different.
-fn face_color(name: &str) -> String {
-    let hue = name
-        .bytes()
-        .fold(7_u32, |h, b| h.wrapping_mul(31).wrapping_add(u32::from(b)))
-        % 360;
-    format!("background:hsl({hue} 32% 30%)")
-}
-
 /// The id in a YouTube address or a bare id.
 fn youtube_id(text: &str) -> Option<String> {
     let ok = |s: &str| {
@@ -1634,20 +1713,9 @@ fn Watch(
     let mut menu = use_signal(|| false);
     let mut resumed = use_signal(move || (resume > 0.0).then_some(resume as u64));
     let mut up_next = use_signal(|| None::<u32>);
-    let mut active = use_signal(|| true);
-    let mut activity = use_signal(|| 0_u32);
-    let mut wake = move || {
-        activity += 1;
-        active.set(true);
-        let mine = activity();
-        spawn(async move {
-            rffmpeg::mse::sleep(Duration::from_millis(2800)).await;
-            if activity() == mine {
-                active.set(false);
-            }
-        });
-    };
-    let handle = use_hook(|| Rc::new(RefCell::new(None::<rffmpeg::mse::Player>)));
+    let active = use_signal(|| true);
+    let idle = use_hook(|| IdleHide::new(active, 2800.0));
+    let handle = use_hook(|| Rc::new(RefCell::new(None::<rstreamkit::mse::Player>)));
     let saved = use_hook(|| Rc::new(Cell::new(resume)));
 
     // Decide what plays it, before any of it plays.
@@ -1658,7 +1726,7 @@ fn Watch(
     });
     // The hint about resuming fades on its own.
     use_future(move || async move {
-        rffmpeg::mse::sleep(Duration::from_secs(7)).await;
+        rstreamkit::mse::sleep(Duration::from_secs(7)).await;
         resumed.set(None);
     });
 
@@ -1671,18 +1739,25 @@ fn Watch(
         };
         let Some(video) = watch_video() else { return };
         let (c, url) = (c.clone(), url.clone());
-        *handle.borrow_mut() = Some(rffmpeg::mse::play_movie(
+        *handle.borrow_mut() = Some(rstreamkit::mse::play_movie(
             video,
             movie,
-            media,
+            media.to_string(),
+            Proxied(c.clone()),
             *pos.peek(),
             move |s| match s {
-                rffmpeg::mse::Status::Playing => waiting.set(false),
-                rffmpeg::mse::Status::NeedsConversion(why) => {
-                    switch_to_convert(c.clone(), url.clone(), why, *pos.peek(), engine, start)
-                }
-                rffmpeg::mse::Status::Failed(e) => engine.set(Some(Engine::Failed(e))),
-                rffmpeg::mse::Status::Note(_) | rffmpeg::mse::Status::Ended => {}
+                rstreamkit::mse::Status::Playing => waiting.set(false),
+                rstreamkit::mse::Status::Unsupported(why) => switch_to_convert(
+                    c.clone(),
+                    url.clone(),
+                    why.to_string(),
+                    *pos.peek(),
+                    engine,
+                    start,
+                ),
+                rstreamkit::mse::Status::Failed(e) => engine.set(Some(Engine::Failed(e))),
+                rstreamkit::mse::Status::Note(_) | rstreamkit::mse::Status::Ended => {}
+                _ => {}
             },
         ));
     });
@@ -1751,19 +1826,7 @@ fn Watch(
             }
         }
     });
-    let mut poke = move || {
-        activity += 1;
-        active.set(true);
-        let mine = activity();
-        wasm_bindgen_futures::spawn_local(async move {
-            rffmpeg::mse::sleep(Duration::from_millis(2800)).await;
-            // The player may be gone by now, and its signals with it.
-            let current = activity.try_peek().map(|a| *a == mine).unwrap_or(false);
-            if current {
-                active.set(false);
-            }
-        });
-    };
+    let key_idle = idle.clone();
     let listener = use_hook(|| {
         Rc::new(RefCell::new(
             None::<Closure<dyn FnMut(web_sys::KeyboardEvent)>>,
@@ -1774,6 +1837,7 @@ fn Watch(
         let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
             return;
         };
+        let key_idle = key_idle.clone();
         let on_key =
             Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
                 if e.ctrl_key() || e.meta_key() || e.alt_key() {
@@ -1785,8 +1849,8 @@ fn Watch(
                 let (now, level) = (pos(), volume());
                 match key.as_str() {
                     " " | "k" => toggle_watch(),
-                    "arrowleft" | "j" => seek_to(now - 10.0),
-                    "arrowright" | "l" => seek_to(now + 10.0),
+                    "arrowleft" | "j" => seek_to(now - 15.0),
+                    "arrowright" | "l" => seek_to(now + 15.0),
                     "arrowup" => set_level((level + 10).min(100)),
                     "arrowdown" => set_level(level.saturating_sub(10)),
                     "m" => {
@@ -1800,7 +1864,7 @@ fn Watch(
                     _ => return,
                 }
                 e.prevent_default();
-                poke();
+                key_idle.wake();
             });
         let _ = doc.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref());
         *installed.borrow_mut() = Some(on_key);
@@ -1863,7 +1927,7 @@ fn Watch(
             class: "{class}",
             id: "watch",
             tabindex: "0",
-            onmousemove: move |_| wake(),
+            onmousemove: move |_| idle.wake(),
             ondoubleclick: move |_| fullscreen_watch(),
             if !engine_now {
                 if let Some(Engine::Failed(why)) = engine() {
@@ -1873,9 +1937,10 @@ fn Watch(
                     }
                 } else {
                     div { class: "w-load",
-                        if let Some(art) = play.backdrop.as_deref().filter(|s| s.starts_with("http")) { img { src: "{art}" } }
                         i { class: "spinner" }
-                        "Getting it ready…"
+                        strong { "{play.title}" }
+                        if let Some(sub) = &play.subtitle { small { "{sub}" } }
+                        span { "Starting playback…" }
                     }
                 }
             } else {
@@ -1883,6 +1948,7 @@ fn Watch(
                     key: "{kind}:{src.as_deref().unwrap_or_default()}",
                     id: "watch-video",
                     autoplay: true,
+                    playsinline: true,
                     src: src,
                     onclick: move |_| { menu.set(false); toggle_watch(); },
                     onplay: move |_| paused.set(false),
@@ -1954,7 +2020,7 @@ fn Watch(
                                         onnext.call(());
                                         break;
                                     }
-                                    rffmpeg::mse::sleep(Duration::from_secs(1)).await;
+                                    rstreamkit::mse::sleep(Duration::from_secs(1)).await;
                                     if up_next().is_some() { up_next.set(Some(n - 1)); }
                                 }
                             });
@@ -1969,10 +2035,14 @@ fn Watch(
             div { class: "w-top",
                 div { button { class: "icon-btn", aria_label: "Back", title: "Back (Esc)", onclick: move |_| onclose.call(()), Icon { d: BACK } } }
                 div { class: "w-title",
-                    strong { "{play.title}" }
-                    if let Some(sub) = &play.subtitle { small { "{sub}" } }
+                    if engine_now {
+                        strong { "{play.title}" }
+                        if let Some(sub) = &play.subtitle { small { "{sub}" } }
+                    }
                 }
-                div { class: "end", Download { title: play.file.clone(), url: native_url } }
+                div { class: "end",
+                    if engine_now { Download { title: play.file.clone(), url: native_url } }
+                }
             }
             if engine_now {
                 if menu() {
@@ -2035,8 +2105,8 @@ fn Watch(
                         button { class: "ctl", aria_label: "Play or pause", title: "Play or pause (Space)", onclick: move |_| toggle_watch(),
                             Icon { d: if paused() { PLAY } else { PAUSE } }
                         }
-                        button { class: "ctl", aria_label: "Back 10 seconds", title: "Back 10 seconds (←)", onclick: move |_| seek_to(pos() - 10.0), Skip { back: true } }
-                        button { class: "ctl", aria_label: "Forward 10 seconds", title: "Forward 10 seconds (→)", onclick: move |_| seek_to(pos() + 10.0), Skip { back: false } }
+                        button { class: "ctl skip", aria_label: "Back 15 seconds", title: "Back 15 seconds (←)", onclick: move |_| seek_to(pos() - 15.0), Skip { back: true } }
+                        button { class: "ctl skip", aria_label: "Forward 15 seconds", title: "Forward 15 seconds (→)", onclick: move |_| seek_to(pos() + 15.0), Skip { back: false } }
                         div { class: "volume",
                             button {
                                 class: "ctl",
@@ -2077,23 +2147,6 @@ fn Watch(
     }
 }
 
-/// The skip-ten-seconds arrow.
-#[component]
-fn Skip(back: bool) -> Element {
-    rsx! {
-        svg {
-            view_box: "0 0 24 24",
-            fill: "none",
-            stroke: "currentColor",
-            stroke_width: "2",
-            stroke_linecap: "round",
-            stroke_linejoin: "round",
-            path { d: if back { "M4 11a8 8 0 103-6.2M4 4v5h5" } else { "M20 11a8 8 0 11-3-6.2M20 4v5h-5" } }
-            text { x: "12", y: "16", text_anchor: "middle", font_size: "7.5", font_weight: "700", fill: "currentColor", stroke: "none", "10" }
-        }
-    }
-}
-
 /// The page for one movie or series: backdrop, title, facts, cast, trailer, and Play or the episodes.
 #[component]
 fn DetailPage(
@@ -2105,6 +2158,8 @@ fn DetailPage(
     let client = use_hook(|| session.read().clone().expect("logged in"));
     let mut expanded = use_signal(|| false);
     let mut chosen = use_signal(|| None::<u64>);
+    let mut backdrop_failed = use_signal(|| false);
+    let mut poster_failed = use_signal(|| false);
     let (c, target) = (client.clone(), row.target.clone());
     let info = use_resource(move || {
         let (c, target) = (c.clone(), target.clone());
@@ -2129,7 +2184,12 @@ fn DetailPage(
     };
     let poster = details.poster.clone().or_else(|| row.icon.clone());
     let real_backdrop = details.backdrop.clone();
-    let backdrop = real_backdrop.clone().or_else(|| poster.clone());
+    let backdrop_src = real_backdrop
+        .as_deref()
+        .filter(|src| src.starts_with("http") && !backdrop_failed());
+    let poster_src = poster
+        .as_deref()
+        .filter(|src| src.starts_with("http") && !poster_failed());
     let genres: Vec<String> = details
         .genre
         .as_deref()
@@ -2189,7 +2249,6 @@ fn DetailPage(
             subtitle: None,
             file: title.clone(),
             url: url.clone(),
-            backdrop: backdrop.clone(),
         }),
         (Target::Series(_), Some(Ok((_, seasons)))) => {
             for season in seasons {
@@ -2207,7 +2266,6 @@ fn DetailPage(
                         subtitle: Some(format!("S{} E{num} · {}", season.number, ep.title)),
                         file: format!("{title} S{}E{num}: {}", season.number, ep.title),
                         url: client.episode_url(ep.id, ext).to_string(),
-                        backdrop: ep.info.image.clone().or_else(|| backdrop.clone()),
                     });
                 }
                 spans.push((season.number, from..all.len()));
@@ -2228,10 +2286,14 @@ fn DetailPage(
 
     rsx! {
         section { class: "detail",
-            button { class: "icon-btn back", aria_label: "Back", onclick: move |_| onback.call(()), Icon { d: BACK } }
-            div { class: "d-hero",
-                if let Some(src) = backdrop.as_deref().filter(|s| s.starts_with("http")) {
-                    img { class: if real_backdrop.is_some() { "d-art" } else { "d-art soft" }, src: "{src}" }
+            div { class: "detail-return",
+                button { class: "icon-btn", aria_label: "Back", onclick: move |_| onback.call(()), Icon { d: BACK } }
+            }
+            div { class: if backdrop_src.is_none() && poster_src.is_none() { "d-hero no-art" } else { "d-hero" },
+                if let Some(src) = backdrop_src {
+                    img { class: "d-art", src: "{xtream::sized_art(src, xtream::Art::Backdrop)}", decoding: "async", fetchpriority: "high", onerror: move |_| backdrop_failed.set(true) }
+                } else if let Some(src) = poster_src {
+                    img { class: "d-poster", src: "{xtream::sized_art(src, xtream::Art::Poster)}", decoding: "async", fetchpriority: "high", onerror: move |_| poster_failed.set(true) }
                 }
                 div { class: "d-shade" }
                 div { class: "d-main",
@@ -2277,53 +2339,38 @@ fn DetailPage(
                     }
                 }
             }
-            if !cast.is_empty() {
-                div { class: "d-sec",
-                    h2 { "Cast" }
-                    div { class: "cast",
-                        for name in people(&cast) {
-                            div { class: "person", key: "{name}",
-                                div { class: "face", style: "{face_color(name)}", "{initials(name)}" }
-                                strong { "{name}" }
-                            }
-                        }
-                    }
-                }
-            }
-            if let Some(id) = &trailer {
-                div { class: "d-sec",
-                    h2 { "Trailer" }
-                    a { class: "trailer", href: "https://www.youtube.com/watch?v={id}", target: "_blank", rel: "noopener noreferrer",
-                        img { src: "https://img.youtube.com/vi/{id}/hqdefault.jpg", loading: "lazy" }
-                        span { "Watch the trailer" }
-                    }
-                }
-            }
             if !spans.is_empty() {
                 div { class: "d-sec",
-                    h2 { "Episodes" }
-                    if spans.len() > 1 {
-                        div { class: "seasons",
-                            for (number, _) in spans.iter() {
-                                button {
-                                    key: "{number}",
-                                    class: if Some(*number) == season_now { "on" } else { "" },
-                                    onclick: { let n = *number; move |_| chosen.set(Some(n)) },
-                                    "Season {number}"
+                    div { class: "ep-heading",
+                        h2 { "Episodes" }
+                        div { class: "ep-tools",
+                            span { "{spans.iter().find(|s| Some(s.0) == season_now).map_or(0, |s| s.1.len())} episodes" }
+                            if spans.len() > 1 {
+                                select {
+                                    class: "season-select",
+                                    aria_label: "Season",
+                                    value: "{season_now.unwrap_or_default()}",
+                                    onchange: move |e| {
+                                        if let Ok(n) = e.value().parse::<u64>() { chosen.set(Some(n)); }
+                                    },
+                                    for (number, _) in spans.iter() {
+                                        option { key: "{number}", value: "{number}", "Season {number}" }
+                                    }
                                 }
                             }
                         }
                     }
                     div { class: "eps",
                         if let (Some((_, range)), Some(Ok((_, seasons)))) = (spans.iter().find(|s| Some(s.0) == season_now), &*guard) {
-                            for (i, ep) in seasons.iter().flat_map(|s| s.episodes.iter()).enumerate().filter(|(i, _)| range.contains(i)) {
+                            for (i, ep) in seasons.iter().flat_map(|s| s.episodes.iter()).enumerate().skip(range.start).take(range.len()) {
                                 div { class: "epc", key: "{ep.id}",
                                     button { class: "thumb", aria_label: "Play", onclick: { let play_at = play_at.clone(); move |_| play_at(i) },
                                         if let Some(img) = ep.info.image.as_deref().filter(|s| s.starts_with("http")) {
-                                            img { src: "{img}", loading: "lazy" }
+                                            img { src: "{xtream::sized_art(img, xtream::Art::Still)}", loading: "lazy", decoding: "async" }
                                         } else { "E{ep.episode_num.unwrap_or(0)}" }
+                                        span { class: "ep-num", "E{ep.episode_num.unwrap_or((i - range.start + 1) as u64)}" }
                                         span { class: "go", Icon { d: PLAY } }
-                                        if let Some(secs) = ep.info.runtime_secs { span { class: "len", "{hms(secs)}" } }
+                                        if let Some(secs) = ep.info.runtime_secs { span { class: "len", "{runtime_label(secs)}" } }
                                     }
                                     div { class: "epc-head",
                                         div {
@@ -2339,6 +2386,27 @@ fn DetailPage(
                     }
                 }
             }
+            if !cast.is_empty() {
+                div { class: "d-sec",
+                    h2 { "Cast" }
+                    div { class: "cast",
+                        for name in people(&cast) {
+                            div { class: "person", key: "{name}",
+                                strong { "{name}" }
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(id) = &trailer {
+                div { class: "d-sec",
+                    h2 { "Trailer" }
+                    a { class: "trailer", href: "https://www.youtube.com/watch?v={id}", target: "_blank", rel: "noopener noreferrer",
+                        img { src: "https://img.youtube.com/vi/{id}/hqdefault.jpg", loading: "lazy" }
+                        span { "Watch the trailer" }
+                    }
+                }
+            }
             div { class: "d-sec" }
         }
     }
@@ -2351,7 +2419,8 @@ fn DetailPage(
 /// given up on (when the proxy can't convert it), or the proxy's ffmpeg-converted stream.
 #[derive(Clone, PartialEq)]
 enum Feed {
-    Native,
+    Direct(String),
+    Rust,
     Partial,
     Converted(String),
 }
@@ -2361,7 +2430,7 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
     let session = use_context::<Signal<Option<Client>>>();
     let rust_sound = use_context::<Signal<bool>>();
     let client = use_hook(|| session.read().clone().expect("logged in"));
-    let mut status = use_signal(|| "Connecting…".to_string());
+    let mut status = use_signal(|| "Starting playback…".to_string());
     let mut paused = use_signal(|| false);
     let mut muted = use_signal(|| false);
     let mut volume = use_signal(|| 100_u32);
@@ -2371,31 +2440,25 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
     let mut note = use_signal(|| None::<String>);
     let mut silent = use_signal(|| false);
     // The controls fade out after a moment of no mouse movement while playing.
-    let mut active = use_signal(|| true);
-    let mut activity = use_signal(|| 0_u32);
-    let mut wake = move || {
-        activity += 1;
-        active.set(true);
-        let mine = activity();
-        spawn(async move {
-            rffmpeg::mse::sleep(Duration::from_millis(2500)).await;
-            if activity() == mine {
-                active.set(false);
-            }
-        });
-    };
-    let handle = use_hook(|| Rc::new(RefCell::new(None::<rffmpeg::mse::Player>)));
+    let active = use_signal(|| true);
+    let idle = use_hook(|| IdleHide::new(active, 2500.0));
+    let handle = use_hook(|| Rc::new(RefCell::new(None::<rstreamkit::mse::Player>)));
 
-    let mut feed = use_signal(|| Feed::Native);
+    let mut feed = use_signal(|| native_hls_source(&client, &url).map_or(Feed::Rust, Feed::Direct));
     // A readout for telling a slow stream from a slow decoder: what the picture really is,
     // frames per second actually shown, frames dropped, and how much is buffered.
     let mut show_stats = use_signal(|| false);
     let mut stats = use_signal(String::new);
-    use_future(move || async move {
+    // A resource, not a future: it starts again when `show_stats` changes (a future runs once),
+    // so nothing polls while the readout is off.
+    let _stats_task = use_resource(move || async move {
+        if !show_stats() {
+            return;
+        }
         let mut last = (0_u32, js_sys::Date::now());
         loop {
-            rffmpeg::mse::sleep(Duration::from_secs(1)).await;
-            let Some(v) = video_el().filter(|_| show_stats()) else {
+            rstreamkit::mse::sleep(Duration::from_secs(1)).await;
+            let Some(v) = video_el() else {
                 continue;
             };
             let quality = v.get_video_playback_quality();
@@ -2411,7 +2474,8 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
                 .map_or(0.0, |end| (end - v.current_time()).max(0.0))
                 as u32;
             let source = match feed() {
-                Feed::Native => "Rust player",
+                Feed::Direct(_) => "native HLS",
+                Feed::Rust => "Rust player",
                 Feed::Partial => "Rust player, no sound",
                 Feed::Converted(_) => "converted by ffmpeg",
             };
@@ -2429,6 +2493,12 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
             return;
         };
         let partial = match feed() {
+            Feed::Direct(src) => {
+                handle.borrow_mut().take();
+                video.set_src(&src);
+                let _ = video.play();
+                return;
+            }
             Feed::Converted(src) => {
                 // Stop the Rust player and let the plain `<video>` play the converted stream.
                 handle.borrow_mut().take();
@@ -2438,33 +2508,36 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
                 return;
             }
             Feed::Partial => true,
-            Feed::Native => false,
+            Feed::Rust => false,
         };
         let Ok(playlist) = xtream::Url::parse(&url) else {
             status.set("Could not start the player".into());
             return;
         };
         let (c, converter, media) = (client.clone(), client.clone(), playlist.clone());
-        *handle.borrow_mut() = Some(rffmpeg::mse::start(
+        let upstream = client.upstream(&playlist);
+        *handle.borrow_mut() = Some(rstreamkit::mse::start(
             video,
-            playlist,
-            move |u| c.proxied(u),
+            upstream.to_string(),
+            Proxied(c),
             partial,
             // `peek`: changing the setting must not restart a channel that is playing.
             *rust_sound.peek(),
             move |s| match s {
-                rffmpeg::mse::Status::Playing => status.set("Live".into()),
-                rffmpeg::mse::Status::Note(n) => note.set(Some(n)),
-                rffmpeg::mse::Status::NeedsConversion(reason) => {
-                    status.set("Converting for your browser…".into());
+                rstreamkit::mse::Status::Playing => status.set("Live".into()),
+                rstreamkit::mse::Status::Note(n) => note.set(Some(n)),
+                rstreamkit::mse::Status::Unsupported(reason) => {
+                    // Keep one neutral loading state across the Rust → ffmpeg handoff.
+                    status.set("Starting playback…".into());
                     let (converter, media) = (converter.clone(), media.clone());
+                    let sound_only = matches!(reason, Unsupported::Sound(_));
                     // Not Dioxus's `spawn`: this callback runs outside its runtime.
                     wasm_bindgen_futures::spawn_local(async move {
                         match converter.convert(&media).await {
                             Ok(converted) => feed.set(Feed::Converted(converted.at(0).to_string())),
                             // No ffmpeg (or it can't read the stream): a sound problem still
                             // plays, without sound, and says why; anything else can't play.
-                            Err(e) if reason.contains("sound") => {
+                            Err(e) if sound_only => {
                                 note.set(Some(format!("{reason} ({e})")));
                                 feed.set(Feed::Partial);
                             }
@@ -2474,13 +2547,20 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
                         }
                     });
                 }
-                rffmpeg::mse::Status::Ended => status.set("Stream ended".into()),
-                rffmpeg::mse::Status::Failed(e) => status.set(format!("Playback failed: {e}")),
+                rstreamkit::mse::Status::Ended => status.set("Stream ended".into()),
+                rstreamkit::mse::Status::Failed(e) => status.set(format!("Playback failed: {e}")),
+                _ => {}
             },
         ));
     });
 
     // Space, F and M. A plain browser listener: Dioxus's own keyboard events add ~26 KB of wasm.
+    // The closure is kept here, so it is freed with the player (the element it listens on goes too).
+    let keys = use_hook(|| {
+        Rc::new(RefCell::new(
+            None::<Closure<dyn FnMut(web_sys::KeyboardEvent)>>,
+        ))
+    });
     use_effect(move || {
         let player = web_sys::window()
             .and_then(|w| w.document())
@@ -2501,8 +2581,7 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
                 }
             });
         let _ = player.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref());
-        // ponytail: leaks one small closure per channel opened; the element it listens on goes away.
-        on_key.forget();
+        *keys.borrow_mut() = Some(on_key);
     });
 
     let class = format!(
@@ -2517,22 +2596,26 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
                 class: "{class}",
                 id: "live-player",
                 tabindex: "0",
-                onmousemove: move |_| wake(),
+                onmousemove: move |_| idle.wake(),
                 video {
                     id: "live-video",
                     autoplay: true,
+                    playsinline: true,
                     onplay: move |_| paused.set(false),
                     onpause: move |_| paused.set(true),
                     onwaiting: move |_| buffering.set(true),
                     onplaying: move |_| {
                         buffering.set(false);
                         paused.set(false);
-                        if matches!(feed(), Feed::Converted(_)) {
+                        if matches!(feed(), Feed::Direct(_) | Feed::Converted(_)) {
                             status.set("Live".into());
                         }
                     },
                     onerror: move |_| {
-                        if matches!(feed(), Feed::Converted(_)) {
+                        if matches!(feed(), Feed::Direct(_)) {
+                            status.set("Starting playback…".into());
+                            feed.set(Feed::Rust);
+                        } else if matches!(feed(), Feed::Converted(_)) {
                             status.set("The converted stream stopped: the source may have ended".into());
                         }
                     },
@@ -2562,7 +2645,14 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
                 } else if silent() {
                     div { class: "sound-note", "No sound: this stream's audio format can't be decoded by your browser" }
                 }
-                if status() != "Live" { div { class: "hud", span { "{status}" } } }
+                if status() != "Live" {
+                    div { class: "hud",
+                        div { class: "loading-group",
+                            if status() == "Starting playback…" { i { class: "spinner" } }
+                            span { "{status}" }
+                        }
+                    }
+                }
                 if buffering() && !paused() && status() == "Live" { div { class: "hud", i { class: "spinner" } } }
                 if paused() {
                     button { class: "bigplay", aria_label: "Play", onclick: move |_| toggle_play(), Icon { d: PLAY } }
@@ -2617,7 +2707,7 @@ fn Guide(id: u64, title: String) -> Element {
     let mut tick = use_signal(|| 0_u32);
     use_future(move || async move {
         loop {
-            rffmpeg::mse::sleep(Duration::from_secs(30)).await;
+            rstreamkit::mse::sleep(Duration::from_secs(30)).await;
             tick += 1;
         }
     });
@@ -2635,7 +2725,7 @@ fn Guide(id: u64, title: String) -> Element {
     use_effect(move || {
         if table.read().is_some() {
             spawn(async move {
-                rffmpeg::mse::sleep(Duration::from_millis(60)).await;
+                rstreamkit::mse::sleep(Duration::from_millis(60)).await;
                 let timeline = web_sys::window()
                     .and_then(|w| w.document())
                     .and_then(|d| d.get_element_by_id("timeline"));

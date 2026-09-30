@@ -20,6 +20,98 @@ use serde_json::{Value, json};
 
 static STARTED: OnceLock<Instant> = OnceLock::new();
 
+/// `MOCK_TITLES=30000` adds that many synthetic channels, movies and (a fifth as many) series to
+/// every list, spread over dozens of categories: the size of a big provider's catalogue, for trying
+/// how the app copes with one.
+fn titles() -> usize {
+    static N: OnceLock<usize> = OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("MOCK_TITLES")
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(0)
+    })
+}
+
+/// A made-up title (mixed case, accents, digits, like real catalogues) for the n-th item.
+fn port() -> u16 {
+    std::env::var("MOCK_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8081)
+}
+
+/// Synthetic titles all share one tiny local picture, so a big catalogue makes no outside requests.
+fn poster_url() -> String {
+    format!("http://127.0.0.1:{}/poster.svg", port())
+}
+
+fn synthetic_name(n: usize) -> String {
+    const A: [&str; 16] = [
+        "The",
+        "Última",
+        "Crimson",
+        "Éternel",
+        "Night",
+        "La",
+        "Silent",
+        "Wild",
+        "Mohamed's",
+        "Golden",
+        "Broken",
+        "Hidden",
+        "Electric",
+        "Último",
+        "Paper",
+        "Midnight",
+    ];
+    const B: [&str; 16] = [
+        "River", "Empire", "Voyage", "Garden", "Secret", "Horizon", "Legacy", "Storm", "Ciudad",
+        "Promise", "Machine", "Kingdom", "Letters", "Harvest", "Signal", "Orchard",
+    ];
+    let h = (n as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let (a, b) = (A[(h >> 8) as usize % 16], B[(h >> 20) as usize % 16]);
+    format!("{a} {b} {}", 1900 + (h >> 33) % 125)
+}
+
+fn synthetic_list(kind: &str, poster: &str) -> Vec<Value> {
+    let n = titles();
+    let (count, categories) = match kind {
+        "live" => (n, 60),
+        "vod" => (n, 40),
+        _ => (n / 5, 20),
+    };
+    (0..count)
+        .map(|i| {
+            let id = 1000 + i;
+            let name = synthetic_name(i);
+            let category = (i * 7 % categories + 1).to_string();
+            let added = (1_600_000_000 + i as u64 * 3_601 % 190_000_000).to_string();
+            let rating = format!("{}.{}", i % 10, i * 3 % 10);
+            match kind {
+                "live" => json!({"stream_id": id, "name": name, "category_id": category,
+                                 "stream_icon": poster, "epg_channel_id": format!("ch{i}")}),
+                "vod" => json!({"stream_id": id, "name": name, "container_extension": "mkv",
+                                "rating": rating, "category_id": category, "added": added,
+                                "stream_icon": poster}),
+                _ => json!({"series_id": id, "name": name, "category_id": category, "cover": poster,
+                            "plot": "A synthetic series.", "rating": rating, "last_modified": added}),
+            }
+        })
+        .collect()
+}
+
+fn synthetic_categories(kind: &str) -> Vec<Value> {
+    let categories = match kind {
+        "live" => 60,
+        "vod" => 40,
+        _ => 20,
+    };
+    (1..=categories)
+        .map(|c| json!({"category_id": c.to_string(), "category_name": format!("{} category {c}", kind)}))
+        .collect()
+}
+
 /// A file of your own to try (`MOCK_MOVIE=/path/film.mkv`), listed as movie 6: a real film, with
 /// whatever sound and index it really has, is the best test of the player's seeking.
 static OWN: OnceLock<Option<(&'static [u8], &'static str)>> = OnceLock::new();
@@ -198,6 +290,7 @@ fn vod_streams() -> Value {
         json!({"stream_id": 5, "name": "DTS sound (needs ffmpeg)", "container_extension": "mkv",
                "rating": "4.0", "category_id": "10", "added": "1775000000"}),
     ];
+    movies.extend(synthetic_list("vod", &poster_url()));
     if own().is_some() {
         movies.push(json!({"stream_id": 6, "name": "Your own file (MOCK_MOVIE)",
                            "container_extension": "mkv", "rating": "9.0", "category_id": "10",
@@ -219,17 +312,29 @@ async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
             "server_info": {"url": "127.0.0.1"}
         }),
         Some("get_live_categories") => {
-            json!([{"category_id": "1", "category_name": "Test Channels"}])
+            let mut all = vec![json!({"category_id": "1", "category_name": "Test Channels"})];
+            if titles() > 0 {
+                all.extend(synthetic_categories("live"));
+            }
+            Value::Array(all)
         }
-        Some("get_live_streams") => json!([
-            {"stream_id": 1, "name": "Big Buck Bunny (HLS via redirect)", "category_id": "1"},
-            {"stream_id": 2, "name": "Simulated live (sliding window)", "category_id": "1"},
-            {"stream_id": 3, "name": "Anamorphic PAL (720x576, 64:45)", "category_id": "1"},
-            {"stream_id": 4, "name": "HEVC video + AC-3 sound (needs conversion)", "category_id": "1"},
-            {"stream_id": 5, "name": "H.264 video + AC-3 sound", "category_id": "1"}
-        ]),
+        Some("get_live_streams") => {
+            let mut all = vec![
+                json!({"stream_id": 1, "name": "Big Buck Bunny (HLS via redirect)", "category_id": "1"}),
+                json!({"stream_id": 2, "name": "Simulated live (sliding window)", "category_id": "1"}),
+                json!({"stream_id": 3, "name": "Anamorphic PAL (720x576, 64:45)", "category_id": "1"}),
+                json!({"stream_id": 4, "name": "HEVC video + AC-3 sound (needs conversion)", "category_id": "1"}),
+                json!({"stream_id": 5, "name": "H.264 video + AC-3 sound", "category_id": "1"}),
+            ];
+            all.extend(synthetic_list("live", &poster_url()));
+            Value::Array(all)
+        }
         Some("get_vod_categories") => {
-            json!([{"category_id": "10", "category_name": "Test Movies"}])
+            let mut all = vec![json!({"category_id": "10", "category_name": "Test Movies"})];
+            if titles() > 0 {
+                all.extend(synthetic_categories("vod"));
+            }
+            Value::Array(all)
         }
         Some("get_vod_streams") => vod_streams(),
         Some("get_vod_info") => {
@@ -259,12 +364,20 @@ async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
             })
         }
         Some("get_series_categories") => {
-            json!([{"category_id": "20", "category_name": "Test Series"}])
+            let mut all = vec![json!({"category_id": "20", "category_name": "Test Series"})];
+            if titles() > 0 {
+                all.extend(synthetic_categories("series"));
+            }
+            Value::Array(all)
         }
         Some("get_series") => {
-            json!([{"series_id": 1, "name": "Flower: The Series", "category_id": "20",
+            let mut all = vec![
+                json!({"series_id": 1, "name": "Flower: The Series", "category_id": "20",
                     "plot": "Two seasons of the same five seconds.", "rating": "7.5",
-                    "last_modified": "1790000000", "cover": POSTER}])
+                    "last_modified": "1790000000", "cover": POSTER}),
+            ];
+            all.extend(synthetic_list("series", &poster_url()));
+            Value::Array(all)
         }
         Some("get_series_info") => json!({
             "info": {"name": "Flower: The Series", "genre": "Drama, Nature", "releaseDate": "2021-03-01",
@@ -346,9 +459,14 @@ async fn main() {
                 },
             ),
         );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:8081")
+    let app = app.route("/poster.svg", get(|| async {
+        ([(header::CONTENT_TYPE, "image/svg+xml")],
+         r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 3"><rect width="2" height="3" fill="#3a2a33"/></svg>"##)
+    }));
+    let port = port();
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
         .await
-        .expect("bind 8081");
-    println!("mock Xtream provider on http://127.0.0.1:8081  (demo / demo)");
+        .unwrap_or_else(|_| panic!("bind {port}"));
+    println!("mock Xtream provider on http://127.0.0.1:{port}  (demo / demo)");
     axum::serve(listener, app).await.expect("serve");
 }

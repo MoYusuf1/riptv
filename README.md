@@ -1,19 +1,61 @@
 # RIPTV
 
-RIPTV is an Xtream Codes IPTV client, all Rust and small enough to ignore: the web app is about
-0.7 MB before compression, and the proxy is a 2.9 MB binary that idles at ~4 MB of RAM on two threads.
+RIPTV is a local IPTV player for Xtream Codes and M3U/M3U8 playlists, written in Rust. The current production web app is about
+1.3 MB before compression; the proxy is a small native binary.
+
+## Quick start (local app)
+
+RIPTV runs on your computer and opens in your browser; no hosting account is needed. On Linux or
+macOS, install Rust/Cargo, Git, and the WebAssembly target, then install the Dioxus CLI used by this
+project:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install dioxus-cli --version 0.7.10 --locked
+```
+
+If your Rust came from a Linux distribution instead of `rustup`, install its
+`wasm32-unknown-unknown` target package instead. You also need Git SSH access to the private
+`rstreamkit` dependency. `ffmpeg` is strongly recommended for streams your browser cannot decode.
+
+From a checkout of this repo, run:
+
+```sh
+./scripts/setup.sh
+```
+
+The script checks prerequisites, builds the web app, starts the local server, and tells you the
+address. Open **http://127.0.0.1:3000** and sign in to your IPTV provider, or choose **Try the demo**.
+Press **Ctrl+C** to stop it. After the first build, `cargo riptv` starts it again without rebuilding;
+rerun `./scripts/setup.sh` after app changes. The script does not install packages or delete your
+build files. To build without starting the server, use `./scripts/setup.sh --build-only`.
+
+## Phone and Home Screen app
+
+The web build includes an installable PWA manifest, icons, and a small service worker. On an iPhone,
+open a deployed **HTTPS** RIPTV address in Safari, then use **Share → Add to Home Screen**. The
+service worker keeps only the app's HTML shell and icons for a fallback when offline; it never
+caches IPTV lists, credentials, or video. Watching still requires a connection.
+
+For HTTPS HLS (`.m3u8`) on a browser that supports it, live TV first tries the device's native
+video player. If that provider or format fails, playback returns to the Rust HLS player and then
+the existing server-conversion fallback. MP4 movies already use native playback when supported;
+MKV and unusual codecs use the Rust or conversion paths. An iPhone cannot reach this project's
+default `127.0.0.1` server on another computer. The proxy is intentionally localhost-only; **do
+not expose it to a network by just changing its bind address**. A phone-accessible deployment
+needs HTTPS and public-hosting security work first.
 
 | Crate | What it is |
 |---|---|
-| `xtream` | API client: login, live/movie/series lists, episodes, stream URLs. Native and wasm. |
+| `xtream` | API client and M3U channel-list reader: login, live/movie/series lists, episodes, stream URLs. Native and wasm. |
 | `proxy` | Localhost pass-through proxy (browsers can't reach IPTV servers directly) that also serves the web app. |
 | `app` | Dioxus web UI, compiled to WebAssembly. |
 
-Video and sound handling is not in this repository: it is [rffmpeg](https://github.com/MoYusuf1/rffmpeg), a separate pure-Rust
+Video and sound handling is not in this repository: it is [rstreamkit](https://github.com/MoYusuf1/rstreamkit), a separate pure-Rust
 library (HLS, MPEG-TS and MP4/MKV movie files in, fMP4 out, AC-3/E-AC-3/MP2 sound decoding in Rust, and the
 MediaSource glue that plays it in a `<video>`). `app` pulls it from its private GitHub repo (cargo uses your git SSH
 access, see `.cargo/config.toml`). To work on both at once, clone it next to this folder and build with
-`--config 'patch."ssh://git@github.com/MoYusuf1/rffmpeg.git".rffmpeg.path="../rffmpeg"'`.
+`--config 'patch."ssh://git@github.com/MoYusuf1/rstreamkit.git".rstreamkit.path="../rstreamkit"'`.
 
 Everything you write is Rust. The only non-Rust file in the build output is the small JS loader that
 `wasm-bindgen` generates (browsers can't start WebAssembly without one); it is never edited by hand.
@@ -25,28 +67,35 @@ Everything you write is Rust. The only non-Rust file in the build output is the 
  ┌───────────────────────┐  /proxy   ┌───────────────────┐            ┌────────────────┐
  │ app    screens, state │ ────────▶ │ riptv             │ ─────────▶ │ IPTV provider  │
  │ ├ xtream  API client  │  ?url=…   │ serves the app,   │  public    │ and its CDNs   │
- │ └ rffmpeg live TV     │ ◀──────── │ relays the bytes  │  addresses └────────────────┘
+ │ └ rstreamkit live TV  │ ◀──────── │ relays the bytes  │  addresses └────────────────┘
  └───────────────────────┘           └───────────────────┘  public hosts only
 ```
 
 | Component | Job | Checked by |
 |---|---|---|
-| `xtream` | Speaks the Xtream Codes API and builds stream URLs, routing everything through the proxy when asked. Lists are decoded record by record straight from the response bytes: a 30,000-title list peaks at ~7 MB of heap instead of ~70 MB. | Unit tests on real-world JSON quirks |
-| `rffmpeg` | Live: playlist → MPEG-TS demux → fMP4 → the browser's MediaSource. Movies and episodes: MP4 or MKV index → byte ranges → fMP4, sound decoded on the way. Only `mse` touches the browser; the rest is plain Rust that runs and tests natively. | Real HLS segments, MP4 and MKV files, decoded by `ffmpeg` |
-| `proxy` (`riptv`) | The one native program. Serves the built app and relays requests for the app alone, to public addresses only, with `Range`, redirect checks and a strict CSP. | End-to-end tests through a real proxy |
+| `xtream` | Speaks the Xtream Codes API and builds stream URLs, routing everything through the proxy when asked. Lists are decoded record by record as the response arrives, so a 30,000-title list peaks at ~8 MB of heap (the list itself), not ~25 MB with the whole body held first, and never as a ~70 MB JSON tree. | Unit tests on real-world JSON quirks |
+| `rstreamkit` | Live: playlist → MPEG-TS demux → fMP4 → the browser's MediaSource. Movies and episodes: MP4 or MKV index → byte ranges → fMP4, sound decoded on the way. Only `mse` touches the browser; the rest is plain Rust that runs and tests natively. | Real HLS segments, MP4 and MKV files, decoded by `ffmpeg` |
+| `proxy` (`riptv`) | The one native program. Serves the built app and relays requests for the app alone, to public addresses only, with `Range`, redirect checks and a strict CSP. Compression is left to the browser: it forwards what the page can decompress, so a provider that compresses its lists sends less over the slow hop. | End-to-end tests through a real proxy |
 | `app` | Screens and state only, with no protocol or media code. | Driven in a browser |
 
-Where a change belongs: protocol quirks in `xtream`, anything about video bytes in `rffmpeg`, anything
+Where a change belongs: protocol quirks in `xtream`, anything about video bytes in `rstreamkit`, anything
 at the network boundary in `proxy`, and `app` only arranges them.
 
-## Run
+## Lean by using the browser
 
-```sh
-rm -rf target/dx && dx build --web --release -p app  # once, and after UI changes (dx never deletes old builds)
-cargo riptv                                          # then open http://127.0.0.1:3000 and sign in
-```
+The page does little that the browser already does. Posters and logos load lazily and decode off the main
+thread, and a TMDB picture is asked for at the size it is shown (a 140 px card no longer downloads and decodes
+a 600x900 poster). Off-screen cards and channel rows are skipped by the browser's own layout
+(`content-visibility`), which keeps a 4,000-card scroll about 2.5x cheaper to lay out. Fullscreen,
+picture-in-picture, HLS where the browser has it, and decompression of provider lists are the browser's.
+Nothing polls: the controls hide with one timer that only exists after activity, and the stream readout
+runs only while it is open. Searching 30,000 titles allocates nothing per title.
 
-That's all: there is no host list to keep. The proxy relays only for the app itself (not for other
+`cargo test -p xtream --release -- --ignored --nocapture parse_cost` prints what reading a big list costs.
+
+## Local operation
+
+There is no host list to keep. The proxy relays only for the app itself (not for other
 websites), and only to public addresses, so a provider, or a redirect it sends, can't point it at your
 router or other machines. A server on your own network (or this machine) works because signing in
 approves that one address. `cargo riptv` is an alias for `cargo run --release -p riptv --` (see
@@ -64,11 +113,24 @@ cargo riptv
 ```
 
 Open the page and click "Try the demo". It has movies with AC-3 sound as an MP4 and as an MKV (served
-with byte ranges, like a real provider, and played by rffmpeg), one with DTS sound that needs ffmpeg, a
+with byte ranges, like a real provider, and played by rstreamkit), one with DTS sound that needs ffmpeg, a
 two-season series whose episodes are the same two files, an HLS channel, a simulated live channel with
 a sliding playlist window, and an anamorphic PAL channel (720x576 with 64:45 pixels) that must come out
 16:9. Every channel has a generated day-long guide. `MOCK_MOVIE=/path/film.mkv cargo run -p riptv
---example mock_provider` adds your own file as a sixth movie, which is the best way to try seeking.
+--example mock_provider` adds your own file as a sixth movie, which is the best way to try seeking. `MOCK_TITLES=30000` adds that many
+channels, movies and series (and `MOCK_PORT` moves it off 8081): a big provider's catalogue, for trying how the app copes.
+
+## Add an M3U playlist
+
+On the sign-in page, choose **M3U / M3U8**, paste an HTTP(S) playlist URL, and select **Connect**.
+An IPTV `.m3u` channel list becomes Live TV categories and channels. A direct HLS `.m3u8` manifest
+becomes one live channel; its video segments are not mistaken for separate channels. Use **Try free
+channels** for a small [iptv-org public playlist](https://github.com/iptv-org/iptv/blob/master/PLAYLISTS.md)
+without entering an account. Public streams can go offline or be region-blocked.
+
+M3U mode currently covers Live TV only. Movies, series, and XMLTV guide data need separate metadata
+support, so those tabs are hidden rather than showing empty pages. Xtream sign-in and its guide are
+unchanged. Playlist URLs are used for the current session, not saved to local storage.
 
 ## Using it
 
@@ -76,25 +138,28 @@ The three sections (Live TV, Movies, Series) live on a floating rail, which beco
 bottom on a phone; there the category list turns into a **Categories** button.
 
 Live TV shows every channel as a tile grid until you pick a category; then it becomes a channel list
-next to the player, with the channel's schedule as a timeline underneath. Every list can be sorted
+next to the player, with the channel's schedule as a timeline underneath on wider screens. On a phone,
+the player stays above the channel list and the EPG is hidden to leave room for the picture. Every list can be sorted
 (newest or oldest added, A to Z, Z to A, top rated). Movies and Series are poster
 grids. Each section is loaded once, so category counts are exact and switching category is instant; the
 account menu's **Refresh** reloads it. Live channels are endless streams, so they can't be downloaded.
 
 ### Movie and series pages
 
-Opening a title gives a full-page view under the floating chrome: a big backdrop, the title and
+Opening a title gives a full-page view under the floating chrome: a big backdrop (or a lightweight
+gradient when artwork is missing), the title and
 genres, **Play** (or **Resume**), the trailer and download buttons, the year, length, age rating and
 quality, the rating, the director and the plot, and a card of facts (including when a movie would
-end if you started now). Below are the cast, the trailer and, for a series, season tabs and an
-episode grid with thumbnails, lengths and summaries. Everything shown is what the provider's panel
-knows; what it doesn't send is left out. (Panels send cast as names only, so the faces are initials.)
+end if you started now). Below are the cast, the trailer and, for a series, a season picker and a
+swipeable row of episodes with thumbnails, lengths and summaries. Tapping an episode opens the full-page
+player. Everything shown is what the provider's panel
+knows; what it doesn't send is left out. Cast is shown as names only when the provider has no actor photos.
 
 ### The player
 
 Movies and episodes play full page: back and title on top, a seek bar that shows what is buffered,
-play/pause, 10-second skips, volume, time, playback speed, picture-in-picture and fullscreen. The
-controls fade while you watch. Keys: Space or K plays and pauses, J/← and L/→ skip 10 seconds, ↑/↓
+play/pause, 15-second skips, volume, time, playback speed, picture-in-picture and fullscreen. The
+controls fade while you watch. Keys: Space or K plays and pauses, J/← and L/→ skip 15 seconds, ↑/↓
 change the volume, M mutes, F is fullscreen, N is the next episode, Esc goes back. Where you stopped
 is remembered in the browser (not sent anywhere) and offered the next time, with **Start over**; when an
 episode ends the next one is offered, and starts in a few seconds unless you cancel.
@@ -117,30 +182,30 @@ are converted only when nothing in the page can play them (HEVC, DTS and TrueHD 
 video), and that is decided before playback starts, never halfway through.
 
 **Sound in Rust (experimental)** is a switch in the account menu. On, live channels with
-AC-3, E-AC-3 or MP2 sound are decoded by rffmpeg inside the browser (5.1 is mixed down to stereo,
+AC-3, E-AC-3 or MP2 sound are decoded by rstreamkit inside the browser (5.1 is mixed down to stereo,
 played as FLAC) and skip ffmpeg. It applies to the next channel you open and is remembered. Off is
-the default: ffmpeg does it. It is checked against ffmpeg's own decoding in rffmpeg's tests, but has
-seen less real-world use, and it adds about 257 KB to the page whether it's on or not.
+the default: ffmpeg does it. It is checked against ffmpeg's own decoding in rstreamkit's tests, but has
+seen less real-world use. The decoder code is part of the current web build whether this switch is on or off.
 
 Press `I` on the live player (or the info button) for the picture size, real frame rate, dropped
 frames and buffer, which tells a slow stream from a slow decoder.
 
 ## What plays
 
-**Movies and episodes** are read by the page itself, in Rust. Before anything plays, rffmpeg looks at
+**Movies and episodes** are read by the page itself, in Rust. Before anything plays, rstreamkit looks at
 the file's index (MP4's `moov`, Matroska's tracks and cues: a few range requests) and decides:
 
 | If the file is... | it is played by... |
 |---|---|
 | something the browser plays itself (H.264 with AAC, say) | the browser, as a plain `<video>` |
-| H.264 with AC-3, E-AC-3, MP2 (or AAC where the browser can't read the container) | **rffmpeg**: the picture is copied, the sound is decoded in Rust, and both are fed to MediaSource a few seconds ahead of the playhead. Nothing is converted, nothing buffers while sound is "fixed", and a seek reads from the new place |
+| H.264 with AC-3, E-AC-3, MP2 (or AAC where the browser can't read the container) | **rstreamkit**: the picture is copied, the sound is decoded in Rust, and both are fed to MediaSource a few seconds ahead of the playhead. Nothing is converted, nothing buffers while sound is "fixed", and a seek reads from the new place |
 | HEVC, DTS, TrueHD, interlaced, or anything it can't read | the proxy's ffmpeg (above), chosen up front |
 
 Decoded sound is stereo (5.1 is mixed down) and is held uncompressed, which is a lot of memory for a
 browser that keeps only about a minute of sound in a buffer, so the page reads a few seconds at a time. A server that doesn't answer byte-range requests, or a file it can't read the
 index of, is left to the browser.
 
-**Live TV** goes through `rffmpeg`:
+**Live TV** goes through `rstreamkit`:
 HLS with MPEG-TS segments carrying **H.264 video and AAC audio**. Anything else is reported, not
 misplayed: HEVC, AES-128, fMP4 segments, continuous (non-HLS) `.ts` streams and AC-3/MP2 audio are not
 played directly, and compatibility mode covers them (AC-3 and MP2 can instead be decoded in Rust,
@@ -149,8 +214,8 @@ see above). There is no adaptive bitrate: one variant is picked up front.
 ## Test
 
 ```sh
-cargo test        # xtream and proxy (the wasm-only app is built with dx; rffmpeg has its own tests)
+cargo test        # xtream and proxy (the wasm-only app is built with dx; rstreamkit has its own tests)
 ```
 
-rffmpeg's own tests (`cargo test` in its folder) run real HLS segments through the transmuxer and have
+rstreamkit's own tests (`cargo test` in its folder) run real HLS segments through the transmuxer and have
 `ffmpeg` decode the result (skipped if `ffmpeg` isn't installed).
