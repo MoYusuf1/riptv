@@ -10,8 +10,8 @@ RIPTV is an Xtream Codes IPTV client, all Rust and small enough to ignore: the w
 | `app` | Dioxus web UI, compiled to WebAssembly. |
 
 Video and sound handling is not in this repository: it is [rffmpeg](https://github.com/MoYusuf1/rffmpeg), a separate pure-Rust
-library (HLS and MPEG-TS in, fMP4 out, AC-3/E-AC-3/MP2 sound decoded in Rust, and the MediaSource glue
-that plays it in a `<video>`). `app` pulls it from its private GitHub repo (cargo uses your git SSH
+library (HLS and MPEG-TS in, fMP4 out, optional AC-3/E-AC-3/MP2 sound decoding in Rust, and the
+MediaSource glue that plays it in a `<video>`). `app` pulls it from its private GitHub repo (cargo uses your git SSH
 access, see `.cargo/config.toml`). To work on both at once, clone it next to this folder and build with
 `--config 'patch."ssh://git@github.com/MoYusuf1/rffmpeg.git".rffmpeg.path="../rffmpeg"'`.
 
@@ -82,9 +82,8 @@ browser download through the proxy). Live channels are endless streams, so they 
 
 ## Compatibility mode (ffmpeg)
 
-Many browsers, Chrome on Linux among them, can't decode HEVC (every 4K channel), AAC-Main sound,
-interlaced video smoothly, raw MPEG-TS streams, or AC-3/MP2 sound in a movie file (on live channels
-rffmpeg decodes those itself). When a stream is one of those the
+Many browsers, Chrome on Linux among them, can't decode HEVC (every 4K channel), AC-3, MP2 or
+AAC-Main sound, interlaced video smoothly, or raw MPEG-TS streams. When a stream is one of those the
 player hands it to the proxy, which uses `ffmpeg` (if installed) to turn it into H.264 + AAC on the
 fly: the video is copied untouched when it's already fine, and only HEVC or interlaced video is
 re-encoded (NVENC if you have an NVIDIA card, otherwise x264), deinterlaced to full motion rate and
@@ -97,16 +96,22 @@ A converted movie or episode is one continuous stream with no index, which the b
 so it gets its own seek bar: picking a place restarts the conversion from that second (a moment's
 wait). Titles that play fine on their own keep the browser's own controls.
 
+**Sound in Rust (experimental)** is a switch under the account menu's Settings. On, live channels with
+AC-3, E-AC-3 or MP2 sound are decoded by rffmpeg inside the browser (5.1 is mixed down to stereo,
+played as FLAC) and skip ffmpeg. It applies to the next channel you open and is remembered. Off is
+the default: ffmpeg does it. It is checked against ffmpeg's own decoding in rffmpeg's tests, but has
+seen less real-world use, and it adds about 257 KB to the page whether it's on or not.
+
 Press `I` on the live player (or the info button) for the picture size, real frame rate, dropped
 frames and buffer, which tells a slow stream from a slow decoder.
 
 ## What plays
 
 Movies and series are plain files played by the browser. Live TV goes through `rffmpeg`:
-HLS with MPEG-TS segments carrying **H.264 video and AAC, AC-3, E-AC-3 or MP2 audio**; the last three
-are decoded in Rust (5.1 is mixed down to stereo) and played as FLAC. Anything else is reported, not
-misplayed: HEVC, AES-128, fMP4 segments and continuous (non-HLS) `.ts` streams are not supported
-(compatibility mode covers them), and other audio plays as video only with a note. There is no adaptive bitrate: one variant is picked up front.
+HLS with MPEG-TS segments carrying **H.264 video and AAC audio**. Anything else is reported, not
+misplayed: HEVC, AES-128, fMP4 segments, continuous (non-HLS) `.ts` streams and AC-3/MP2 audio are not
+played directly, and compatibility mode covers them (AC-3 and MP2 can instead be decoded in Rust,
+see above). There is no adaptive bitrate: one variant is picked up front.
 
 ## Test
 

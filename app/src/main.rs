@@ -93,6 +93,13 @@ svg{width:1.1rem;height:1.1rem}
 .sort-btn:hover{color:var(--text)}
 .sort-menu{min-width:11rem}
 .menu button.on{color:var(--accent);font-weight:600}
+.menu:has(.setting){width:17rem}
+.menu .setting{display:flex;align-items:center;justify-content:space-between;gap:.9rem;padding-left:1.4rem}
+.setting small{display:block;margin-top:.15rem;color:var(--dim);font-size:.75rem;line-height:1.35}
+.switch{flex:none;position:relative;width:2.3rem;height:1.4rem;border-radius:99px;background:var(--hair);transition:background .15s}
+.switch::after{content:"";position:absolute;top:.15rem;left:.15rem;width:1.1rem;height:1.1rem;border-radius:50%;background:#fff;transition:transform .15s}
+.setting[aria-checked=true] .switch{background:var(--fill)}
+.setting[aria-checked=true] .switch::after{transform:translateX(.9rem)}
 .menu button:has(svg){display:flex;align-items:center;justify-content:space-between}
 .channels .sort-btn span{display:none}
 .channels .sort-btn{padding:.45rem}
@@ -478,10 +485,26 @@ fn no_audio_decoded(v: &web_sys::HtmlVideoElement) -> bool {
     v.current_time() > 4.0 && !v.muted() && bytes == Some(0.0)
 }
 
+/// Browser storage key for the experimental "decode sound in Rust" setting.
+const RUST_SOUND: &str = "riptv.rust-sound";
+
+fn storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok()?
+}
+
 #[component]
 fn App() -> Element {
     let session = use_context_provider(|| Signal::new(None::<Client>));
     use_context_provider(|| Signal::new(String::new())); // the account name, if any
+    // Experimental: decode AC-3 and MP2 live sound in Rust instead of having ffmpeg convert it.
+    use_context_provider(|| {
+        Signal::new(
+            storage()
+                .and_then(|s| s.get_item(RUST_SOUND).ok().flatten())
+                .as_deref()
+                == Some("1"),
+        )
+    });
     rsx! {
         // No `document::Title`: Dioxus web sets it via eval(), which the app's CSP forbids.
         // The title comes from Dioxus.toml instead.
@@ -821,6 +844,8 @@ fn rows(
 fn Browse() -> Element {
     let mut session = use_context::<Signal<Option<Client>>>();
     let playlist = use_context::<Signal<String>>();
+    let mut rust_sound = use_context::<Signal<bool>>();
+    let mut settings_open = use_signal(|| false);
     let client = use_hook(|| {
         session
             .read()
@@ -1162,7 +1187,14 @@ fn Browse() -> Element {
                     if initial.is_some() { b { "{account_name}" } }
                 }
                 if account_open() {
-                    button { class: "scrim", aria_label: "Close menu", onclick: move |_| account_open.set(false) }
+                    button {
+                        class: "scrim",
+                        aria_label: "Close menu",
+                        onclick: move |_| {
+                            account_open.set(false);
+                            settings_open.set(false);
+                        }
+                    }
                     div { class: "menu",
                         button {
                             onclick: move |_| {
@@ -1172,6 +1204,30 @@ fn Browse() -> Element {
                                 account_open.set(false);
                             },
                             "Refresh"
+                        }
+                        button {
+                            aria_expanded: settings_open(),
+                            onclick: move |_| settings_open.set(!settings_open()),
+                            "Settings"
+                        }
+                        if settings_open() {
+                            button {
+                                class: "setting",
+                                role: "switch",
+                                aria_checked: rust_sound(),
+                                onclick: move |_| {
+                                    let on = !rust_sound();
+                                    rust_sound.set(on);
+                                    if let Some(s) = storage() {
+                                        let _ = s.set_item(RUST_SOUND, if on { "1" } else { "0" });
+                                    }
+                                },
+                                span {
+                                    "Sound in Rust"
+                                    small { "Experimental. Plays AC-3 and MP2 sound on live channels without ffmpeg. Applies to the next channel you open." }
+                                }
+                                i { class: "switch" }
+                            }
                         }
                         button { onclick: move |_| session.set(None), "Disconnect" }
                     }
@@ -1567,6 +1623,7 @@ enum Feed {
 #[component]
 fn LivePlayer(id: u64, title: String, url: String) -> Element {
     let session = use_context::<Signal<Option<Client>>>();
+    let rust_sound = use_context::<Signal<bool>>();
     let client = use_hook(|| session.read().clone().expect("logged in"));
     let mut status = use_signal(|| "Connecting…".to_string());
     let mut paused = use_signal(|| false);
@@ -1657,6 +1714,8 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
             playlist,
             move |u| c.proxied(u),
             partial,
+            // `peek`: changing the setting must not restart a channel that is playing.
+            *rust_sound.peek(),
             move |s| match s {
                 rffmpeg::mse::Status::Playing => status.set("Live".into()),
                 rffmpeg::mse::Status::Note(n) => note.set(Some(n)),
