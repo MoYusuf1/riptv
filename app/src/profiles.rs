@@ -10,39 +10,18 @@ use serde::{Deserialize, Serialize};
 use web_sys::js_sys;
 use xtream::Client;
 
-use crate::{Icon, RustMark, add_playlist, explain, login, storage};
+use crate::{Icon, add_playlist, explain, login, storage};
 
 const KEY: &str = "riptv.profiles";
 
-/// Small built-in avatar set: no image requests or avatar service.
+/// Avatar colours: a profile is its colour and its initial.
 const COLORS: [&str; 8] = [
     "#e11d48", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#3b82f6", "#8b5cf6", "#ec4899",
-];
-const AVATAR_SHAPES: [&str; 8] = [
-    "M25 35q0-8 8-8h34q8 0 8 8v31q0 8-8 8H33q-8 0-8-8zM50 27V16m-7 0h14M25 46h-7m57 0h7",
-    "M50 20c-20 0-30 16-30 32 0 20 14 30 30 30s30-10 30-30C80 36 70 20 50 20z",
-    "M24 39 19 20l19 11q12-4 24 0l19-11-5 19v26q0 13-26 17-26-4-26-17z",
-    "M50 15c-21 0-35 15-35 36v18q0 13 14 13h42q14 0 14-13V51C85 30 71 15 50 15zM15 55h-6m76 0h6",
-    "M20 27 36 13l14 14 14-14 16 14-4 34q-8 20-26 23-18-3-26-23z",
-    "M50 17c-19 0-30 15-30 34v28l12-8 9 8 9-8 9 8 9-8 12 8V51C80 32 69 17 50 17z",
-    "M17 43h66v16q0 24-33 27-33-3-33-27zM21 43l11-22 18 12 18-12 11 22",
-    "M22 33 10 48l14 7v16q0 12 26 15 26-3 26-15V55l14-7-12-15-17 5q-11-9-22 0z",
-];
-const AVATAR_DETAILS: [&str; 8] = [
-    "M37 48h2m22 0h2M39 61q11 9 22 0",
-    "M31 48q7-11 16 0-5 10-16 0zm22 0q9-11 16 0-11 10-16 0zM44 66q6 5 12 0",
-    "M36 48h2m24 0h2M46 59l4 4 4-4m-4 4v6m-31-10 17 3m45-3-17 3",
-    "M25 51q0-17 25-17t25 17v11q0 9-25 9t-25-9zM40 52h2m17 0h2M45 63h10",
-    "M36 47h2m24 0h2M39 63q11 9 22 0M22 34l14 5m42-5-14 5",
-    "M34 48q5-6 10 0m12 0q5-6 10 0M45 62q5 5 10 0",
-    "M35 51h2m26 0h2M40 66q10 7 20 0M50 33v-9",
-    "M33 54q7-7 14 0m6 0q7-7 14 0M42 69q8 5 16 0M50 30v-8",
 ];
 const PUBLIC_PLAYLIST: &str = "https://iptv-org.github.io/iptv/index.m3u";
 
 const PLUS: &str = "M12 5v14M5 12h14";
 const PENCIL: &str = "M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4";
-const CHECK_MARK: &str = "M5 12l5 5 9-10";
 
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -65,9 +44,6 @@ struct Profile {
     /// Which of [`COLORS`]. Older profiles keep their saved colour.
     #[serde(default)]
     color: u8,
-    /// Older profiles receive a stable avatar derived from their id.
-    #[serde(default)]
-    avatar: Option<u8>,
 }
 
 impl Profile {
@@ -75,15 +51,9 @@ impl Profile {
         COLORS[usize::from(self.color) % COLORS.len()]
     }
 
-    fn avatar_index(&self) -> usize {
-        self.avatar.map_or_else(
-            || {
-                self.id.bytes().fold(0usize, |hash, b| {
-                    hash.wrapping_mul(31).wrapping_add(usize::from(b))
-                })
-            },
-            usize::from,
-        ) % AVATAR_SHAPES.len()
+    /// The first letter of the name, for the avatar.
+    fn initial(&self) -> String {
+        initial(&self.name)
     }
 
     async fn connect(&self) -> xtream::Result<Client> {
@@ -117,20 +87,15 @@ fn new_id() -> String {
     )
 }
 
-fn random_index(len: usize) -> u8 {
-    (js_sys::Math::random() * len as f64) as u8
+fn initial(name: &str) -> String {
+    name.trim()
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map_or_else(|| "?".into(), |c| c.to_uppercase().collect())
 }
 
-#[component]
-fn AvatarArt(index: u8) -> Element {
-    let index = usize::from(index) % AVATAR_SHAPES.len();
-    rsx! {
-        svg { class: "avatar-art", view_box: "0 0 100 100", fill: "none", stroke: "currentColor", stroke_width: "4", stroke_linecap: "round", stroke_linejoin: "round",
-            circle { cx: "50", cy: "50", r: "42", fill: "white", fill_opacity: ".08", stroke: "none" }
-            path { d: "{AVATAR_SHAPES[index]}" }
-            path { d: "{AVATAR_DETAILS[index]}" }
-        }
-    }
+fn random_index(len: usize) -> u8 {
+    (js_sys::Math::random() * len as f64) as u8
 }
 
 #[derive(Clone, PartialEq)]
@@ -187,7 +152,6 @@ pub fn Login() -> Element {
         user: "demo".into(),
         pass: "demo".into(),
         color: 0,
-        avatar: Some(0),
     };
 
     let free = Profile {
@@ -198,7 +162,6 @@ pub fn Login() -> Element {
         user: String::new(),
         pass: String::new(),
         color: 5,
-        avatar: Some(4),
     };
     if let Screen::Form(id) = screen() {
         let editing = id.and_then(|id| profiles().into_iter().find(|p| p.id == id));
@@ -239,30 +202,11 @@ pub fn Login() -> Element {
     }
 
     let count = profiles().len();
-    let saved_label = format!(
-        "{count} profile{} on this device",
-        if count == 1 { "" } else { "s" }
-    );
+    let spinner = |id: &str| busy().as_deref() == Some(id);
     rsx! {
-        div { class: "login-page who",
-            // The picture half (the top of a phone; a faint backdrop on a desktop).
-            header { class: "who-hero",
-                div { class: "who-mark", RustMark {} }
-                div { class: "lockup",
-                    strong { "RIPTV" }
-                    span { "Your TV, movies and shows" }
-                }
-                span { class: "chip", "{saved_label}" }
-            }
-            main { class: "who-panel",
-                h1 {
-                    if managing() {
-                        "Manage Profiles"
-                    } else {
-                        span { class: "m", "Choose Your Profile" }
-                        span { class: "d", "Who's watching?" }
-                    }
-                }
+        div { class: "login-page",
+            main { class: "chooser",
+                h1 { if managing() { "Edit profiles" } else { "Who's watching?" } }
                 div { class: "profiles",
                     for (n, p) in profiles().into_iter().enumerate() {
                         button {
@@ -282,50 +226,40 @@ pub fn Login() -> Element {
                                 }
                             },
                             span { class: "avatar", style: "--c:{p.color()}",
-                                if busy().as_deref() == Some(p.id.as_str()) { i { class: "spinner" } } else { AvatarArt { index: p.avatar_index() as u8 } }
+                                if spinner(&p.id) { i { class: "spinner" } } else { "{p.initial()}" }
                                 if managing() { span { class: "edit", Icon { d: PENCIL } } }
                             }
-                            strong { "{p.name}" }
-                            small { if p.source == Source::Xtream { "Xtream" } else { "Playlist" } }
+                            span { class: "name", "{p.name}" }
                         }
                     }
                     if !managing() {
                         button {
-                            class: "profile public-profile",
+                            class: "profile",
                             style: "--i:{count}",
                             disabled: busy().is_some(),
                             onclick: { let free = free.clone(); move |_| connect(free.clone(), false) },
-                            span { class: "avatar", style: "--c:{free.color()}",
-                                if busy().as_deref() == Some("free") { i { class: "spinner" } } else { AvatarArt { index: free.avatar_index() as u8 } }
+                            span { class: "avatar", style: "--c:#4a4146",
+                                if spinner("free") { i { class: "spinner" } } else { Icon { d: crate::LIVE_TV } }
                             }
-                            strong { "Public TV" }
-                            small { "Free playlist" }
+                            span { class: "name", "Public TV" }
                         }
                     }
                     button {
-                        class: "profile add",
+                        class: "profile",
                         style: "--i:{count + 1}",
                         disabled: busy().is_some(),
                         onclick: move |_| {
                             status.set(None);
                             screen.set(Screen::Form(None));
                         },
-                        span { class: "avatar tool", Icon { d: PLUS } }
-                        strong { "Add" }
-                    }
-                    // On a phone this is a tile like the others; a desktop has the button below.
-                    button {
-                        class: "profile edit-tile",
-                        style: "--i:{count + 2}",
-                        disabled: busy().is_some(),
-                        onclick: move |_| managing.set(!managing()),
-                        span { class: "avatar tool", if managing() { Icon { d: CHECK_MARK } } else { Icon { d: PENCIL } } }
-                        strong { if managing() { "Done" } else { "Edit" } }
+                        span { class: "avatar add", Icon { d: PLUS } }
+                        span { class: "name", "Add" }
                     }
                 }
-                button { class: "manage", onclick: move |_| managing.set(!managing()), if managing() { "Done" } else { "Manage profiles" } }
+                if count > 0 {
+                    button { class: "text-btn", onclick: move |_| managing.set(!managing()), if managing() { "Done" } else { "Edit" } }
+                }
                 if let Some(msg) = status() { p { class: "err", "{msg}" } }
-                small { class: "note", "Profiles are saved on this device, in this browser." }
             }
         }
     }
@@ -349,16 +283,10 @@ fn ProfileForm(
     let mut url = use_signal(|| start.as_ref().map(|p| p.url.clone()).unwrap_or_default());
     let mut user = use_signal(|| start.as_ref().map(|p| p.user.clone()).unwrap_or_default());
     let mut pass = use_signal(|| start.as_ref().map(|p| p.pass.clone()).unwrap_or_default());
-    let color = use_signal(|| {
+    let mut color = use_signal(|| {
         start
             .as_ref()
             .map_or_else(|| random_index(COLORS.len()), |p| p.color)
-    });
-    let avatar = use_signal(|| {
-        start.as_ref().map_or_else(
-            || random_index(AVATAR_SHAPES.len()),
-            |p| p.avatar_index() as u8,
-        )
     });
     let mut confirm = use_signal(|| false);
     let is_new = editing.is_none();
@@ -366,9 +294,8 @@ fn ProfileForm(
 
     let delete_id = id.clone();
     rsx! {
-        div { class: "login-page profile-page",
-            div { class: "login-stage",
-            form { class: "login",
+        div { class: "login-page",
+            form { class: "profile-form",
                 onsubmit: move |e| {
                     e.prevent_default();
                     let address = url().trim().to_string();
@@ -391,50 +318,49 @@ fn ProfileForm(
                         user: if source() == Source::Xtream { user().trim().to_string() } else { String::new() },
                         pass: if source() == Source::Xtream { pass() } else { String::new() },
                         color: color(),
-                        avatar: Some(avatar()),
                     });
                 },
-                div { class: "brand", RustMark {} span { "RIPTV" } }
                 h1 { if is_new { "Add profile" } else { "Edit profile" } }
-                p { class: "login-intro", if is_new { "Your next watch starts here." } else { "Update your connection." } }
-                span { class: "avatar preview", style: "--c:{COLORS[usize::from(color()) % COLORS.len()]}", AvatarArt { index: avatar() } }
-                div { class: "login-modes", aria_label: "Source type",
-                    button { r#type: "button", disabled: busy, class: if source() == Source::Xtream { "on" } else { "" }, onclick: move |_| source.set(Source::Xtream), "Xtream" }
-                    button { r#type: "button", disabled: busy, class: if source() == Source::Playlist { "on" } else { "" }, onclick: move |_| source.set(Source::Playlist), "M3U / M3U8" }
+                // Tap to change its colour.
+                button {
+                    r#type: "button",
+                    class: "avatar",
+                    style: "--c:{COLORS[usize::from(color()) % COLORS.len()]}",
+                    aria_label: "Change colour",
+                    onclick: move |_| color.set((color() + 1) % COLORS.len() as u8),
+                    if name().trim().is_empty() { Icon { d: crate::USER } } else { "{initial(&name())}" }
                 }
-                input { aria_label: "Profile name", placeholder: "Profile name", value: "{name}", oninput: move |e| name.set(e.value()) }
+                div { class: "segmented", aria_label: "Source type",
+                    button { r#type: "button", disabled: busy, class: if source() == Source::Xtream { "on" } else { "" }, onclick: move |_| source.set(Source::Xtream), "Xtream" }
+                    button { r#type: "button", disabled: busy, class: if source() == Source::Playlist { "on" } else { "" }, onclick: move |_| source.set(Source::Playlist), "M3U" }
+                }
+                input { aria_label: "Profile name", placeholder: "Name", value: "{name}", oninput: move |e| name.set(e.value()) }
                 if source() == Source::Xtream {
-                    input { aria_label: "Server URL", placeholder: "Server URL", value: "{url}", oninput: move |e| url.set(e.value()) }
+                    input { aria_label: "Server URL", placeholder: "Server", value: "{url}", oninput: move |e| url.set(e.value()) }
                     input { aria_label: "Username", autocomplete: "username", placeholder: "Username", value: "{user}", oninput: move |e| user.set(e.value()) }
                     input { r#type: "password", aria_label: "Password", autocomplete: "current-password", placeholder: "Password", value: "{pass}", oninput: move |e| pass.set(e.value()) }
                 } else {
                     input { aria_label: "Playlist URL", placeholder: "Playlist URL", value: "{url}", oninput: move |e| url.set(e.value()) }
                 }
-                button { r#type: "submit", disabled: busy, if busy { "Connecting…" } else if is_new { "Save and connect" } else { "Save" } }
-                button { r#type: "button", class: "ghost", disabled: busy, onclick: move |_| oncancel.call(()), "Cancel" }
-                if !is_new {
-                    button {
-                        r#type: "button",
-                        class: "ghost danger",
-                        onclick: move |_| {
-                            if confirm() { ondelete.call(delete_id.clone()) } else { confirm.set(true) }
-                        },
-                        if confirm() { "Click again to delete this profile" } else { "Delete profile" }
+                if let Some(msg) = status { p { class: "err", "{msg}" } }
+                button { r#type: "submit", class: "primary", disabled: busy, if busy { "Connecting…" } else if is_new { "Connect" } else { "Save" } }
+                div { class: "row-actions",
+                    button { r#type: "button", class: "text-btn", disabled: busy, onclick: move |_| oncancel.call(()), "Cancel" }
+                    if !is_new {
+                        button {
+                            r#type: "button",
+                            class: "text-btn danger",
+                            onclick: move |_| {
+                                if confirm() { ondelete.call(delete_id.clone()) } else { confirm.set(true) }
+                            },
+                            if confirm() { "Delete?" } else { "Delete" }
+                        }
+                    }
+                    if is_new && source() == Source::Xtream {
+                        button { r#type: "button", class: "text-btn", disabled: busy, onclick: move |_| ondemo.call(()), "Demo" }
                     }
                 }
-                if is_new && source() == Source::Xtream {
-                    button { r#type: "button", class: "ghost", disabled: busy, onclick: move |_| ondemo.call(()), "Try the demo" }
-                }
-                if let Some(msg) = status { p { class: "err", "{msg}" } }
-                small { class: "note", "Saved on this device, in this browser, password included." }
-            }
-            aside { class: "login-art", aria_hidden: "true",
-                div { class: "art-orbit orbit-one" }
-                div { class: "art-orbit orbit-two" }
-                div { class: "art-orbit orbit-three" }
-                div { class: "art-glow" }
-                div { class: "art-caption", span { "ONE SCREEN" } strong { "Every channel.\nEvery story." } }
-            }
+                small { class: "note", "Saved on this device, password included." }
             }
         }
     }

@@ -411,17 +411,5 @@ impl Trace {
 
 /// Whether a status line the player shows means it has given up (as opposed to working on it).
 pub fn is_failure(status: &str) -> bool {
-    !matches!(
-        status,
-        "Starting playback…"
-            | "Waiting for picture…"
-            | "Live"
-            | "Audio only"
-            | "Trying another playback method…"
-            | "Trying a compatible stream…"
-            | "Re-encoding the video…"
-            | crate::RECONNECTING
-            | "Stream ended"
-            | crate::STILL_STARTING
-    )
+    !crate::live::starting(status) && !matches!(status, "Live" | "Audio only" | "Stream ended")
 }

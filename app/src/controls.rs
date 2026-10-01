@@ -76,19 +76,34 @@ pub fn Skip(back: bool) -> Element {
     }
 }
 
-/// How far a player has got with starting, as a ring: 0 asked, 1 the stream answered, 2 its
-/// format is known, 3 a picture is decoded, 4 playing. Each stage eases the ring toward its mark
-/// over a few seconds (CSS transitions: no timers), so it never sits still while a step runs.
+/// A player starting: a ring that always turns (so waiting never looks stuck) and fills as the
+/// player reaches each stage: 0 asked, 1 the stream answered, 2 its format is known, 3 a picture is
+/// decoded, 4 playing. Between stages it eases toward the next mark. With `icon` (a channel logo),
+/// the logo sits inside. All motion is CSS (compositor-only transforms): no timers, no re-renders.
 #[component]
-pub fn LoadRing(stage: u8) -> Element {
-    // Circumference of r = 20.
-    const LENGTH: f64 = 125.66;
-    let filled = [0.22, 0.62, 0.8, 0.93, 1.0][usize::from(stage.min(4))];
+pub fn LoadRing(stage: u8, icon: Option<String>) -> Element {
+    // Circumference of r = 22.
+    const LENGTH: f64 = 138.23;
+    let filled = [0.12, 0.45, 0.68, 0.88, 1.0][usize::from(stage.min(4))];
     let offset = LENGTH * (1.0 - filled);
+    let logo = icon.filter(|src| src.starts_with("http"));
     rsx! {
-        svg { class: "ring", view_box: "0 0 48 48", role: "progressbar", "aria-valuenow": "{(filled * 100.0) as u32}",
-            circle { class: "ring-track", cx: "24", cy: "24", r: "20" }
-            circle { class: "ring-fill", cx: "24", cy: "24", r: "20", style: "stroke-dashoffset:{offset:.1}" }
+        div { class: "loader", role: "progressbar", "aria-label": "Loading", "aria-valuenow": "{(filled * 100.0) as u32}",
+            svg { view_box: "0 0 50 50",
+                defs {
+                    linearGradient { id: "ring-grad", x1: "0", y1: "0", x2: "1", y2: "1",
+                        stop { offset: "0", stop_color: "#fff" }
+                        stop { offset: "1", stop_color: "var(--accent)" }
+                    }
+                }
+                circle { class: "ring-track", cx: "25", cy: "25", r: "22" }
+                circle { class: "ring-fill", cx: "25", cy: "25", r: "22", style: "stroke-dashoffset:{offset:.1}" }
+            }
+            if let Some(src) = logo {
+                img { class: "loader-logo", src: "{src}", alt: "", decoding: "async" }
+            } else {
+                i { class: "loader-dot" }
+            }
         }
     }
 }

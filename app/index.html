@@ -11,8 +11,17 @@
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="apple-touch-icon" href="/icon-192.png" />
     <script src="/register-sw.js" defer></script>
+    <style>
+      /* Shown while the app itself downloads and starts; it hides once the app draws. */
+      html,body{margin:0;background:#0b0709}
+      #boot{position:fixed;inset:0;display:grid;place-items:center;pointer-events:none;transition:opacity .25s}
+      #boot i{width:2.6rem;height:2.6rem;border:2.5px solid rgba(255,255,255,.12);border-top-color:#ff7d92;border-radius:50%;animation:boot 1s linear infinite}
+      @keyframes boot{to{transform:rotate(1turn)}}
+      body:has(#main > *) #boot{opacity:0}
+    </style>
   </head>
   <body>
     <div id="main"></div>
+    <div id="boot" aria-hidden="true"><i></i></div>
   </body>
 </html>

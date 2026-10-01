@@ -163,11 +163,11 @@ channels, movies and series (and `MOCK_PORT` moves it off 8081): a big provider'
 
 ## Profiles
 
-RIPTV opens on **Who's watching?**: one tile for each account you have saved, a **+** to add another, and
-**Edit** (**Manage profiles** on a desktop) to change or delete them. Tapping a tile signs in with that
-account straight away. A profile is an Xtream account (server, username, password) or an M3U/M3U8
-playlist, with a name and an automatically assigned avatar and colour, and you can keep as many of each as you like. **Switch profile** in
-the account menu brings the tiles back.
+RIPTV opens on **Who's watching?**: a round avatar (the profile's initial, in its colour) for
+each account you have saved, **Public TV**, and **Add**. **Edit** turns the tiles into editors.
+Tapping a tile signs in straight away. A profile is an Xtream account (server, username, password)
+or an M3U/M3U8 playlist, with a name and a colour (tap the avatar in the form to change it), and
+you can keep as many as you like. **Switch profile** in the account menu brings the tiles back.
 
 Profiles are saved on the device, in this browser's storage for this address, **as plain text, the
 password included**: that is what makes a tile sign in with one click. They never leave the machine

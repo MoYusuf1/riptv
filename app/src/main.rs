@@ -18,6 +18,7 @@ mod controls;
 mod diag;
 mod fetch;
 mod frame_stats;
+mod live;
 mod media_session;
 mod preferences;
 mod profiles;
@@ -41,7 +42,7 @@ const PAGE_LIST: usize = 40;
 /// One stylesheet, grouped by component. The comments live here, not in the shipped string.
 const CSS: &str = concat!(
     // Palette and page basics
-    r#":root{color-scheme:dark;--bg:#0b0709;--panel:#130d10;--row:#1c1418;--hair:rgba(255,255,255,.08);--text:#f5eef1;--dim:#a0919a;--faint:#6f6068;--accent:#ff7d92;--fill:#e11d48;--soft:rgba(255,125,146,.14);--glass:rgba(24,16,20,.72)}
+    r#":root{color-scheme:dark;--bg:#0b0709;--panel:#130d10;--row:#1c1418;--hair:rgba(255,255,255,.08);--text:#f5eef1;--dim:#a0919a;--faint:#6f6068;--accent:#ff7d92;--fill:#e11d48;--soft:rgba(255,125,146,.14);--glass:rgba(24,16,20,.72);--ease:cubic-bezier(.2,.8,.2,1)}
 *{box-sizing:border-box}
 body{margin:0;min-width:320px;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 button,input{font:inherit;color:inherit}
@@ -57,35 +58,43 @@ svg{width:1.1rem;height:1.1rem}
 .icon-btn.on{color:var(--accent)}
 .icon-btn.on svg{fill:currentColor}
 "#,
-    // Sign-in
-    r#".login-page{display:grid;place-items:center;min-height:100vh;min-height:100dvh;padding:1.4rem;background:radial-gradient(circle at 15% 80%,rgba(110,58,151,.24),transparent 40%),radial-gradient(circle at 85% 12%,rgba(225,29,72,.18),transparent 42%),var(--bg)}
-.login-stage{display:grid;grid-template-columns:minmax(19rem,24rem) minmax(18rem,26rem);width:min(100%,50rem);min-height:34rem;overflow:hidden;border:1px solid var(--hair);border-radius:28px;background:var(--panel);box-shadow:0 30px 90px rgba(0,0,0,.46)}
-.login{display:flex;flex-direction:column;justify-content:center;gap:.72rem;width:100%;padding:2.2rem 2.35rem;background:rgba(12,8,11,.94)}
-.login .brand{align-self:flex-start;color:var(--text)}
-.login h1{margin:1.05rem 0 0;font-size:2rem;line-height:1.1;letter-spacing:-.04em}
-.login-intro{margin:0 0 .55rem;color:var(--dim);font-size:.87rem}
-.login input{width:100%;min-height:2.9rem;padding:.76rem .95rem;border:1px solid var(--hair);border-radius:11px;outline:0;background:rgba(255,255,255,.045)}
-.login input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--soft)}
-.login input::placeholder{color:var(--faint)}
-.login button{padding:.78rem;border-radius:11px;background:var(--fill);color:#fff;font-weight:650;text-align:center;transition:background .15s ease,transform .15s ease}
-.login button:not(:disabled):hover{background:#f02b58;transform:translateY(-1px)}
-.login button:disabled{opacity:.6;cursor:wait}
-.login button.ghost{background:none;color:var(--dim)}
-.login button.ghost:hover{background:rgba(255,255,255,.05);color:var(--text)}
-.login-modes{display:flex;gap:.2rem;padding:.23rem;border:1px solid var(--hair);border-radius:12px;background:rgba(255,255,255,.04)}
-.login .login-modes button{flex:1;padding:.56rem;border-radius:9px;background:none;color:var(--dim);font-size:.85rem}
-.login .login-modes button.on{background:rgba(255,255,255,.1);color:var(--text);box-shadow:0 2px 8px rgba(0,0,0,.2)}
-.login-art{position:relative;min-height:100%;overflow:hidden;background:radial-gradient(circle at 77% 24%,#f7a271 0,transparent 30%),linear-gradient(145deg,#ee7a70 0%,#953e93 36%,#4d388d 68%,#252956 100%)}
-.login-art:before,.login-art:after{content:"";position:absolute;width:135%;height:56%;left:-18%;border-radius:50%;transform:rotate(-22deg)}
-.login-art:before{top:32%;background:#503486;box-shadow:0 -12px 0 rgba(255,255,255,.11)}
-.login-art:after{top:63%;background:#252950;box-shadow:0 -12px 0 rgba(187,166,238,.24)}
-.art-orbit{position:absolute;z-index:1;width:115%;height:22%;left:-9%;border:16px solid rgba(205,194,255,.8);border-radius:50%;transform:rotate(-24deg)}
-.orbit-one{top:49%}.orbit-two{top:66%;left:8%}.orbit-three{top:82%;left:-22%}
-.art-glow{position:absolute;z-index:1;right:5%;top:9%;width:7rem;height:7rem;border-radius:50%;background:#ffd2a3;filter:blur(1px);opacity:.85}
-.art-caption{position:absolute;z-index:2;left:2rem;bottom:2rem;display:grid;gap:.4rem;color:#fff;text-shadow:0 2px 12px rgba(0,0,0,.35)}
-.art-caption span{font-size:.68rem;font-weight:700;letter-spacing:.22em;opacity:.78}
-.art-caption strong{font-size:1.55rem;line-height:1.15;white-space:pre-line}
-@media(max-width:680px){.profile-page{padding:1rem}.login-stage{display:block;width:min(100%,25rem);min-height:0;border-radius:22px}.login{padding:1.55rem}.login-art{display:none}}
+    // Who's watching, and the profile form: quiet, centred, round avatars.
+    r#".login-page{display:grid;place-items:center;min-height:100vh;min-height:100dvh;padding:2rem 1.25rem;background:radial-gradient(120% 70% at 50% -10%,#24141b 0%,var(--bg) 62%)}
+.chooser{display:flex;flex-direction:column;align-items:center;gap:2.5rem;width:min(100%,48rem);animation:fade .4s var(--ease)}
+.chooser h1{margin:0;font-size:clamp(1.7rem,4vw,2.4rem);font-weight:600;letter-spacing:-.03em}
+.profiles{display:flex;flex-wrap:wrap;justify-content:center;gap:1.8rem 1.5rem}
+.profile{display:flex;text-align:center;flex-direction:column;align-items:center;gap:.8rem;width:7.6rem;color:var(--dim);animation:rise .45s var(--ease) backwards;animation-delay:calc(var(--i,0) * 45ms);transition:color .2s}
+.profile:hover,.profile:focus-visible{color:var(--text);outline:0}
+.profile:disabled{opacity:.55}
+.avatar{position:relative;display:grid;place-items:center;width:6.6rem;aspect-ratio:1;border-radius:50%;background:linear-gradient(150deg,color-mix(in srgb,var(--c) 82%,#fff),color-mix(in srgb,var(--c) 72%,#000));color:#fff;font-size:2.5rem;font-weight:600;letter-spacing:-.02em;box-shadow:0 14px 34px color-mix(in srgb,var(--c) 28%,transparent);transition:transform .3s var(--ease),box-shadow .3s var(--ease)}
+.profile:hover .avatar,.profile:focus-visible .avatar{transform:scale(1.06);box-shadow:0 0 0 3px var(--bg),0 0 0 5px rgba(255,255,255,.9),0 18px 40px color-mix(in srgb,var(--c) 38%,transparent)}
+.profile:active .avatar{transform:scale(.97)}
+.avatar svg{width:40%;height:40%}
+.avatar.add{background:rgba(255,255,255,.06);box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.12);color:var(--dim)}
+.profile:hover .avatar.add{box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.3);color:var(--text)}
+.avatar .spinner{width:2rem;height:2rem}
+.avatar .edit{position:absolute;inset:0;display:grid;place-items:center;border-radius:50%;background:rgba(0,0,0,.42);animation:fade .2s var(--ease)}
+.avatar .edit svg{width:30%;height:30%}
+.profile .name{max-width:100%;overflow:hidden;font-size:.92rem;font-weight:500;text-overflow:ellipsis;white-space:nowrap}
+.text-btn{padding:.45rem .95rem;text-align:center;border-radius:999px;color:var(--dim);font-size:.88rem;font-weight:500;transition:color .2s,background .2s}
+.text-btn:hover{color:var(--text);background:rgba(255,255,255,.07)}
+.text-btn.danger{color:#ff8a9a}
+.chooser .err,.profile-form .err{margin:0;color:#ff9aa8;font-size:.86rem;text-align:center}
+.profile-form{display:flex;flex-direction:column;gap:.7rem;width:min(100%,22rem);animation:rise .35s var(--ease)}
+.profile-form h1{margin:0 0 .5rem;text-align:center;font-size:1.55rem;font-weight:600;letter-spacing:-.025em}
+.profile-form .avatar{align-self:center;width:5.6rem;margin-bottom:.6rem;font-size:2.1rem;cursor:pointer}
+.profile-form .avatar:hover{transform:scale(1.05)}.profile-form .avatar:active{transform:scale(.96)}
+.segmented{display:grid;grid-template-columns:1fr 1fr;padding:3px;border-radius:12px;background:rgba(255,255,255,.06)}
+.segmented button{padding:.5rem;text-align:center;border-radius:9px;color:var(--dim);font-size:.86rem;font-weight:600;transition:background .25s var(--ease),color .2s}
+.segmented button.on{background:rgba(255,255,255,.13);color:var(--text)}
+.profile-form input{width:100%;padding:.82rem 1rem;border:0;border-radius:12px;background:rgba(255,255,255,.06);color:var(--text);font:inherit;outline:0;transition:background .2s,box-shadow .2s}
+.profile-form input::placeholder{color:var(--faint)}
+.profile-form input:focus{background:rgba(255,255,255,.09);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 55%,transparent)}
+.profile-form .primary{margin-top:.5rem;text-align:center;padding:.82rem;border-radius:12px;background:var(--fill);color:#fff;font-weight:600;transition:filter .2s,transform .15s var(--ease)}
+.profile-form .primary:hover{filter:brightness(1.1)}.profile-form .primary:active{transform:scale(.98)}.profile-form .primary:disabled{opacity:.6}
+.row-actions{display:flex;justify-content:center;flex-wrap:wrap;gap:.3rem}
+.profile-form .note{text-align:center;color:var(--faint);font-size:.72rem}
+@media(max-width:520px){.profiles{gap:1.4rem 1rem}.profile{width:6.2rem}.avatar{width:5.5rem;font-size:2.1rem}}
 "#,
     // Floating chrome: top bar, section rail, account menu
     r#".topbar,.rail{position:fixed;z-index:20;display:flex;border:1px solid var(--hair);background:var(--glass);box-shadow:0 10px 30px rgba(0,0,0,.35);backdrop-filter:blur(24px) saturate(180%)}
@@ -242,7 +251,8 @@ svg{width:1.1rem;height:1.1rem}
 .row div{min-width:0}
 .row strong,.row small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row strong{font-weight:500}
-.row small{color:var(--accent);font-size:.7rem}
+.row .eq{flex:none;height:12px;margin:0 .35rem 0 auto;gap:2px}
+.row .eq i{width:2.5px;background:var(--accent)}
 .stage{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
 .stage-empty{display:grid;flex:1;place-content:center;justify-items:center;gap:.8rem;color:var(--dim)}
 .stage-empty svg{width:3.4rem;height:3.4rem;opacity:.55}
@@ -251,43 +261,65 @@ svg{width:1.1rem;height:1.1rem}
 .player:fullscreen,.player.fill{margin:0;border-radius:0}
 .player.fill{position:fixed;z-index:60;inset:0}
 .player:not(.active):not(.paused){cursor:none}
-.player video{width:100%;height:100%;object-fit:contain}
-.audio-only{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.45rem;background:radial-gradient(circle at 50% 42%,rgba(225,29,72,.2),transparent 33%),#100b11;color:var(--text);pointer-events:none}
-.audio-only .audio-orb{display:grid;place-items:center;width:5rem;height:5rem;margin-bottom:.45rem;border:1px solid rgba(255,255,255,.15);border-radius:50%;background:var(--soft);color:var(--accent);font-size:2rem}
-.audio-only strong{font-size:1.1rem}.audio-only small{color:var(--dim)}
-.sound-note{position:absolute;left:1rem;bottom:4.6rem;max-width:calc(100% - 2rem);padding:.35rem .8rem;border-radius:10px;background:rgba(0,0,0,.68);color:#ffd48a;font-size:.78rem;backdrop-filter:blur(10px)}
+.player video{width:100%;height:100%;object-fit:contain;opacity:0;transition:opacity .45s var(--ease)}
+.player.showing video{opacity:1}
+.radio{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.1rem;overflow:hidden;background:#0a0709;color:#fff;pointer-events:none;animation:rise .5s var(--ease)}
+.radio-glow{position:absolute;inset:-25%;width:150%;height:150%;object-fit:cover;opacity:.32;filter:blur(48px) saturate(1.6);transform:scale(1.1)}
+.radio-art{position:relative;display:grid;place-items:center;width:clamp(6.5rem,26vh,10rem);aspect-ratio:1;border-radius:24%;background:rgba(255,255,255,.07);box-shadow:0 24px 60px rgba(0,0,0,.55),inset 0 0 0 1px rgba(255,255,255,.08);overflow:hidden}
+.radio-art img{width:76%;height:76%;object-fit:contain}
+.radio-art svg{width:38%;height:38%;opacity:.7}
+.radio strong{position:relative;max-width:80%;overflow:hidden;font-size:1.05rem;font-weight:600;letter-spacing:-.01em;text-overflow:ellipsis;white-space:nowrap}
+.eq{position:relative;display:flex;align-items:flex-end;gap:3px;height:16px}
+.eq i{width:3px;height:100%;border-radius:2px;background:#fff;opacity:.85;transform-origin:bottom;animation:eq 1.1s var(--ease) infinite}
+.eq i:nth-child(2){animation-duration:.85s;animation-delay:-.4s}
+.eq i:nth-child(3){animation-duration:1.3s;animation-delay:-.2s}
+.eq i:nth-child(4){animation-duration:.95s;animation-delay:-.7s}
+.eq i:nth-child(5){animation-duration:1.2s;animation-delay:-.1s}
+.radio.paused .eq i{animation-play-state:paused}
+@keyframes eq{0%,100%{transform:scaleY(.2)}50%{transform:scaleY(1)}}
+.sound-note{position:absolute;top:1rem;left:1rem;display:flex;align-items:center;gap:.4rem;padding:.35rem .7rem;border-radius:999px;background:rgba(0,0,0,.55);color:#fff;font-size:.75rem;backdrop-filter:blur(14px);animation:rise .3s var(--ease)}
+.sound-note svg{width:.95rem;height:.95rem}
 .stats{position:absolute;top:.8rem;left:.8rem;padding:.3rem .7rem;border-radius:8px;background:rgba(0,0,0,.66);color:#fff;font:600 .72rem ui-monospace,monospace;backdrop-filter:blur(8px)}
-.channel-dial{position:absolute;top:1rem;right:1rem;min-width:3rem;padding:.45rem .75rem;border-radius:10px;background:rgba(0,0,0,.72);color:#fff;text-align:center;font-weight:700}
-.hud{position:absolute;inset:0;display:grid;place-items:center;color:#fff;pointer-events:none}
-.hud span{padding:.4rem .9rem;border-radius:999px;background:rgba(0,0,0,.6);backdrop-filter:blur(10px)}
-.loading-group{display:grid;justify-items:center;gap:.7rem}
-.ring{width:3.4rem;height:3.4rem;transform:rotate(-90deg)}
-.ring circle{fill:none;stroke-width:3.5}
-.ring-track{stroke:rgba(255,255,255,.16)}
-.ring-fill{stroke:#fff;stroke-linecap:round;stroke-dasharray:125.66;transition:stroke-dashoffset 3.2s cubic-bezier(.12,.8,.25,1)}
-@starting-style{.ring-fill{stroke-dashoffset:125.66}}
-.w-load .ring{width:2.6rem;height:2.6rem;margin-bottom:.6rem}
-.spinner{width:2.6rem;height:2.6rem;border:3px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite}
+.channel-dial{position:absolute;top:1rem;right:1rem;min-width:3rem;padding:.45rem .75rem;border-radius:12px;background:rgba(0,0,0,.6);color:#fff;text-align:center;font-weight:700;font-variant-numeric:tabular-nums;backdrop-filter:blur(14px)}
+.hud{position:absolute;inset:0;display:grid;place-items:center;color:#fff;pointer-events:none;animation:fade .3s var(--ease)}
+.hud.fail{align-content:center;gap:.9rem;padding:2rem;text-align:center;pointer-events:auto;background:rgba(0,0,0,.35)}
+.hud.fail p{max-width:22rem;margin:0;color:rgba(255,255,255,.82);font-size:.9rem;line-height:1.45}
+.retry{justify-self:center;padding:.5rem 1.1rem;border-radius:999px;background:rgba(255,255,255,.14);color:#fff;font-size:.85rem;font-weight:600;backdrop-filter:blur(14px);transition:background .2s,transform .2s var(--ease)}
+.retry:hover{background:rgba(255,255,255,.24)}.retry:active{transform:scale(.96)}
+.loader{position:relative;display:grid;place-items:center;width:4.6rem;height:4.6rem}
+.loader svg{position:absolute;inset:0;width:100%;height:100%;animation:spin 1.6s linear infinite}
+.loader circle{fill:none;stroke-width:2.5}
+.ring-track{stroke:rgba(255,255,255,.1)}
+.ring-fill{stroke:url(#ring-grad);stroke-linecap:round;stroke-dasharray:138.23;transition:stroke-dashoffset 2.6s var(--ease)}
+@starting-style{.ring-fill{stroke-dashoffset:138.23}}
+.loader-logo{width:54%;height:54%;object-fit:contain;animation:breathe 2.4s ease-in-out infinite}
+.loader-dot{width:.5rem;height:.5rem;border-radius:50%;background:#fff;animation:breathe 1.6s ease-in-out infinite}
+@keyframes breathe{50%{opacity:.55;transform:scale(.92)}}
+.spinner{width:2.6rem;height:2.6rem;border:2.5px solid rgba(255,255,255,.18);border-top-color:#fff;border-radius:50%;animation:spin .9s linear infinite}
 @keyframes spin{to{transform:rotate(1turn)}}
-.bigplay{position:absolute;top:50%;left:50%;display:grid;place-items:center;width:4.6rem;height:4.6rem;border-radius:50%;background:rgba(20,13,16,.55);color:#fff;transform:translate(-50%,-50%);backdrop-filter:blur(16px)}
-.bigplay svg{width:1.8rem;height:1.8rem;fill:currentColor}
-.controls{position:absolute;inset:auto 0 0;display:flex;align-items:center;gap:.4rem;padding:3rem 1rem .8rem;background:linear-gradient(transparent,rgba(0,0,0,.78));opacity:0;transition:opacity .25s}
-.player.active .controls,.player.paused .controls,.controls:focus-within{opacity:1}
-.ctl{display:grid;place-items:center;width:2.5rem;height:2.5rem;border-radius:50%;color:#fff}
-.ctl:hover{background:rgba(255,255,255,.18)}
-.ctl svg{width:1.3rem;height:1.3rem}
+.bigplay{position:absolute;top:50%;left:50%;display:grid;place-items:center;width:4.4rem;height:4.4rem;border-radius:50%;background:rgba(255,255,255,.14);color:#fff;transform:translate(-50%,-50%);backdrop-filter:blur(20px);animation:pop-center .25s var(--ease);transition:transform .2s var(--ease),background .2s}
+.bigplay:hover{background:rgba(255,255,255,.22)}.bigplay:active{transform:translate(-50%,-50%) scale(.94)}
+.bigplay svg{width:1.6rem;height:1.6rem;margin-left:.15rem;fill:currentColor}
+@keyframes pop-center{from{opacity:0;transform:translate(-50%,-50%) scale(.85)}}
+.controls{position:absolute;inset:auto 0 0;display:flex;align-items:center;gap:.25rem;padding:3.5rem .9rem .75rem;background:linear-gradient(transparent,rgba(0,0,0,.72));opacity:0;transform:translateY(6px);transition:opacity .3s var(--ease),transform .3s var(--ease)}
+.player.active .controls,.player.paused .controls,.controls:focus-within{opacity:1;transform:none}
+.ctl{display:grid;place-items:center;width:2.6rem;height:2.6rem;border-radius:50%;color:#fff;transition:background .2s,transform .15s var(--ease)}
+.ctl:hover{background:rgba(255,255,255,.14)}.ctl:active{transform:scale(.9)}
+.ctl svg{width:1.25rem;height:1.25rem}
 .volume{display:flex;align-items:center}
-.vol{width:0;margin:0;opacity:0;transition:width .2s,opacity .2s;accent-color:var(--accent)}
-.volume:hover .vol,.vol:focus-visible{width:5.5rem;margin:0 .5rem 0 .2rem;opacity:1}
-.live-pill{display:inline-flex;align-items:center;gap:.4rem;margin-left:.3rem;padding:.25rem .7rem;border-radius:999px;background:var(--fill);color:#fff;font-size:.7rem;font-weight:700;letter-spacing:.07em}
-.live-pill::before{content:'';width:.45rem;height:.45rem;border-radius:50%;background:#fff}
-.player:not(.paused) .live-pill::before{animation:pulse 1.6s ease-in-out infinite}
-@keyframes pulse{50%{opacity:.25}}
-.player.paused .live-pill{background:rgba(255,255,255,.18)}
-.guide{min-width:0;min-height:12.5rem;padding:.8rem 1rem 1rem;border-top:1px solid var(--hair);background:var(--panel)}
-.guide-head{display:flex;flex-direction:column;margin-bottom:.6rem}
-.guide-head strong,.guide-head small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.guide-head small{color:var(--dim)}
+.vol{width:0;height:4px;margin:0;opacity:0;appearance:none;border-radius:2px;background:linear-gradient(90deg,#fff var(--level,100%),rgba(255,255,255,.25) 0);transition:width .25s var(--ease),opacity .25s}
+.vol::-webkit-slider-thumb{width:12px;height:12px;appearance:none;border-radius:50%;background:#fff}
+.vol::-moz-range-thumb{width:12px;height:12px;border:0;border-radius:50%;background:#fff}
+.volume:hover .vol,.vol:focus-visible{width:5.5rem;margin:0 .6rem 0 .2rem;opacity:1}
+.live-pill{display:inline-flex;align-items:center;gap:.4rem;margin-left:.35rem;padding:.28rem .7rem;border-radius:999px;background:var(--fill);color:#fff;font-size:.68rem;font-weight:700;letter-spacing:.08em;transition:background .2s}
+.live-pill::before{content:'';width:.42rem;height:.42rem;border-radius:50%;background:#fff}
+.player:not(.paused) .live-pill::before{animation:pulse 1.8s ease-in-out infinite}
+.player.paused .live-pill{background:rgba(255,255,255,.16)}
+@media(prefers-reduced-motion:reduce){.loader svg,.loader-logo,.loader-dot,.eq i,.live-pill::before{animation:none!important}}
+.guide{min-width:0;padding:1rem 1rem .9rem;border-top:1px solid var(--hair);background:var(--panel);animation:fade .3s var(--ease)}
+.tl-skeleton{display:flex;gap:.4rem;height:6.4rem;padding-top:1.5rem}
+.tl-skeleton i{flex:1;border-radius:10px;background:var(--row);animation:pulse 1.4s ease-in-out infinite}
+.tl-skeleton i:first-child{flex:.6}
 .timeline{overflow-x:auto;padding-bottom:.4rem;scrollbar-width:thin}
 .tl{position:relative;height:6.4rem}
 .tick{position:absolute;top:0;height:100%;padding-left:.4rem;border-left:1px solid var(--hair);color:var(--faint);font-size:.7rem}
@@ -317,10 +349,6 @@ svg{width:1.1rem;height:1.1rem}
 .watch:not(.active):not(.paused){cursor:none}
 .watch:has(.w-load),.watch:has(.w-fail){cursor:default}
 .w-load,.w-fail{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:.7rem;padding:2rem;text-align:center;color:var(--dim);background:radial-gradient(circle at 50% 48%,rgba(255,125,146,.1),transparent 32%),#070607}
-.w-load .spinner{width:2rem;height:2rem;margin-bottom:.6rem;border-width:2px}
-.w-load strong{max-width:min(80vw,32rem);overflow:hidden;color:#fff;font-size:1.15rem;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
-.w-load small{max-width:min(80vw,32rem);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.w-load span{font-size:.78rem}
 .w-top,.w-bottom{position:absolute;inset-inline:0;opacity:0;pointer-events:none;transition:opacity .25s}
 .w-top{top:0;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:1rem;padding:1rem 1.4rem 3rem;background:linear-gradient(rgba(0,0,0,.8),transparent)}
 .w-top .icon-btn{background:rgba(255,255,255,.14)}
@@ -362,58 +390,6 @@ svg{width:1.1rem;height:1.1rem}
 .upnext button{flex:1;padding:.5rem;border-radius:10px;background:rgba(255,255,255,.14);text-align:center;font-weight:600}
 .upnext button.go{background:#fff;color:#111}
 "#,
-    // Who's watching: saved profiles as tiles. A phone gets a picture on top and a curved panel of
-    // three columns under it; a desktop gets a centred row with the picture as a faint backdrop.
-    r#".login-page.who{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;min-height:100dvh;padding:0;background:radial-gradient(ellipse at 80% 40%,rgba(225,29,72,.16),transparent 55%),radial-gradient(ellipse at 10% 100%,rgba(95,60,140,.14),transparent 50%),var(--bg);gap:0;overflow-x:clip}
-.who-hero{position:absolute;inset:0;z-index:0;pointer-events:none}
-.who-mark{position:absolute;right:-7rem;top:50%;width:min(46vw,44rem);aspect-ratio:1;transform:translateY(-50%);opacity:.07}
-.who-mark .rust-mark{width:100%;height:100%}
-.who-hero .lockup{position:absolute;top:1.6rem;left:2.2rem;display:flex;align-items:baseline;gap:.7rem}
-.who-hero .lockup strong{font-size:1.25rem;font-weight:800;letter-spacing:.14em;color:var(--accent)}
-.who-hero .lockup span,.who-hero .chip{display:none}
-.who-panel{position:relative;z-index:1;display:flex;flex-direction:column;align-items:center;gap:2.2rem;width:100%;padding:2rem 1.4rem}
-.who-panel h1{margin:0;font-size:clamp(1.9rem,3.6vw,2.8rem);font-weight:600;letter-spacing:-.03em}
-.who-panel h1 .m{display:none}
-.profiles{display:flex;flex-wrap:wrap;justify-content:center;gap:2.2rem 2rem;max-width:min(64rem,92vw)}
-.profile{display:grid;justify-items:center;gap:.6rem;width:9rem;color:var(--dim);text-align:center;animation:rise .45s calc(var(--i,0) * 45ms) cubic-bezier(.2,.8,.2,1) backwards}
-.profile:hover,.profile:focus-visible{color:var(--text)}
-.profile:disabled{cursor:wait;opacity:.6}
-.profile strong{max-width:100%;overflow:hidden;font-size:1rem;font-weight:500;text-overflow:ellipsis;white-space:nowrap}
-.profile small{margin-top:-.35rem;color:var(--faint);font-size:.64rem;letter-spacing:.08em;text-transform:uppercase}
-.avatar{position:relative;display:grid;place-items:center;width:9rem;height:9rem;border-radius:1.1rem;background:radial-gradient(circle at 27% 18%,rgba(255,255,255,.3),transparent 55%),var(--c,#e11d48);color:#fff;font-size:3.4rem;font-weight:700;box-shadow:0 12px 34px rgba(0,0,0,.42);transition:transform .18s ease,box-shadow .18s ease}
-.avatar .avatar-art{width:76%;height:76%;filter:drop-shadow(0 5px 8px rgba(0,0,0,.18))}
-.profile:not(:disabled):hover .avatar,.profile:focus-visible .avatar{transform:scale(1.06);box-shadow:0 0 0 3px var(--text),0 16px 38px rgba(0,0,0,.5)}
-.avatar .spinner{width:2.4rem;height:2.4rem}
-.avatar .edit{position:absolute;inset:0;display:grid;place-items:center;border-radius:inherit;background:rgba(0,0,0,.55)}
-.avatar .edit svg{width:2rem;height:2rem}
-.avatar.tool{border:1px solid var(--hair);background:rgba(255,255,255,.06);box-shadow:none;color:var(--dim)}
-.avatar.tool svg{width:2.2rem;height:2.2rem}
-.profile:not(:disabled):hover .avatar.tool{background:rgba(255,255,255,.12);box-shadow:0 0 0 3px var(--text);color:var(--text)}
-.edit-tile{display:none}
-.who .manage{padding:.65rem 1.6rem;border:1px solid var(--hair);border-radius:10px;color:var(--dim);font-size:.76rem;letter-spacing:.1em;text-transform:uppercase}
-.who .manage:hover{border-color:var(--text);color:var(--text)}
-.note{color:var(--faint);font-size:.72rem}
-.login .note{text-align:center}
-.login .avatar.preview{align-self:center;width:4.7rem;height:4.7rem;margin:.1rem 0 .25rem;border-radius:1rem;font-size:2.6rem;box-shadow:0 8px 22px rgba(0,0,0,.3)}
-.login button.danger{color:#ff8a8a}
-@media(max-width:820px){.login-page.who{justify-content:flex-start;background:radial-gradient(ellipse at 50% 26%,rgba(225,29,72,.3),transparent 58%),var(--bg)}
-.who-hero{position:relative;inset:auto;flex:1 0 auto;display:grid;place-content:center;justify-items:center;gap:.8rem;width:100%;padding:max(2.6rem,env(safe-area-inset-top)) 1rem 2.2rem;background:radial-gradient(rgba(255,255,255,.055) 1px,transparent 1.6px) 0 0/14px 14px}
-.who-mark{position:relative;inset:auto;right:auto;top:auto;width:min(44vw,11rem);transform:none;opacity:1;filter:drop-shadow(0 0 42px rgba(255,125,146,.4))}
-.who-hero .lockup{position:static;flex-direction:column;align-items:center;gap:.25rem;text-align:center}
-.who-hero .lockup strong{font-size:2rem;letter-spacing:.2em;color:var(--text)}
-.who-hero .lockup span{display:block;color:var(--dim);font-size:.85rem}
-.who-hero .chip{display:inline-flex;align-items:center;gap:.4rem;margin-top:.5rem;padding:.3rem .8rem;border-radius:999px;background:rgba(255,255,255,.08);color:var(--text);font-size:.78rem;font-weight:600}
-.who-panel{flex:none;gap:1.4rem;padding:2.2rem 1.4rem max(2rem,env(safe-area-inset-bottom));background:#161b23;background:color-mix(in srgb,var(--panel) 70%,#1b2430);border-radius:50% 50% 0 0/2.6rem 2.6rem 0 0;box-shadow:0 -20px 50px rgba(0,0,0,.35)}
-.who-panel h1{color:var(--dim);font-size:1.05rem;font-weight:500;letter-spacing:0}
-.who-panel h1 .m{display:inline}
-.who-panel h1 .d{display:none}
-.profiles{display:grid;grid-template-columns:repeat(3,1fr);gap:1.3rem 1rem;width:100%;max-width:27rem}
-.profile{width:auto;min-width:0}
-.avatar{width:100%;height:auto;aspect-ratio:1;border-radius:.9rem;font-size:2.4rem}
-.profile strong{font-size:1.05rem;color:var(--text)}
-.edit-tile{display:grid}
-.who .manage{display:none}}
-"#,
     // Pictures fade in over a quiet placeholder (main.rs marks each one as it loads), pages and
     // lists arrive instead of appearing, and what is loading is drawn as what it will become.
     r#".art img,.logo img,.thumb img,.trailer img,.d-art,.d-poster{opacity:0;transition:opacity .4s ease}
@@ -427,10 +403,10 @@ img[data-failed]{display:none}
 @keyframes fade{from{opacity:0}}
 @keyframes pop{from{opacity:0;transform:scale(.97) translateY(-4px)}}
 @keyframes pulse{50%{opacity:.5}}
-.scroll{animation:fade .22s ease-out}
+.scroll{animation:fade .2s var(--ease)}
 .detail{animation:rise .3s cubic-bezier(.2,.8,.2,1)}
 .d-main{animation:rise .45s .06s cubic-bezier(.2,.8,.2,1) backwards}
-.watch{animation:fade .2s ease-out}
+.watch{animation:fade .22s var(--ease)}
 .menu,.w-menu{animation:pop .14s ease-out}
 .toast,.upnext{animation:rise .25s ease-out}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
@@ -494,6 +470,8 @@ const INFO: &str = "M12 3a9 9 0 100 18 9 9 0 000-18zM12 8h.01M11 12h1v5h1";
 const HEART: &str =
     "M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0112 7.3a4.3 4.3 0 017.5 2.5C19.5 15.4 12 20 12 20z";
 const CLOSE: &str = "M6 6l12 12M18 6L6 18";
+const MUSIC: &str =
+    "M9 18V5l12-2v13M9 18a3 3 0 11-6 0 3 3 0 016 0zM21 16a3 3 0 11-6 0 3 3 0 016 0z";
 const LIST: &str = "M4 6h16M4 12h16M4 18h10";
 const NEXT: &str = "M6 5l10 7-10 7V5zM19 5v14";
 const EXTERNAL: &str = "M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5";
@@ -766,40 +744,22 @@ fn release(video: &web_sys::HtmlVideoElement) {
 fn channel_trouble(e: &xtream::Error) -> String {
     let text = e.to_string();
     let has = |s: &str| text.contains(s);
+    // A few words each: the detail is in the proxy's `--logs` trace.
     if has("404") || has("Not Found") {
-        "This channel is offline: your provider doesn't have it right now (404).".into()
+        "This channel is offline"
     } else if has("401") || has("403") || has("Forbidden") || has("Unauthorized") {
-        "Your provider refused this channel (403). Your subscription may not include it, or \
-         another device is using your connection."
-            .into()
-    } else if has("429") || has("458") || has("509") {
-        "Your provider says too many streams are open on your account. Stop it on your other \
-         devices and try again."
-            .into()
-    } else if has("says this channel is unavailable") {
-        "This channel is down at your provider right now: it couldn't read its own source.".into()
-    } else if has("509") || has("Bandwidth Limit") {
-        "Your provider says your account is at its connection limit. Stop streaming on other \
-         devices and try again."
-            .into()
-    } else if has("5XX") || has("500") || has("502") || has("503") || has("Service Unavailable") {
-        "Your provider's server is failing for this channel right now (5xx). Try again later, or \
-         check that your account isn't streaming on another device."
-            .into()
+        "Your provider refused this channel"
+    } else if has("429") || has("458") || has("509") || has("Bandwidth Limit") {
+        "Too many streams on your account"
     } else if has("timed out") || has("took too long") {
-        "Your provider isn't answering for this channel. Try again in a moment.".into()
+        "Your provider isn't responding"
     } else if has("ffmpeg isn't installed") {
-        text
+        "ffmpeg isn't installed"
     } else {
-        format!("Can't play this channel: {text}")
+        "This channel isn't available right now"
     }
+    .into()
 }
-
-/// Shown, with the progress ring, while a dropped live stream is opened again.
-const RECONNECTING: &str = "Reconnecting…";
-
-/// Shown, with the spinner, when a channel takes unusually long to start.
-const STILL_STARTING: &str = "Still starting: your provider is slow to answer…";
 
 /// Playing for `after` seconds, unmuted, and not one byte of sound decoded (Chrome counts them):
 /// the browser can't decode this sound.
@@ -1027,6 +987,13 @@ fn count<T>(list: &[T], category: impl Fn(&T) -> Option<u64>) -> HashMap<u64, us
     counts
 }
 
+/// A section's data kept after it loads (see `Browse`), shared rather than copied.
+#[derive(Default)]
+struct Loaded {
+    categories: Option<Rc<Vec<xtream::Category>>>,
+    library: Option<Rc<Library>>,
+}
+
 async fn load(c: &Client, kind: Kind) -> xtream::Result<Library> {
     let items = match kind {
         Kind::Live => Items::Live(c.live_streams(None).await?),
@@ -1205,7 +1172,7 @@ fn Browse() -> Element {
     let mut category_search = use_signal(String::new);
     let mut playing = use_signal(|| None::<Play>);
     let mut queue = use_signal(Vec::<Play>::new); // the episodes after the one playing
-    let mut live = use_signal(|| None::<(u64, String, String)>); // (id, title, playlist url)
+    let mut live = use_signal(|| None::<(u64, String, String, Option<String>)>); // (id, title, playlist url, logo)
     let mut open = use_signal(|| None::<Row>); // the movie or series page
     let mut sort = use_signal(|| Sort::restored(Kind::Live, remembered.sorts[0]));
     let mut sort_open = use_signal(|| false);
@@ -1216,20 +1183,43 @@ fn Browse() -> Element {
     let mut page = use_signal(|| 0_usize);
 
     let (c_cats, c_lib) = (client.clone(), client.clone());
+    // Each section, once loaded, stays: switching back to it is instant. Refresh starts over.
+    let loaded = use_hook(|| Rc::new(RefCell::new(HashMap::<(u8, u64), Loaded>::new())));
+    let cats_loaded = loaded.clone();
     let cats = use_resource(move || {
-        let (c, k, _) = (c_cats.clone(), kind(), refresh());
+        let (c, k, generation) = (c_cats.clone(), kind(), refresh());
+        let cache = cats_loaded.clone();
         async move {
+            let key = (k as u8, generation);
+            if let Some(list) = cache.borrow().get(&key).and_then(|l| l.categories.clone()) {
+                return Ok::<_, xtream::Error>((k, list));
+            }
             let list = match k {
                 Kind::Live => c.live_categories().await,
                 Kind::Movies => c.vod_categories().await,
                 Kind::Series => c.series_categories().await,
-            };
-            list.map(|l| (k, l))
+            }
+            .map(Rc::new)?;
+            let mut cache = cache.borrow_mut();
+            cache.retain(|(_, g), _| *g == generation);
+            cache.entry(key).or_default().categories = Some(list.clone());
+            Ok((k, list))
         }
     });
     let library = use_resource(move || {
-        let (c, k, _) = (c_lib.clone(), kind(), refresh());
-        async move { load(&c, k).await }
+        let (c, k, generation) = (c_lib.clone(), kind(), refresh());
+        let cache = loaded.clone();
+        async move {
+            let key = (k as u8, generation);
+            if let Some(lib) = cache.borrow().get(&key).and_then(|l| l.library.clone()) {
+                return Ok::<_, xtream::Error>(lib);
+            }
+            let lib = Rc::new(load(&c, k).await?);
+            let mut cache = cache.borrow_mut();
+            cache.retain(|(_, g), _| *g == generation);
+            cache.entry(key).or_default().library = Some(lib.clone());
+            Ok(lib)
+        }
     });
 
     // A remembered category may have been removed since the last visit.
@@ -1287,7 +1277,7 @@ fn Browse() -> Element {
                 category.set(row.category);
                 page.set(0);
             }
-            live.set(Some((id, row.title, url)));
+            live.set(Some((id, row.title, url, row.icon)));
         }
         Target::Movie { .. } | Target::Series(_) => open.set(Some(row)),
     };
@@ -1323,7 +1313,7 @@ fn Browse() -> Element {
                     .as_ref()
                     .and_then(|r| r.as_ref().ok())
                     .filter(|l| l.kind == kind());
-                let total = lib.map_or(0, Library::len);
+                let total = lib.map_or(0, |l| l.len());
                 let q = category_search().to_lowercase();
                 rsx! {
                     input {
@@ -1392,7 +1382,7 @@ fn Browse() -> Element {
                         ChannelRow {
                             key: "{r.key}",
                             row: r.clone(),
-                            active: live().as_ref().map(|(id, _, _)| *id) == Some(r.key),
+                            active: live().as_ref().map(|(id, ..)| *id) == Some(r.key),
                             onpick: pick
                         }
                     }
@@ -1484,14 +1474,15 @@ fn Browse() -> Element {
         }
     });
     let channel_client = client.clone();
-    let live_panel = live().map(|(id, title, url)| {
+    let live_panel = live().map(|(id, title, url, icon)| {
         let player_key = format!("{url}-{}", player_revision());
         rsx! {
-            LivePlayer {
+            live::LivePlayer {
                 key: "{player_key}",
                 id,
                 title,
                 url,
+                icon,
                 onchannel: move |action| {
                     let selected = {
                         let library = library.read();
@@ -1506,13 +1497,14 @@ fn Browse() -> Element {
                                 position,
                                 stream.stream_id,
                                 stream.name.clone(),
+                                stream.stream_icon.clone(),
                             ))
                     };
-                    if let Some((position, next_id, name)) = selected
+                    if let Some((position, next_id, name, icon)) = selected
                         && next_id != id
                     {
                         page.set(position / PAGE_LIST);
-                        live.set(Some((next_id, name, channel_client.live_url(next_id, "m3u8").to_string())));
+                        live.set(Some((next_id, name, channel_client.live_url(next_id, "m3u8").to_string(), icon)));
                     }
                 },
             }
@@ -1798,10 +1790,8 @@ fn ChannelRow(row: Row, active: bool, onpick: EventHandler<Row>) -> Element {
                     img { src: "{src}", loading: "lazy", decoding: "async" }
                 }
             }
-            div {
-                strong { "{row.title}" }
-                if active { small { "Now playing" } }
-            }
+            strong { "{row.title}" }
+            if active { span { class: "eq", i {} i {} i {} } }
         }
     }
 }
@@ -1911,12 +1901,6 @@ const WATCH_MEDIA_ACTIONS_NEXT: &[(&str, media_session::Action)] = &[
     ("seekforward", media_session::Action::Forward),
     ("previoustrack", media_session::Action::Previous),
     ("nexttrack", media_session::Action::Next),
-    ("stop", media_session::Action::Stop),
-];
-
-const LIVE_MEDIA_ACTIONS: &[(&str, media_session::Action)] = &[
-    ("play", media_session::Action::Play),
-    ("pause", media_session::Action::Pause),
     ("stop", media_session::Action::Stop),
 ];
 
@@ -2491,12 +2475,7 @@ fn Watch(
                         p { "{why}" }
                     }
                 } else {
-                    div { class: "w-load",
-                        LoadRing { stage: 0 }
-                        strong { "{play.title}" }
-                        if let Some(sub) = &play.subtitle { small { "{sub}" } }
-                        span { "Starting playback…" }
-                    }
+                    div { class: "w-load", LoadRing { stage: 0 } }
                 }
             } else {
                 video {
@@ -3037,872 +3016,6 @@ fn DetailPage(
                 }
             }
             div { class: "d-sec" }
-        }
-    }
-}
-
-/// A live stream through the Rust HLS player, with its own controls and the channel's guide. The
-/// player stops when this component goes away (its handle is dropped), so picking another channel
-/// ends the download loop.
-/// What is driving a live channel's `<video>`: the Rust player, the Rust player with the sound
-/// given up on (when the proxy can't convert it), or the proxy's ffmpeg-converted stream.
-#[derive(Clone, PartialEq)]
-enum Feed {
-    Pending,
-    Direct(String),
-    Rust,
-    Partial,
-    Converted(String),
-}
-
-#[component]
-fn LivePlayer(
-    id: u64,
-    title: String,
-    url: String,
-    onchannel: EventHandler<ChannelAction>,
-) -> Element {
-    let session = use_context::<Signal<Option<Client>>>();
-    let rust_sound = use_context::<Signal<bool>>();
-    let client = use_hook(|| session.read().clone().expect("logged in"));
-    let media = use_hook(|| Rc::new(RefCell::new(None::<media_session::Session>)));
-    let media_for_install = media.clone();
-    let media_title = title.clone();
-    use_effect(move || {
-        let installed = media_session::Session::install(
-            &media_title,
-            "Live TV · RIPTV",
-            LIVE_MEDIA_ACTIONS,
-            move |action| match action {
-                media_session::Action::Play => {
-                    if let Some(v) = video_el() {
-                        let _ = v.play();
-                    }
-                }
-                media_session::Action::Pause | media_session::Action::Stop => {
-                    if let Some(v) = video_el() {
-                        let _ = v.pause();
-                    }
-                }
-                _ => {}
-            },
-        );
-        if let (Some(session), Some(video)) = (installed.as_ref(), video_el()) {
-            session.playing(!video.paused());
-        }
-        *media_for_install.borrow_mut() = installed;
-    });
-    let media_on_play = media.clone();
-    let media_on_pause = media.clone();
-    use_drop(move || {
-        media.borrow_mut().take();
-    });
-    let saved_volume = u32::from(use_hook(preferences::load).volume);
-    let mut status = use_signal(|| "Starting playback…".to_string());
-    let mut picture_ready = use_signal(|| false);
-    // How far the current start has got, for the progress ring (see `LoadRing`).
-    let mut load_stage = use_signal(|| 0_u8);
-    let mut audio_only = use_signal(|| false);
-    let mut paused = use_signal(|| false);
-    let mut muted = use_signal(move || saved_volume == 0);
-    let mut volume = use_signal(move || saved_volume);
-    let mut buffering = use_signal(|| false);
-    let mut expanded = use_signal(|| false);
-    // Why there is no sound, when the player knows: its own note, or what the browser reports.
-    let mut note = use_signal(|| None::<String>);
-    let mut silent = use_signal(|| false);
-    // The controls fade out after a moment of no mouse movement while playing.
-    let active = use_signal(|| true);
-    let idle = use_hook(|| IdleHide::new(active, 2500.0));
-    let handle = use_hook(|| Rc::new(RefCell::new(None::<rstreamkit::mse::Player>)));
-    // With `riptv --logs`: what this channel's player does, for the proxy's diagnostics log.
-    let trace = use_hook(|| {
-        let upstream = xtream::Url::parse(&url)
-            .map(|u| client.upstream(&u).to_string())
-            .unwrap_or_default();
-        diag::Trace::start(
-            &upstream,
-            serde_json::json!({
-                "kind": "live",
-                "channel": id,
-                "title": title,
-                "experimental": *rust_sound.peek(),
-            }),
-        )
-    });
-
-    // Standard: the proxy's live stream, from the first moment (an iPhone, which can't play one,
-    // uses its own HLS player). Experimental: rstreamkit, and nothing else.
-    let mut feed = use_signal(|| {
-        if *rust_sound.peek() {
-            Feed::Rust
-        } else if standard::plays_live_streams() {
-            standard::live(&client, &url, false).map_or(Feed::Pending, Feed::Converted)
-        } else {
-            native_hls_source(&client, &url).map_or(Feed::Pending, Feed::Direct)
-        }
-    });
-    // Reconnections in a row (a live stream that drops is reopened, a few times).
-    let mut reconnects = use_signal(|| 0_u32);
-    let mut reconnect = move || {
-        let tries = *reconnects.peek() + 1;
-        let current = feed.peek().clone();
-        let Feed::Converted(src) = current else {
-            return;
-        };
-        if tries > 3 {
-            status.set(
-                "This channel keeps dropping. Your provider may be having trouble with it.".into(),
-            );
-            return;
-        }
-        reconnects.set(tries);
-        status.set(RECONNECTING.into());
-        // A new address (same stream) so the player opens it afresh.
-        let base = src.split("&again=").next().unwrap_or(&src).to_owned();
-        feed.set(Feed::Converted(format!("{base}&again={tries}")));
-    };
-    // Only where neither of those applies (an iPhone whose own player failed): the proxy checks
-    // the stream and converts it.
-    {
-        let (client, url) = (client.clone(), url.clone());
-        let _convert = use_resource(move || {
-            let pending = matches!(feed(), Feed::Pending);
-            let (client, url) = (client.clone(), url.clone());
-            async move {
-                if !pending {
-                    return;
-                }
-                let Ok(media) = xtream::Url::parse(&url) else {
-                    status.set("This channel's address is invalid".into());
-                    return;
-                };
-                match client.convert(&media).await {
-                    Ok(converted) => feed.set(Feed::Converted(converted.at(0).to_string())),
-                    Err(e) => status.set(channel_trouble(&e)),
-                }
-            }
-        });
-    }
-    // A readout for telling a slow stream from a slow decoder: what the picture really is,
-    // frames per second actually shown, frames dropped, and how much is buffered.
-    let mut show_stats = use_signal(|| false);
-    let mut stats = use_signal(String::new);
-    {
-        let trace = trace.clone();
-        use_effect(move || {
-            let engine = match feed() {
-                Feed::Pending => "starting_ffmpeg",
-                Feed::Direct(_) => "native_hls",
-                Feed::Rust => "rust",
-                Feed::Partial => "rust_no_sound",
-                Feed::Converted(_) => "ffmpeg",
-            };
-            trace.event("engine", serde_json::json!({ "engine": engine }));
-        });
-    }
-    {
-        let trace = trace.clone();
-        use_effect(move || {
-            let text = status();
-            let name = if diag::is_failure(&text) {
-                "failure"
-            } else {
-                "status"
-            };
-            trace.event(name, serde_json::json!({ "text": text }));
-        });
-    }
-    {
-        let trace = trace.clone();
-        use_effect(move || {
-            if let Some(why) = note() {
-                trace.event("no_sound", serde_json::json!({ "text": why }));
-            } else if silent() {
-                trace.event(
-                    "no_sound",
-                    serde_json::json!({ "text": "browser decoded no audio" }),
-                );
-            }
-        });
-    }
-    {
-        let trace = trace.clone();
-        use_drop(move || trace.close());
-    }
-    let mut channel_action = use_signal(|| None::<ChannelAction>);
-    let mut dial = use_signal(String::new);
-    let digits = use_hook(|| Rc::new(RefCell::new(String::new())));
-    let dial_epoch = use_hook(|| Rc::new(Cell::new(0_u64)));
-    use_effect(move || {
-        if let Some(action) = channel_action() {
-            channel_action.set(None);
-            onchannel.call(action);
-        }
-    });
-    // A resource, not a future: it starts again when `show_stats` changes (a future runs once),
-    // so nothing polls while the readout is off.
-    let _stats_task = use_resource(move || async move {
-        if !show_stats() {
-            return;
-        }
-        let mut last = (0_u64, js_sys::Date::now());
-        let mut frame_counter = None;
-        let mut frame_counter_checked = false;
-        loop {
-            rstreamkit::mse::sleep(Duration::from_secs(1)).await;
-            let Some(v) = video_el() else {
-                continue;
-            };
-            if !frame_counter_checked {
-                frame_counter = frame_stats::Counter::start(&v);
-                frame_counter_checked = true;
-                last = (0, js_sys::Date::now());
-            }
-            let quality = v.get_video_playback_quality();
-            let (frames, now) = (
-                frame_counter.as_ref().map_or(
-                    u64::from(quality.total_video_frames()),
-                    frame_stats::Counter::presented,
-                ),
-                js_sys::Date::now(),
-            );
-            let fps = (frames.saturating_sub(last.0) as f64 * 1000.0 / (now - last.1).max(1.0))
-                .round() as u32;
-            last = (frames, now);
-            let buffered = v.buffered();
-            let ahead = buffered
-                .length()
-                .checked_sub(1)
-                .and_then(|i| buffered.end(i).ok())
-                .map_or(0.0, |end| (end - v.current_time()).max(0.0))
-                as u32;
-            let source = match feed() {
-                Feed::Pending => "starting compatibility mode",
-                Feed::Direct(_) => "native HLS",
-                Feed::Rust => "Rust player",
-                Feed::Partial => "Rust player, no sound",
-                Feed::Converted(_) => "converted by ffmpeg",
-            };
-            stats.set(format!(
-                "{}×{} · {fps} fps · {} dropped · {ahead}s buffered · {source}",
-                v.video_width(),
-                v.video_height(),
-                quality.dropped_video_frames()
-            ));
-        }
-    });
-    let watchdog_client = client.clone();
-    let watchdog_url = url.clone();
-    let player_video = use_hook(|| Rc::new(RefCell::new(None::<web_sys::HtmlVideoElement>)));
-    {
-        let player_video = player_video.clone();
-        use_drop(move || {
-            if let Some(video) = player_video.borrow_mut().take() {
-                release(&video);
-            }
-        });
-    }
-    use_future(move || async move {
-        rstreamkit::mse::sleep(Duration::from_secs(12)).await;
-        if status.try_peek().is_ok_and(|s| *s == "Starting playback…") {
-            status.set(STILL_STARTING.into());
-        }
-    });
-    let (sound_client, sound_url) = (client.clone(), url.clone());
-    let trace_for_player = trace.clone();
-    use_effect(move || {
-        let Some(video) = video_el() else {
-            status.set("Could not start the player".into());
-            return;
-        };
-        *player_video.borrow_mut() = Some(video.clone());
-        load_stage.set(0); // a new source starts over
-        trace_for_player.follow(&video);
-        video.set_volume(f64::from(*volume.peek()) / 100.0);
-        video.set_muted(*muted.peek());
-        let partial = match feed() {
-            Feed::Pending => return,
-            Feed::Direct(src) => {
-                handle.borrow_mut().take();
-                video.set_src(&src);
-                let _ = video.play();
-                return;
-            }
-            Feed::Converted(src) => {
-                // Stop the Rust player and let the plain `<video>` play the converted stream.
-                handle.borrow_mut().take();
-                note.set(None);
-                video.set_src(&src);
-                let _ = video.play();
-                return;
-            }
-            Feed::Partial => true,
-            Feed::Rust => false,
-        };
-        let Ok(playlist) = xtream::Url::parse(&url) else {
-            status.set("Could not start the player".into());
-            return;
-        };
-        let c = client.clone();
-        let upstream = client.upstream(&playlist);
-        let unsupported_trace = trace_for_player.clone();
-        *handle.borrow_mut() = Some(rstreamkit::mse::start(
-            video,
-            upstream.to_string(),
-            Proxied(c),
-            partial,
-            // `peek`: changing the setting must not restart a channel that is playing.
-            *rust_sound.peek(),
-            move |s| match s {
-                rstreamkit::mse::Status::Playing => {
-                    status.set(
-                        if *picture_ready.peek() {
-                            "Live"
-                        } else {
-                            "Waiting for picture…"
-                        }
-                        .into(),
-                    );
-                }
-                rstreamkit::mse::Status::Note(n) => note.set(Some(n)),
-                rstreamkit::mse::Status::Unsupported(reason) => {
-                    unsupported_trace.event(
-                        "unsupported",
-                        serde_json::json!({ "reason": reason.to_string() }),
-                    );
-                    // The experimental player stays experimental: it says what it can't do
-                    // rather than quietly handing over to the standard player.
-                    if matches!(reason, Unsupported::Sound(_)) {
-                        note.set(Some(reason.to_string()));
-                        feed.set(Feed::Partial);
-                    } else {
-                        status.set(format!(
-                            "The experimental player can't play this channel ({reason}). Turn \
-                             Experimental player off to use the standard one."
-                        ));
-                    }
-                }
-                rstreamkit::mse::Status::Ended => status.set("Stream ended".into()),
-                rstreamkit::mse::Status::Failed(e) => status.set(format!("Playback failed: {e}")),
-                _ => {}
-            },
-        ));
-    });
-
-    // Some providers append data successfully but never deliver a decodable picture. In that
-    // case MSE can say "Playing" while the screen stays black. Watch only until the first frame;
-    // each fallback gets one chance, so a broken upstream does not loop forever.
-    use_future(move || {
-        let client = watchdog_client.clone();
-        let url = watchdog_url.clone();
-        async move {
-            let mut mode = None::<Feed>;
-            let mut since = js_sys::Date::now();
-            loop {
-                rstreamkit::mse::sleep(Duration::from_secs(2)).await;
-                let current = feed.peek().clone();
-                if mode.as_ref() != Some(&current) {
-                    mode = Some(current.clone());
-                    since = js_sys::Date::now();
-                }
-                // `ontimeupdate` notices the first decoded frame.
-                if *picture_ready.peek() || *audio_only.peek() {
-                    break;
-                }
-                let Some(video) = video_el() else { continue };
-                if video.paused()
-                    || web_sys::window()
-                        .and_then(|w| w.document())
-                        .is_some_and(|d| d.hidden())
-                {
-                    since = js_sys::Date::now();
-                    continue;
-                }
-                // Time moving with no frame decoded means the video can't be decoded here: act
-                // soon. Nothing moving at all is a slow provider, which another method from the
-                // same provider won't fix quickly: give it longer.
-                let wait_ms = if video.current_time() > 1.0 {
-                    5_000.0
-                } else {
-                    20_000.0
-                };
-                if js_sys::Date::now() - since < wait_ms {
-                    continue;
-                }
-                match current {
-                    Feed::Pending => continue,
-                    Feed::Direct(_) => {
-                        status.set("Trying another playback method…".into());
-                        feed.set(Feed::Pending);
-                    }
-                    Feed::Rust | Feed::Partial => {
-                        status.set(
-                            "The experimental player shows no picture for this channel. Turn \
-                             Experimental player off to use the standard one."
-                                .into(),
-                        );
-                        break;
-                    }
-                    // Time moves but no frame: a stream with no video track plays as radio; a
-                    // picture this browser won't decode gets re-encoded, once.
-                    Feed::Converted(src) => {
-                        if video.video_width() == 0 && video.ready_state() >= 2 {
-                            audio_only.set(true);
-                            picture_ready.set(true);
-                            status.set("Audio only".into());
-                            break;
-                        }
-                        match (!src.contains("video=transcode"))
-                            .then(|| standard::live(&client, &url, true))
-                            .flatten()
-                        {
-                            Some(again) => {
-                                status.set("Re-encoding the video…".into());
-                                feed.set(Feed::Converted(again));
-                            }
-                            None => {
-                                status.set("No picture from this channel: the source may be offline or sending blank frames.".into());
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    });
-
-    // A document listener also works after a channel-row click leaves focus outside the player.
-    // Ignore search fields so typing a category or title never changes channel.
-    let keys = use_hook(|| {
-        Rc::new(RefCell::new(
-            None::<Closure<dyn FnMut(web_sys::KeyboardEvent)>>,
-        ))
-    });
-    let keys_for_install = keys.clone();
-    let digits_for_keys = digits.clone();
-    let epoch_for_keys = dial_epoch.clone();
-    use_effect(move || {
-        let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
-            return;
-        };
-        let digits = digits_for_keys.clone();
-        let epoch = epoch_for_keys.clone();
-        let on_key =
-            Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
-                if e.alt_key() || e.ctrl_key() || e.meta_key() {
-                    return;
-                }
-                if e.target()
-                    .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-                    .is_some_and(|el| {
-                        matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT")
-                    })
-                {
-                    return;
-                }
-                match e.key().to_ascii_lowercase().as_str() {
-                    " " => {
-                        e.prevent_default();
-                        toggle_play();
-                    }
-                    "arrowup" => {
-                        e.prevent_default();
-                        digits.borrow_mut().clear();
-                        dial.set(String::new());
-                        epoch.set(epoch.get().wrapping_add(1));
-                        channel_action.set(Some(ChannelAction::Up));
-                    }
-                    "arrowdown" => {
-                        e.prevent_default();
-                        digits.borrow_mut().clear();
-                        dial.set(String::new());
-                        epoch.set(epoch.get().wrapping_add(1));
-                        channel_action.set(Some(ChannelAction::Down));
-                    }
-                    "f" => toggle_fullscreen("live-player", expanded),
-                    "i" => show_stats.set(!show_stats()),
-                    "escape" => {
-                        digits.borrow_mut().clear();
-                        dial.set(String::new());
-                        epoch.set(epoch.get().wrapping_add(1));
-                        expanded.set(false);
-                    }
-                    "m" => muted.set(toggle_mute().unwrap_or(false)),
-                    "enter" => {
-                        let number = digits.borrow().parse().ok();
-                        digits.borrow_mut().clear();
-                        dial.set(String::new());
-                        epoch.set(epoch.get().wrapping_add(1));
-                        if let Some(number) = number {
-                            channel_action.set(Some(ChannelAction::Number(number)));
-                        }
-                    }
-                    key if key.len() == 1 && key.as_bytes()[0].is_ascii_digit() => {
-                        e.prevent_default();
-                        let typed = {
-                            let mut value = digits.borrow_mut();
-                            if value.len() >= 5 {
-                                value.clear();
-                            }
-                            value.push_str(key);
-                            value.clone()
-                        };
-                        dial.set(typed);
-                        let revision = epoch.get().wrapping_add(1);
-                        epoch.set(revision);
-                        let (digits, epoch) = (digits.clone(), epoch.clone());
-                        wasm_bindgen_futures::spawn_local(async move {
-                            rstreamkit::mse::sleep(Duration::from_millis(1400)).await;
-                            if epoch.get() == revision {
-                                let number = digits.borrow().parse().ok();
-                                digits.borrow_mut().clear();
-                                dial.set(String::new());
-                                if let Some(number) = number {
-                                    channel_action.set(Some(ChannelAction::Number(number)));
-                                }
-                            }
-                        });
-                    }
-                    _ => {}
-                }
-            });
-        let _ = doc.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref());
-        *keys_for_install.borrow_mut() = Some(on_key);
-    });
-    use_drop(move || {
-        dial_epoch.set(dial_epoch.get().wrapping_add(1));
-        if let (Some(on_key), Some(doc)) = (
-            keys.borrow_mut().take(),
-            web_sys::window().and_then(|w| w.document()),
-        ) {
-            let _ =
-                doc.remove_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref());
-        }
-    });
-
-    let class = format!(
-        "player{}{}{}",
-        if paused() { " paused" } else { "" },
-        if active() { " active" } else { "" },
-        if expanded() { " fill" } else { "" }
-    );
-    rsx! {
-        div { class: "live-stage",
-            div {
-                class: "{class}",
-                id: "live-player",
-                tabindex: "0",
-                onmousemove: move |_| idle.wake(),
-                video {
-                    id: "live-video",
-                    autoplay: true,
-                    playsinline: true,
-                    onplay: move |_| {
-                        paused.set(false);
-                        if let Some(s) = media_on_play.borrow().as_ref() { s.playing(true); }
-                    },
-                    onpause: move |_| {
-                        paused.set(true);
-                        if let Some(s) = media_on_pause.borrow().as_ref() { s.playing(false); }
-                    },
-                    onwaiting: move |_| buffering.set(true),
-                    // A live channel never ends: the connection did. Open it again.
-                    onended: move |_| reconnect(),
-                    onloadstart: move |_| if *load_stage.peek() < 1 { load_stage.set(1) },
-                    onloadedmetadata: move |_| {
-                        if *load_stage.peek() < 2 {
-                            load_stage.set(2);
-                        }
-                        // No video track at all (radio): say so at once, not after waiting.
-                        if let Some(v) = video_el()
-                            && v.video_width() == 0
-                            && matches!(*feed.peek(), Feed::Converted(_))
-                        {
-                            audio_only.set(true);
-                            picture_ready.set(true);
-                            status.set("Audio only".into());
-                        }
-                    },
-                    onloadeddata: move |_| if *load_stage.peek() < 3 { load_stage.set(3) },
-                    onplaying: move |_| {
-                        load_stage.set(4);
-                        buffering.set(false);
-                        paused.set(false);
-                        if matches!(feed(), Feed::Direct(_) | Feed::Converted(_)) {
-                            status.set(if audio_only() { "Audio only" } else if picture_ready() { "Live" } else { "Waiting for picture…" }.into());
-                        }
-                    },
-                    onerror: {
-                        let (client, url) = (sound_client.clone(), sound_url.clone());
-                        move |_| {
-                            // MEDIA_ERR_DECODE: the browser's decoder rejects this picture: have
-                            // the proxy re-encode it, once.
-                            let error = video_el()
-                                .and_then(|v| js_sys::Reflect::get(&v, &"error".into()).ok())
-                                .filter(|e| !e.is_null() && !e.is_undefined());
-                            let field = |name: &str| error.as_ref().and_then(|e| js_sys::Reflect::get(e, &name.into()).ok());
-                            let decoding = field("code").and_then(|c| c.as_f64()) == Some(3.0);
-                            // A video decode error (an audio one is a damaged packet: reconnect).
-                            let decode_error = decoding
-                                && !field("message").and_then(|m| m.as_string()).is_some_and(|m| m.contains("audio"));
-                            let current = feed.peek().clone();
-                            match current {
-                                Feed::Converted(src) if decode_error && !src.contains("video=transcode") => {
-                                    if let Some(again) = standard::live(&client, &url, true) {
-                                        status.set("Re-encoding the video…".into());
-                                        feed.set(Feed::Converted(again));
-                                    }
-                                }
-                                // It was playing, or got as far as decoding: a dropped
-                                // connection or a damaged packet. Open it again.
-                                Feed::Converted(_) if *picture_ready.peek() || decoding => reconnect(),
-                                // The proxy said why it couldn't (offline, refused, ...): ask it.
-                                Feed::Converted(src) => {
-                                    status.set("Starting playback…".into());
-                                    let client = client.clone();
-                                    wasm_bindgen_futures::spawn_local(async move {
-                                        let why = match xtream::Url::parse(&src) {
-                                            Ok(u) => client.refusal(&u).await,
-                                            Err(_) => None,
-                                        };
-                                        if status.try_peek().is_ok() {
-                                            status.set(match why {
-                                                Some(why) => channel_trouble(&xtream::Error::Proxy(why)),
-                                                None => "The stream stopped: the channel may have ended".into(),
-                                            });
-                                        }
-                                    });
-                                }
-                                Feed::Direct(_) => {
-                                    status.set("Starting playback…".into());
-                                    feed.set(Feed::Pending);
-                                }
-                                _ => {}
-                            }
-                        }
-                    },
-                    onvolumechange: move |_| {
-                        if let Some(v) = video_el() {
-                            if muted() != v.muted() {
-                                muted.set(v.muted());
-                            }
-                            let level = (v.volume() * 100.0).round() as u32;
-                            if volume() != level {
-                                volume.set(level);
-                            }
-                        }
-                    },
-                    ontimeupdate: move |_| {
-                        let Some(v) = video_el() else { return };
-                        // The picture is there as soon as a frame has been decoded: no polling.
-                        if !*picture_ready.peek() && v.get_video_playback_quality().total_video_frames() > 0 {
-                            picture_ready.set(true);
-                            if matches!(status.peek().as_str(), "Starting playback…" | "Waiting for picture…" | STILL_STARTING | RECONNECTING) {
-                                status.set("Live".into());
-                            }
-                        }
-                        // Playing steadily again: the next drop gets its full set of retries.
-                        if v.current_time() > 15.0 && *reconnects.peek() > 0 {
-                            reconnects.set(0);
-                        }
-                        // Chrome's decoded-byte count lags a little: give it a few seconds. Clears
-                        // itself once sound arrives.
-                        let quiet = no_audio_decoded(&v, 5.0);
-                        if quiet != *silent.peek() {
-                            silent.set(quiet);
-                        }
-                    },
-                    onclick: move |_| toggle_play(),
-                    ondoubleclick: move |_| toggle_fullscreen("live-player", expanded),
-                }
-                if show_stats() {
-                    div { class: "stats", "{stats}" }
-                }
-                if audio_only() {
-                    div { class: "audio-only", role: "status",
-                        span { class: "audio-orb", "♫" }
-                        strong { "Audio only" }
-                        small { "This channel isn't sending a video track." }
-                    }
-                }
-                if !dial().is_empty() { div { class: "channel-dial", "{dial}" } }
-                if let Some(why) = note() {
-                    div { class: "sound-note", "No sound: {why}" }
-                } else if silent() {
-                    div { class: "sound-note", "No sound: this stream's audio format can't be decoded by your browser" }
-                }
-                if status() != "Live" && status() != "Audio only" {
-                    div { class: "hud",
-                        div { class: "loading-group",
-                            if status() == "Starting playback…" || status() == "Waiting for picture…" || status() == STILL_STARTING || status() == "Re-encoding the video…" || status() == RECONNECTING { LoadRing { stage: load_stage() } }
-                            span { "{status}" }
-                        }
-                    }
-                }
-                if buffering() && !paused() && status() == "Live" { div { class: "hud", i { class: "spinner" } } }
-                if paused() {
-                    button { class: "bigplay", aria_label: "Play", onclick: move |_| toggle_play(), Icon { d: PLAY } }
-                }
-                div { class: "controls",
-                    button { class: "ctl", aria_label: "Play or pause", onclick: move |_| toggle_play(),
-                        Icon { d: if paused() { PLAY } else { PAUSE } }
-                    }
-                    div { class: "volume",
-                        button {
-                            class: "ctl",
-                            aria_label: "Mute",
-                            onclick: move |_| muted.set(toggle_mute().unwrap_or(false)),
-                            Icon { d: if muted() { MUTED } else { VOLUME } }
-                        }
-                        input {
-                            class: "vol",
-                            r#type: "range",
-                            min: "0",
-                            max: "100",
-                            aria_label: "Volume",
-                            value: "{volume}",
-                            oninput: move |e| {
-                                let level: u32 = e.value().parse().unwrap_or(100);
-                                volume.set(level);
-                                muted.set(level == 0);
-                                preferences::update(|p| p.volume = level.min(100) as u8);
-                                if let Some(v) = video_el() {
-                                    v.set_volume(f64::from(level) / 100.0);
-                                    v.set_muted(level == 0);
-                                }
-                            }
-                        }
-                    }
-                    button { class: "live-pill", title: "Jump to live", onclick: move |_| { go_live(); if paused() { toggle_play(); } }, "LIVE" }
-                    span { class: "grow" }
-                    button { class: "ctl", aria_label: "Stream info", title: "Stream info (I)", onclick: move |_| show_stats.set(!show_stats()), Icon { d: INFO } }
-                    button { class: "ctl", aria_label: "Picture in picture", title: "Picture in picture", onclick: move |_| toggle_pip(video_el()), Icon { d: PIP } }
-                    button { class: "ctl", aria_label: "Fullscreen", title: "Fullscreen (F)", onclick: move |_| toggle_fullscreen("live-player", expanded), Icon { d: FULLSCREEN } }
-                }
-            }
-            Guide { id, title }
-        }
-    }
-}
-
-/// The channel's schedule on a timeline: hour ticks, one block per programme, a marker for now.
-/// It scrolls to now on load and moves the marker every 30 seconds.
-#[component]
-fn Guide(id: u64, title: String) -> Element {
-    let session = use_context::<Signal<Option<Client>>>();
-    let client = use_hook(|| session.read().clone().expect("logged in"));
-    let mut tick = use_signal(|| 0_u32);
-    use_future(move || async move {
-        loop {
-            rstreamkit::mse::sleep(Duration::from_secs(30)).await;
-            tick += 1;
-        }
-    });
-    let table = use_resource(move || {
-        let c = client.clone();
-        async move {
-            let now = now_secs();
-            match c.epg_table(id).await {
-                Ok(t) if xtream::guide::has_nearby(&t, now) => Ok(t),
-                _ => c.short_epg(id, 8).await,
-            }
-        }
-    });
-    // Once the schedule arrives, start with the current programme in view. The timeline isn't
-    // laid out the moment the data lands, so wait a moment.
-    use_effect(move || {
-        if table.read().is_some() {
-            spawn(async move {
-                rstreamkit::mse::sleep(Duration::from_millis(60)).await;
-                let timeline = web_sys::window()
-                    .and_then(|w| w.document())
-                    .and_then(|d| d.get_element_by_id("timeline"));
-                if let Some(el) = timeline
-                    && let Some(at) = el
-                        .first_element_child()
-                        .and_then(|c| c.get_attribute("data-now"))
-                        .and_then(|a| a.parse::<i32>().ok())
-                {
-                    el.set_scroll_left((at - 160).max(0));
-                }
-            });
-        }
-    });
-
-    let _ = tick(); // re-render now and then so the marker moves
-    let now = now_secs();
-    let mut current = None::<String>;
-    let body = match &*table.read() {
-        None => rsx! { p { class: "dim", "Loading the guide…" } },
-        Some(Err(_)) => rsx! { p { class: "dim", "The guide isn't available for this channel." } },
-        Some(Ok(t)) => {
-            let slots = xtream::guide::normalize(t);
-            current = slots
-                .iter()
-                .find(|slot| slot.start <= now && now < slot.end)
-                .map(|slot| slot.listing.title.clone());
-            if slots.is_empty() {
-                rsx! { p { class: "dim", "This provider has no guide for the channel." } }
-            } else {
-                // From up to eight hours back to a day ahead, on whole hours.
-                let lo = slots[0].start.max(now.saturating_sub(8 * 3600)).min(now) / 3600 * 3600;
-                let last = slots.last().map_or(now, |slot| slot.end);
-                let hi = last.max(now + 3600).min(now + 24 * 3600).div_ceil(3600) * 3600;
-                let scale = xtream::guide::seconds_per_px(&slots, lo, hi);
-                let px = |t: u64| t.clamp(lo, hi).saturating_sub(lo) / scale;
-                let (width, here) = (px(hi), px(now));
-                let visible: Vec<_> = slots
-                    .into_iter()
-                    .filter(|slot| slot.end > lo && slot.start < hi)
-                    .map(|slot| {
-                        let block_width = px(slot.end).saturating_sub(px(slot.start)).max(3);
-                        (slot.start, slot.end, slot.listing, block_width)
-                    })
-                    .collect();
-                if visible.is_empty() {
-                    rsx! { p { class: "dim", "No current guide data for this channel." } }
-                } else {
-                    rsx! {
-                        div {
-                            class: "timeline",
-                            id: "timeline",
-                            div { class: "tl", style: "width:{width}px", "data-now": "{here}",
-                                for hour in (lo..hi).step_by(3600) {
-                                    span { class: "tick", key: "{hour}", style: "left:{px(hour)}px", "{clock(hour)}" }
-                                }
-                                for (start, end, l, block_width) in visible {
-                                    div {
-                                        key: "{start}",
-                                        class: if start <= now && now < end { if block_width < 90 { "block now compact" } else { "block now" } } else if block_width < 90 { "block compact" } else { "block" },
-                                        style: "left:{px(start)}px;width:{block_width}px",
-                                        title: "{clock(start)} – {clock(end)} · {l.title} · {l.description}",
-                                        div { class: "txt",
-                                            time { "{clock(start)} – {clock(end)}" }
-                                            strong { if l.title.is_empty() { "Untitled programme" } else { "{l.title}" } }
-                                            if !l.description.is_empty() { p { "{l.description}" } }
-                                        }
-                                        if start <= now && now < end {
-                                            i { class: "prog", style: "width:{(now - start) * 100 / (end - start)}%" }
-                                        }
-                                    }
-                                }
-                                div { class: "now-line", style: "left:{here}px", span { "{clock(now)}" } }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    };
-
-    rsx! {
-        section { class: "guide",
-            div { class: "guide-head",
-                strong { "{title}" }
-                if let Some(now_title) = current { small { "Now: {now_title}" } }
-            }
-            {body}
         }
     }
 }
