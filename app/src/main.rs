@@ -16,6 +16,9 @@ use std::{
 
 mod controls;
 mod fetch;
+mod frame_stats;
+mod media_session;
+mod preferences;
 mod profiles;
 mod shelves;
 
@@ -233,6 +236,10 @@ svg{width:1.1rem;height:1.1rem}
 .player video{width:100%;height:100%;object-fit:contain}
 .sound-note{position:absolute;left:1rem;bottom:4.6rem;max-width:calc(100% - 2rem);padding:.35rem .8rem;border-radius:10px;background:rgba(0,0,0,.68);color:#ffd48a;font-size:.78rem;backdrop-filter:blur(10px)}
 .stats{position:absolute;top:.8rem;left:.8rem;padding:.3rem .7rem;border-radius:8px;background:rgba(0,0,0,.66);color:#fff;font:600 .72rem ui-monospace,monospace;backdrop-filter:blur(8px)}
+.channel-dial{position:absolute;top:1rem;right:1rem;min-width:3rem;padding:.45rem .75rem;border-radius:10px;background:rgba(0,0,0,.72);color:#fff;text-align:center;font-weight:700}
+.number-panel{position:absolute;z-index:4;right:1rem;bottom:4.5rem;display:flex;align-items:center;gap:.4rem;padding:.45rem;border:1px solid var(--hair);border-radius:12px;background:rgba(16,12,16,.94);box-shadow:0 8px 30px #0008}
+.number-panel input{width:5rem;padding:.4rem .5rem;border:0;border-radius:7px;background:#fff2;color:#fff;outline:0}
+.number-panel button{padding:.4rem .6rem;border-radius:7px;background:#fff2;color:#fff}
 .hud{position:absolute;inset:0;display:grid;place-items:center;color:#fff;pointer-events:none}
 .hud span{padding:.4rem .9rem;border-radius:999px;background:rgba(0,0,0,.6);backdrop-filter:blur(10px)}
 .loading-group{display:grid;justify-items:center;gap:.7rem}
@@ -431,6 +438,7 @@ img[data-failed]{display:none}
 /* Live TV on a phone: keep the picture above the channels, without squeezing in the guide. */
 @media(max-width:820px){.live{display:flex;flex-direction:column;margin:0 -.6rem;border:0;border-radius:0}.stage{order:-1;flex:none}.stage.idle{display:none}.live-stage{display:block;height:auto}.player{margin:0;border-radius:0;aspect-ratio:16/9}.player.fill{aspect-ratio:auto}.controls{padding:2.2rem .5rem .3rem}.ctl{width:2.8rem;height:2.8rem}.vol{display:none}.bigplay{width:4.2rem;height:4.2rem}.sound-note{bottom:3.9rem}.guide{min-height:0;padding:.7rem .9rem .8rem;border-top:0;background:var(--bg)}.tl{height:5.6rem}.channels{flex:1;border:0;background:none}.channels .head{padding:.8rem 1rem .4rem}.channels .scroll{padding-bottom:5.5rem}}
 @media(max-width:820px){.live.watching .stage{display:block;width:100%;background:#000}.live.watching .live-stage{display:block;width:100%}.live.watching .player{width:100%;min-height:0;aspect-ratio:16/9}.live.watching .player video{display:block}.live.watching .guide{display:none}.live.watching .channels{min-height:0;overflow:hidden}.live.watching .channels .scroll{min-height:0;overflow-y:auto}.live.watching .controls{gap:.1rem}.live.watching .controls .ctl{width:2.5rem;height:2.5rem}.live.watching .sound-note{font-size:.7rem}}
+@media(max-width:480px){.live.watching .controls{overflow-x:auto;scrollbar-width:none}.live.watching .controls::-webkit-scrollbar{display:none}.live.watching .controls .ctl,.live.watching .controls .live-pill{flex:none}}
 /* A title is a page, not a sheet: portrait art, a legible fade, and actions within reach. */
 @media(max-width:820px){.detail .d-hero{min-height:100svh;padding:5.5rem 1.1rem 5.5rem}.detail .d-art{object-position:center top}.detail .d-shade{background:linear-gradient(180deg,rgba(11,7,9,.16) 0%,rgba(11,7,9,.1) 28%,rgba(11,7,9,.75) 62%,var(--bg) 100%)}.detail .d-main{max-width:none}.detail .d-title{font-size:clamp(2.1rem,9vw,3.5rem);text-align:center}.detail .d-genres,.detail .d-actions,.detail .d-meta{justify-content:center}.detail .d-by,.detail .plot,.detail .more{text-align:left}.detail .d-facts{margin-top:1.2rem}.detail .d-sec{padding:1rem 1.1rem}.detail .ep-heading{align-items:flex-start}.detail .epc{flex-basis:min(74vw,18rem)}}
 @media(max-width:820px){.detail .d-poster{top:5.5rem;right:50%;width:min(54vw,15rem);max-height:45svh;transform:translateX(50%)}.watch .w-row{gap:0}.watch .w-row .ctl{width:2.35rem;height:2.35rem}.watch .w-row .skip svg{width:1.45rem;height:1.45rem}}
@@ -806,6 +814,18 @@ enum Sort {
 }
 
 impl Sort {
+    fn saved(self) -> u8 {
+        self as u8
+    }
+
+    fn restored(kind: Kind, value: u8) -> Self {
+        Self::options(kind)
+            .iter()
+            .copied()
+            .find(|option| option.saved() == value)
+            .unwrap_or(Self::options(kind)[0])
+    }
+
     fn label(self) -> &'static str {
         match self {
             Sort::Provider => "Provider order",
@@ -842,6 +862,13 @@ enum Kind {
     Live,
     Movies,
     Series,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ChannelAction {
+    Up,
+    Down,
+    Number(usize),
 }
 
 #[derive(Clone, PartialEq)]
@@ -1038,6 +1065,58 @@ fn rows(
     }
 }
 
+/// Resolve a channel button or number against the same filtered order shown in the list.
+/// This scans the existing index, without building another playlist-sized allocation.
+fn channel_target<'a>(
+    lib: &'a Library,
+    order: &[u32],
+    category: Option<u64>,
+    query: &str,
+    current: u64,
+    action: ChannelAction,
+) -> Option<(usize, &'a LiveStream)> {
+    let Items::Live(streams) = &lib.items else {
+        return None;
+    };
+    let mut first = None;
+    let mut last = None;
+    let mut previous = None;
+    let mut next = None;
+    let mut found_current = false;
+    let mut position = 0;
+    for &index in order {
+        let stream = streams.get(index as usize)?;
+        if category.is_some_and(|id| stream.category_id != Some(id))
+            || !xtream::contains_lowercase(&stream.name, query)
+        {
+            continue;
+        }
+        let item = (position, stream);
+        if first.is_none() {
+            first = Some(item);
+        }
+        if let ChannelAction::Number(number) = action
+            && number == position + 1
+        {
+            return Some(item);
+        }
+        if found_current && next.is_none() {
+            next = Some(item);
+        }
+        if stream.stream_id == current {
+            found_current = true;
+            previous = last;
+        }
+        last = Some(item);
+        position += 1;
+    }
+    match action {
+        ChannelAction::Up => previous.or(last),
+        ChannelAction::Down => next.or(first),
+        ChannelAction::Number(_) => None,
+    }
+}
+
 #[component]
 fn Browse() -> Element {
     let mut session = use_context::<Signal<Option<Client>>>();
@@ -1050,15 +1129,16 @@ fn Browse() -> Element {
             .expect("Browse only renders when logged in")
     });
 
+    let remembered = use_hook(preferences::load);
     let mut kind = use_signal(|| Kind::Live);
-    let mut category = use_signal(|| None::<u64>);
+    let mut category = use_signal(|| remembered.categories[0]);
     let mut search = use_signal(String::new);
     let mut category_search = use_signal(String::new);
     let mut playing = use_signal(|| None::<Play>);
     let mut queue = use_signal(Vec::<Play>::new); // the episodes after the one playing
     let mut live = use_signal(|| None::<(u64, String, String)>); // (id, title, playlist url)
     let mut open = use_signal(|| None::<Row>); // the movie or series page
-    let mut sort = use_signal(|| Sort::Provider);
+    let mut sort = use_signal(|| Sort::restored(Kind::Live, remembered.sorts[0]));
     let mut sort_open = use_signal(|| false);
     let mut account_open = use_signal(|| false);
     let mut cats_open = use_signal(|| false);
@@ -1083,6 +1163,18 @@ fn Browse() -> Element {
         async move { load(&c, k).await }
     });
 
+    // A remembered category may have been removed since the last visit.
+    use_effect(move || {
+        if let Some(Ok((loaded_kind, list))) = &*cats.read()
+            && *loaded_kind == kind()
+            && let Some(id) = category()
+            && !list.iter().any(|c| c.category_id == id)
+        {
+            category.set(None);
+            preferences::update(|p| p.categories[kind() as usize] = None);
+        }
+    });
+
     // The list's order for the chosen sort; recomputed only when the library or the sort changes.
     let order = use_memo(move || {
         library
@@ -1097,9 +1189,10 @@ fn Browse() -> Element {
     let three_pane = kind() == Kind::Live && (category().is_some() || live().is_some());
 
     let mut pick_kind = move |k: Kind| {
+        let prefs = preferences::load();
         kind.set(k);
-        sort.set(Sort::options(k)[0]);
-        category.set(None);
+        sort.set(Sort::restored(k, prefs.sorts[k as usize]));
+        category.set(prefs.categories[k as usize]);
         search.set(String::new());
         category_search.set(String::new());
         open.set(None);
@@ -1109,6 +1202,7 @@ fn Browse() -> Element {
     };
     let mut select = move |cat: Option<u64>| {
         category.set(cat);
+        preferences::update(|p| p.categories[kind() as usize] = cat);
         search.set(String::new());
         open.set(None);
         cats_open.set(false);
@@ -1320,9 +1414,40 @@ fn Browse() -> Element {
             }
         }
     });
+    let channel_client = client.clone();
     let live_panel = live().map(|(id, title, url)| {
         let player_key = format!("{url}-{}", player_revision());
-        rsx! { LivePlayer { key: "{player_key}", id, title, url } }
+        rsx! {
+            LivePlayer {
+                key: "{player_key}",
+                id,
+                title,
+                url,
+                onchannel: move |action| {
+                    let selected = {
+                        let library = library.read();
+                        let order = order.read();
+                        library.as_ref()
+                            .and_then(|r| r.as_ref().ok())
+                            .zip(order.as_deref())
+                            .and_then(|(lib, order)| channel_target(
+                                lib, order, category(), &search().to_lowercase(), id, action,
+                            ))
+                            .map(|(position, stream)| (
+                                position,
+                                stream.stream_id,
+                                stream.name.clone(),
+                            ))
+                    };
+                    if let Some((position, next_id, name)) = selected
+                        && next_id != id
+                    {
+                        page.set(position / PAGE_LIST);
+                        live.set(Some((next_id, name, channel_client.live_url(next_id, "m3u8").to_string())));
+                    }
+                },
+            }
+        }
     });
     let cats_sheet = cats_open().then(|| {
         rsx! {
@@ -1372,6 +1497,7 @@ fn Browse() -> Element {
                                 class: if option == sort() { "on" } else { "" },
                                 onclick: move |_| {
                                     sort.set(option);
+                                    preferences::update(|p| p.sorts[kind() as usize] = option.saved());
                                     page.set(0);
                                     sort_open.set(false);
                                 },
@@ -1701,6 +1827,30 @@ enum Act {
     Next,
 }
 
+const WATCH_MEDIA_ACTIONS: &[(&str, media_session::Action)] = &[
+    ("play", media_session::Action::Play),
+    ("pause", media_session::Action::Pause),
+    ("seekbackward", media_session::Action::Back),
+    ("seekforward", media_session::Action::Forward),
+    ("previoustrack", media_session::Action::Previous),
+    ("stop", media_session::Action::Stop),
+];
+const WATCH_MEDIA_ACTIONS_NEXT: &[(&str, media_session::Action)] = &[
+    ("play", media_session::Action::Play),
+    ("pause", media_session::Action::Pause),
+    ("seekbackward", media_session::Action::Back),
+    ("seekforward", media_session::Action::Forward),
+    ("previoustrack", media_session::Action::Previous),
+    ("nexttrack", media_session::Action::Next),
+    ("stop", media_session::Action::Stop),
+];
+
+const LIVE_MEDIA_ACTIONS: &[(&str, media_session::Action)] = &[
+    ("play", media_session::Action::Play),
+    ("pause", media_session::Action::Pause),
+    ("stop", media_session::Action::Stop),
+];
+
 /// What plays a movie or episode. It is settled before anything plays (see [`choose`]), so sound
 /// is never "fixed" while the viewer waits.
 #[derive(Clone)]
@@ -1919,6 +2069,9 @@ fn Watch(
     let client = use_hook(|| session.read().clone().expect("logged in"));
     let key = play.key.clone();
     let resume = use_hook(|| shelves::position(&key));
+    let remembered = use_hook(preferences::load);
+    let saved_volume = u32::from(remembered.volume);
+    let saved_speed = remembered.speed;
     let has_next = next.is_some();
 
     let mut engine = use_signal(|| None::<Engine>);
@@ -1930,9 +2083,9 @@ fn Watch(
     let mut ahead = use_signal(|| 0.0_f64);
     let mut paused = use_signal(|| false);
     let mut waiting = use_signal(|| true);
-    let mut muted = use_signal(|| false);
-    let mut volume = use_signal(|| 100_u32);
-    let mut rate = use_signal(|| 1.0_f64);
+    let mut muted = use_signal(move || saved_volume == 0);
+    let mut volume = use_signal(move || saved_volume);
+    let mut rate = use_signal(move || saved_speed);
     let mut scrubbing = use_signal(|| false);
     let mut menu = use_signal(|| false);
     let mut resumed = use_signal(move || (resume > 0.0).then_some(resume as u64));
@@ -2024,8 +2177,10 @@ fn Watch(
         }
     };
     let mut set_level = move |level: u32| {
+        let level = level.min(100);
         volume.set(level);
         muted.set(level == 0);
+        preferences::update(|p| p.volume = level as u8);
         if let Some(v) = watch_video() {
             v.set_volume(f64::from(level) / 100.0);
             v.set_muted(level == 0);
@@ -2050,6 +2205,61 @@ fn Watch(
             }
         }
     });
+    let mut media_seek = use_signal(|| None::<f64>);
+    use_effect(move || {
+        if let Some(delta) = media_seek() {
+            media_seek.set(None);
+            seek_to(if delta.is_infinite() {
+                0.0
+            } else {
+                *pos.peek() + delta
+            });
+        }
+    });
+    let media = use_hook(|| Rc::new(RefCell::new(None::<media_session::Session>)));
+    let media_for_install = media.clone();
+    let media_title = play.title.clone();
+    let media_artist = play.subtitle.clone().unwrap_or_else(|| "RIPTV".into());
+    use_effect(move || {
+        let installed = media_session::Session::install(
+            &media_title,
+            &media_artist,
+            if has_next {
+                WATCH_MEDIA_ACTIONS_NEXT
+            } else {
+                WATCH_MEDIA_ACTIONS
+            },
+            move |action| match action {
+                media_session::Action::Play => {
+                    if let Some(v) = watch_video() {
+                        let _ = v.play();
+                    }
+                }
+                media_session::Action::Pause => {
+                    if let Some(v) = watch_video() {
+                        let _ = v.pause();
+                    }
+                }
+                media_session::Action::Back => media_seek.set(Some(-15.0)),
+                media_session::Action::Forward => media_seek.set(Some(15.0)),
+                media_session::Action::Previous => media_seek.set(Some(f64::INFINITY)),
+                media_session::Action::Next if has_next => act.set(Some(Act::Next)),
+                media_session::Action::Stop => act.set(Some(Act::Close)),
+                _ => {}
+            },
+        );
+        if let (Some(session), Some(video)) = (installed.as_ref(), watch_video()) {
+            session.playing(!video.paused());
+        }
+        *media_for_install.borrow_mut() = installed;
+    });
+    let media_on_play = media.clone();
+    let media_on_pause = media.clone();
+    let media_on_time = media.clone();
+    use_drop(move || {
+        media.borrow_mut().take();
+    });
+    let last_media_second = use_hook(|| Rc::new(Cell::new(u64::MAX)));
     let key_idle = idle.clone();
     let listener = use_hook(|| {
         Rc::new(RefCell::new(
@@ -2176,12 +2386,23 @@ fn Watch(
                     playsinline: true,
                     src: src,
                     onclick: move |_| { menu.set(false); toggle_watch(); },
-                    onplay: move |_| paused.set(false),
-                    onpause: move |_| paused.set(true),
+                    onplay: move |_| {
+                        paused.set(false);
+                        if let Some(s) = media_on_play.borrow().as_ref() { s.playing(true); }
+                    },
+                    onpause: move |_| {
+                        paused.set(true);
+                        if let Some(s) = media_on_pause.borrow().as_ref() { s.playing(false); }
+                    },
                     onwaiting: move |_| waiting.set(true),
                     onplaying: move |_| { waiting.set(false); paused.set(false); },
                     oncanplay: move |_| waiting.set(false),
                     onloadedmetadata: move |_| {
+                        if let Some(v) = watch_video() {
+                            v.set_volume(f64::from(volume()) / 100.0);
+                            v.set_muted(volume() == 0);
+                            v.set_playback_rate(rate());
+                        }
                         // A plain file starts where the viewer left off; the other engines were told.
                         let native = matches!(engine.peek().as_ref(), Some(Engine::Native));
                         if resume > 0.0
@@ -2200,13 +2421,21 @@ fn Watch(
                     onvolumechange: move |_| {
                         if let Some(v) = watch_video() {
                             muted.set(v.muted());
-                            volume.set((v.volume() * 100.0).round() as u32);
+                            let level = (v.volume() * 100.0).round() as u32;
+                            volume.set(level);
                         }
                     },
                     ontimeupdate: {
                         let (c, url, key, saved, entry) = (c.clone(), url.clone(), key.clone(), saved.clone(), entry.clone());
                         move |_| {
                             sync();
+                            if let Some(s) = media_on_time.borrow().as_ref() {
+                                let second = *pos.peek() as u64;
+                                if last_media_second.get() != second {
+                                    last_media_second.set(second);
+                                    s.position(*pos.peek(), *total.peek(), *rate.peek());
+                                }
+                            }
                             // Some of the file's sound the browser can't decode after all: go
                             // round through the converter rather than leave the film silent.
                             let native = matches!(engine.peek().as_ref(), Some(Engine::Native));
@@ -2281,6 +2510,7 @@ fn Watch(
                                 onclick: move |_| {
                                     if let Some(v) = watch_video() { v.set_playback_rate(r); }
                                     rate.set(r);
+                                    preferences::update(|p| p.speed = r);
                                 },
                                 span { if r == 1.0 { "Normal" } else { "{r}×" } }
                                 if rate() == r { Icon { d: CHECK } }
@@ -2695,14 +2925,52 @@ enum Feed {
 }
 
 #[component]
-fn LivePlayer(id: u64, title: String, url: String) -> Element {
+fn LivePlayer(
+    id: u64,
+    title: String,
+    url: String,
+    onchannel: EventHandler<ChannelAction>,
+) -> Element {
     let session = use_context::<Signal<Option<Client>>>();
     let rust_sound = use_context::<Signal<bool>>();
     let client = use_hook(|| session.read().clone().expect("logged in"));
+    let media = use_hook(|| Rc::new(RefCell::new(None::<media_session::Session>)));
+    let media_for_install = media.clone();
+    let media_title = title.clone();
+    use_effect(move || {
+        let installed = media_session::Session::install(
+            &media_title,
+            "Live TV · RIPTV",
+            LIVE_MEDIA_ACTIONS,
+            move |action| match action {
+                media_session::Action::Play => {
+                    if let Some(v) = video_el() {
+                        let _ = v.play();
+                    }
+                }
+                media_session::Action::Pause | media_session::Action::Stop => {
+                    if let Some(v) = video_el() {
+                        let _ = v.pause();
+                    }
+                }
+                _ => {}
+            },
+        );
+        if let (Some(session), Some(video)) = (installed.as_ref(), video_el()) {
+            session.playing(!video.paused());
+        }
+        *media_for_install.borrow_mut() = installed;
+    });
+    let media_on_play = media.clone();
+    let media_on_pause = media.clone();
+    use_drop(move || {
+        media.borrow_mut().take();
+    });
+    let saved_volume = u32::from(use_hook(preferences::load).volume);
     let mut status = use_signal(|| "Starting playback…".to_string());
     let mut paused = use_signal(|| false);
-    let mut muted = use_signal(|| false);
-    let mut volume = use_signal(|| 100_u32);
+    let mut muted = use_signal(move || saved_volume == 0);
+    let mut volume = use_signal(move || saved_volume);
     let mut buffering = use_signal(|| false);
     let mut expanded = use_signal(|| false);
     // Why there is no sound, when the player knows: its own note, or what the browser reports.
@@ -2718,21 +2986,46 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
     // frames per second actually shown, frames dropped, and how much is buffered.
     let mut show_stats = use_signal(|| false);
     let mut stats = use_signal(String::new);
+    let mut channel_action = use_signal(|| None::<ChannelAction>);
+    let mut dial = use_signal(String::new);
+    let mut number_open = use_signal(|| false);
+    let mut number_text = use_signal(String::new);
+    let digits = use_hook(|| Rc::new(RefCell::new(String::new())));
+    let dial_epoch = use_hook(|| Rc::new(Cell::new(0_u64)));
+    use_effect(move || {
+        if let Some(action) = channel_action() {
+            channel_action.set(None);
+            onchannel.call(action);
+        }
+    });
     // A resource, not a future: it starts again when `show_stats` changes (a future runs once),
     // so nothing polls while the readout is off.
     let _stats_task = use_resource(move || async move {
         if !show_stats() {
             return;
         }
-        let mut last = (0_u32, js_sys::Date::now());
+        let mut last = (0_u64, js_sys::Date::now());
+        let mut frame_counter = None;
+        let mut frame_counter_checked = false;
         loop {
             rstreamkit::mse::sleep(Duration::from_secs(1)).await;
             let Some(v) = video_el() else {
                 continue;
             };
+            if !frame_counter_checked {
+                frame_counter = frame_stats::Counter::start(&v);
+                frame_counter_checked = true;
+                last = (0, js_sys::Date::now());
+            }
             let quality = v.get_video_playback_quality();
-            let (frames, now) = (quality.total_video_frames(), js_sys::Date::now());
-            let fps = (f64::from(frames.saturating_sub(last.0)) * 1000.0 / (now - last.1).max(1.0))
+            let (frames, now) = (
+                frame_counter.as_ref().map_or(
+                    u64::from(quality.total_video_frames()),
+                    frame_stats::Counter::presented,
+                ),
+                js_sys::Date::now(),
+            );
+            let fps = (frames.saturating_sub(last.0) as f64 * 1000.0 / (now - last.1).max(1.0))
                 .round() as u32;
             last = (frames, now);
             let buffered = v.buffered();
@@ -2761,6 +3054,8 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
             status.set("Could not start the player".into());
             return;
         };
+        video.set_volume(f64::from(*volume.peek()) / 100.0);
+        video.set_muted(*muted.peek());
         let partial = match feed() {
             Feed::Direct(src) => {
                 handle.borrow_mut().take();
@@ -2823,34 +3118,113 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
         ));
     });
 
-    // Space, F and M. A plain browser listener: Dioxus's own keyboard events add ~26 KB of wasm.
-    // The closure is kept here, so it is freed with the player (the element it listens on goes too).
+    // A document listener also works after a channel-row click leaves focus outside the player.
+    // Ignore search fields so typing a category or title never changes channel.
     let keys = use_hook(|| {
         Rc::new(RefCell::new(
             None::<Closure<dyn FnMut(web_sys::KeyboardEvent)>>,
         ))
     });
+    let keys_for_install = keys.clone();
+    let digits_for_keys = digits.clone();
+    let epoch_for_keys = dial_epoch.clone();
     use_effect(move || {
-        let player = web_sys::window()
-            .and_then(|w| w.document())
-            .and_then(|d| d.get_element_by_id("live-player"));
-        let Some(player) = player else { return };
+        let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+            return;
+        };
+        let digits = digits_for_keys.clone();
+        let epoch = epoch_for_keys.clone();
         let on_key =
             Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
+                if e.alt_key() || e.ctrl_key() || e.meta_key() {
+                    return;
+                }
+                if e.target()
+                    .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                    .is_some_and(|el| {
+                        matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT")
+                    })
+                {
+                    return;
+                }
                 match e.key().to_ascii_lowercase().as_str() {
                     " " => {
                         e.prevent_default();
                         toggle_play();
                     }
+                    "arrowup" => {
+                        e.prevent_default();
+                        digits.borrow_mut().clear();
+                        dial.set(String::new());
+                        epoch.set(epoch.get().wrapping_add(1));
+                        channel_action.set(Some(ChannelAction::Up));
+                    }
+                    "arrowdown" => {
+                        e.prevent_default();
+                        digits.borrow_mut().clear();
+                        dial.set(String::new());
+                        epoch.set(epoch.get().wrapping_add(1));
+                        channel_action.set(Some(ChannelAction::Down));
+                    }
                     "f" => toggle_fullscreen("live-player", expanded),
                     "i" => show_stats.set(!show_stats()),
-                    "escape" => expanded.set(false),
+                    "escape" => {
+                        digits.borrow_mut().clear();
+                        dial.set(String::new());
+                        epoch.set(epoch.get().wrapping_add(1));
+                        expanded.set(false);
+                    }
                     "m" => muted.set(toggle_mute().unwrap_or(false)),
+                    "enter" => {
+                        let number = digits.borrow().parse().ok();
+                        digits.borrow_mut().clear();
+                        dial.set(String::new());
+                        epoch.set(epoch.get().wrapping_add(1));
+                        if let Some(number) = number {
+                            channel_action.set(Some(ChannelAction::Number(number)));
+                        }
+                    }
+                    key if key.len() == 1 && key.as_bytes()[0].is_ascii_digit() => {
+                        e.prevent_default();
+                        let typed = {
+                            let mut value = digits.borrow_mut();
+                            if value.len() >= 5 {
+                                value.clear();
+                            }
+                            value.push_str(key);
+                            value.clone()
+                        };
+                        dial.set(typed);
+                        let revision = epoch.get().wrapping_add(1);
+                        epoch.set(revision);
+                        let (digits, epoch) = (digits.clone(), epoch.clone());
+                        wasm_bindgen_futures::spawn_local(async move {
+                            rstreamkit::mse::sleep(Duration::from_millis(1400)).await;
+                            if epoch.get() == revision {
+                                let number = digits.borrow().parse().ok();
+                                digits.borrow_mut().clear();
+                                dial.set(String::new());
+                                if let Some(number) = number {
+                                    channel_action.set(Some(ChannelAction::Number(number)));
+                                }
+                            }
+                        });
+                    }
                     _ => {}
                 }
             });
-        let _ = player.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref());
-        *keys.borrow_mut() = Some(on_key);
+        let _ = doc.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref());
+        *keys_for_install.borrow_mut() = Some(on_key);
+    });
+    use_drop(move || {
+        dial_epoch.set(dial_epoch.get().wrapping_add(1));
+        if let (Some(on_key), Some(doc)) = (
+            keys.borrow_mut().take(),
+            web_sys::window().and_then(|w| w.document()),
+        ) {
+            let _ =
+                doc.remove_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref());
+        }
     });
 
     let class = format!(
@@ -2870,8 +3244,14 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
                     id: "live-video",
                     autoplay: true,
                     playsinline: true,
-                    onplay: move |_| paused.set(false),
-                    onpause: move |_| paused.set(true),
+                    onplay: move |_| {
+                        paused.set(false);
+                        if let Some(s) = media_on_play.borrow().as_ref() { s.playing(true); }
+                    },
+                    onpause: move |_| {
+                        paused.set(true);
+                        if let Some(s) = media_on_pause.borrow().as_ref() { s.playing(false); }
+                    },
                     onwaiting: move |_| buffering.set(true),
                     onplaying: move |_| {
                         buffering.set(false);
@@ -2889,10 +3269,14 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
                         }
                     },
                     onvolumechange: move |_| {
-                        if let Some(v) = video_el()
-                            && muted() != v.muted()
-                        {
-                            muted.set(v.muted());
+                        if let Some(v) = video_el() {
+                            if muted() != v.muted() {
+                                muted.set(v.muted());
+                            }
+                            let level = (v.volume() * 100.0).round() as u32;
+                            if volume() != level {
+                                volume.set(level);
+                            }
                         }
                     },
                     ontimeupdate: move |_| {
@@ -2908,6 +3292,26 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
                 }
                 if show_stats() {
                     div { class: "stats", "{stats}" }
+                }
+                if !dial().is_empty() { div { class: "channel-dial", "{dial}" } }
+                if number_open() {
+                    div { class: "number-panel",
+                        input {
+                            aria_label: "Channel number",
+                            r#type: "text",
+                            inputmode: "numeric",
+                            maxlength: "5",
+                            placeholder: "#",
+                            value: "{number_text}",
+                            oninput: move |e| number_text.set(e.value().chars().filter(char::is_ascii_digit).take(5).collect())
+                        }
+                        button { onclick: move |_| {
+                            if let Ok(number) = number_text().parse() { onchannel.call(ChannelAction::Number(number)); }
+                            number_open.set(false);
+                            number_text.set(String::new());
+                        }, "Go" }
+                        button { aria_label: "Close channel number", onclick: move |_| number_open.set(false), "×" }
+                    }
                 }
                 if let Some(why) = note() {
                     div { class: "sound-note", "No sound: {why}" }
@@ -2948,6 +3352,7 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
                                 let level: u32 = e.value().parse().unwrap_or(100);
                                 volume.set(level);
                                 muted.set(level == 0);
+                                preferences::update(|p| p.volume = level.min(100) as u8);
                                 if let Some(v) = video_el() {
                                     v.set_volume(f64::from(level) / 100.0);
                                     v.set_muted(level == 0);
@@ -2956,6 +3361,9 @@ fn LivePlayer(id: u64, title: String, url: String) -> Element {
                         }
                     }
                     button { class: "live-pill", title: "Jump to live", onclick: move |_| { go_live(); if paused() { toggle_play(); } }, "LIVE" }
+                    button { class: "ctl", aria_label: "Previous channel", title: "Previous channel (↑)", onclick: move |_| onchannel.call(ChannelAction::Up), "↑" }
+                    button { class: "ctl", aria_label: "Next channel", title: "Next channel (↓)", onclick: move |_| onchannel.call(ChannelAction::Down), "↓" }
+                    button { class: "ctl", aria_label: "Enter channel number", title: "Enter channel number", onclick: move |_| number_open.set(!number_open()), "123" }
                     span { class: "grow" }
                     button { class: "ctl", aria_label: "Stream info", title: "Stream info (I)", onclick: move |_| show_stats.set(!show_stats()), Icon { d: INFO } }
                     button { class: "ctl", aria_label: "Picture in picture", title: "Picture in picture", onclick: move |_| toggle_pip(video_el()), Icon { d: PIP } }

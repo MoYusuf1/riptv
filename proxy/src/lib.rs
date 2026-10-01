@@ -26,6 +26,7 @@ use axum::{
     body::Body,
     extract::{Query, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -257,7 +258,12 @@ pub fn router(state: AppState) -> Router {
         // Unknown paths get index.html with a 200 (`not_found_service` would keep the 404),
         // so client-side routes survive a reload.
         Some(dir) => {
-            r.fallback_service(ServeDir::new(&dir).fallback(ServeFile::new(dir.join("index.html"))))
+            let assets = Router::new()
+                .fallback_service(ServeDir::new(dir.join("assets")))
+                .layer(middleware::from_fn(cache_hashed_asset));
+            r.nest("/assets", assets).fallback_service(
+                ServeDir::new(&dir).fallback(ServeFile::new(dir.join("index.html"))),
+            )
         }
         None => r,
     };
@@ -267,6 +273,33 @@ pub fn router(state: AppState) -> Router {
         HeaderValue::from_static(APP_CSP),
     ))
     .with_state(state)
+}
+
+/// Dioxus names release assets `name-dxh<hex>.js|wasm|css`. Only those content-addressed
+/// responses are immutable; index.html, the service worker, and every stream stay fresh.
+fn is_hashed_asset(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or("");
+    let Some((stem, ext)) = name.rsplit_once('.') else {
+        return false;
+    };
+    let Some((_, hash)) = stem.rsplit_once("-dxh") else {
+        return false;
+    };
+    matches!(ext, "js" | "wasm" | "css")
+        && hash.len() >= 8
+        && hash.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+async fn cache_hashed_asset(req: axum::extract::Request, next: Next) -> Response {
+    let immutable = is_hashed_asset(req.uri().path());
+    let mut response = next.run(req).await;
+    if immutable && response.status().is_success() {
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=31536000, immutable"),
+        );
+    }
+    response
 }
 
 #[derive(Deserialize)]
@@ -398,6 +431,22 @@ async fn proxy(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_content_addressed_app_assets_are_immutable() {
+        assert!(is_hashed_asset("/assets/app-dxh0123456789abcdef.js"));
+        assert!(is_hashed_asset("/assets/app_bg-dxh0123456789abcdef.wasm"));
+        for path in [
+            "/index.html",
+            "/sw.js",
+            "/assets/app.js",
+            "/assets/app-dxhnothex.js",
+            "/assets/app-dxh01234567.m3u8",
+            "/proxy?url=https://example.com/stream",
+        ] {
+            assert!(!is_hashed_asset(path), "{path}");
+        }
+    }
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()

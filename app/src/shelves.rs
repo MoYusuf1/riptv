@@ -24,6 +24,10 @@ fn name(what: &str) -> String {
     SCOPE.with(|s| format!("riptv.{}.{what}", s.borrow()))
 }
 
+pub(crate) fn scoped_key(what: &str) -> String {
+    name(what)
+}
+
 /// A movie, or a series (which stands for the episode being watched).
 #[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

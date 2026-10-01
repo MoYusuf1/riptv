@@ -157,6 +157,8 @@ the player stays above the channel list and the EPG is hidden to leave room for 
 (newest or oldest added, A to Z, Z to A, top rated). Movies and Series are poster
 grids. Each section is loaded once, so category counts are exact and switching category is instant; the
 account menu's **Refresh** reloads it. Live channels are endless streams, so they can't be downloaded.
+On live TV, ↑/↓ or the player buttons change channel in the current category and sort order.
+Type a channel number and wait a moment (or press Enter); on a phone, use the **123** button.
 
 ### Movie and series pages
 
@@ -177,6 +179,9 @@ controls fade while you watch. Keys: Space or K plays and pauses, J/← and L/�
 change the volume, M mutes, F is fullscreen, N is the next episode, Esc goes back. Where you stopped
 is remembered in the browser (not sent anywhere), per profile, and offered the next time, with **Start over**;
 when an episode ends the next one is offered, and starts in a few seconds unless you cancel.
+The browser's Media Session API also connects supported headset, keyboard and lock-screen controls
+to play/pause and seek; the next-episode key works when an episode follows. Volume, speed, last
+category and sort are remembered per profile on this device.
 
 Titles you have started and not finished appear in a **Continue watching** row at the top of Movies and
 Series (a series shows the episode you were in, and its page's main button resumes that episode). The row
@@ -210,7 +215,9 @@ the default: ffmpeg does it. It is checked against ffmpeg's own decoding in rstr
 seen less real-world use. The decoder code is part of the current web build whether this switch is on or off.
 
 Press `I` on the live player (or the info button) for the picture size, real frame rate, dropped
-frames and buffer, which tells a slow stream from a slow decoder.
+frames and buffer, which tells a slow stream from a slow decoder. When supported, the frame rate
+counts frames actually presented by `requestVideoFrameCallback`; the counter only runs while the
+overlay is open.
 
 ## What plays
 
@@ -227,11 +234,14 @@ Decoded sound is stereo (5.1 is mixed down) and is held uncompressed, which is a
 browser that keeps only about a minute of sound in a buffer, so the page reads a few seconds at a time. A server that doesn't answer byte-range requests, or a file it can't read the
 index of, is left to the browser.
 
-**Live TV** goes through `rstreamkit`:
+**Live TV** first tries native HTTPS HLS on browsers that support it, then `rstreamkit`:
 HLS with MPEG-TS segments carrying **H.264 video and AAC audio**. Anything else is reported, not
 misplayed: HEVC, AES-128, fMP4 segments, continuous (non-HLS) `.ts` streams and AC-3/MP2 audio are not
 played directly, and compatibility mode covers them (AC-3 and MP2 can instead be decoded in Rust,
 see above). There is no adaptive bitrate: one variant is picked up front.
+
+Release JS, Wasm and CSS assets with content hashes are cached as immutable for a year. The HTML
+page, service worker, provider requests and video are never given that cache policy.
 
 ## Test
 
