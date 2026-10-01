@@ -2239,7 +2239,7 @@ dependencies = [
 [[package]]
 name = "rstreamkit"
 version = "0.1.0"
-source = "git+ssh://git@github.com/MoYusuf1/rstreamkit.git#b64673587c43faee05a56c48b2842494d77e8ec3"
+source = "git+https://github.com/MoYusuf1/rstreamkit.git#b64673587c43faee05a56c48b2842494d77e8ec3"
 dependencies = [
  "futures-core",
  "js-sys",
