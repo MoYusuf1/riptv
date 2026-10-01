@@ -11,6 +11,7 @@
 
 mod compat;
 mod diagnostics;
+mod live;
 
 use std::{
     collections::HashSet,
@@ -268,7 +269,8 @@ pub fn router(state: AppState) -> Router {
         .route("/proxy", get(proxy))
         .route("/allow", post(allow))
         .route("/compat/check", get(compat::check))
-        .route("/compat", get(compat::stream));
+        .route("/compat", get(compat::stream))
+        .route("/live", get(live::stream));
     let r = r
         .route(
             "/diagnostics",

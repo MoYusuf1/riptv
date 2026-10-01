@@ -24,7 +24,7 @@ mod profiles;
 mod shelves;
 mod standard;
 
-use controls::{IdleHide, Skip};
+use controls::{IdleHide, LoadRing, Skip};
 use fetch::Proxied;
 use profiles::Login;
 use rstreamkit::{Unsupported, vod::Verdict};
@@ -261,6 +261,12 @@ svg{width:1.1rem;height:1.1rem}
 .hud{position:absolute;inset:0;display:grid;place-items:center;color:#fff;pointer-events:none}
 .hud span{padding:.4rem .9rem;border-radius:999px;background:rgba(0,0,0,.6);backdrop-filter:blur(10px)}
 .loading-group{display:grid;justify-items:center;gap:.7rem}
+.ring{width:3.4rem;height:3.4rem;transform:rotate(-90deg)}
+.ring circle{fill:none;stroke-width:3.5}
+.ring-track{stroke:rgba(255,255,255,.16)}
+.ring-fill{stroke:#fff;stroke-linecap:round;stroke-dasharray:125.66;transition:stroke-dashoffset 3.2s cubic-bezier(.12,.8,.25,1)}
+@starting-style{.ring-fill{stroke-dashoffset:125.66}}
+.w-load .ring{width:2.6rem;height:2.6rem;margin-bottom:.6rem}
 .spinner{width:2.6rem;height:2.6rem;border:3px solid rgba(255,255,255,.25);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(1turn)}}
 .bigplay{position:absolute;top:50%;left:50%;display:grid;place-items:center;width:4.6rem;height:4.6rem;border-radius:50%;background:rgba(20,13,16,.55);color:#fff;transform:translate(-50%,-50%);backdrop-filter:blur(16px)}
@@ -770,6 +776,12 @@ fn channel_trouble(e: &xtream::Error) -> String {
         "Your provider says too many streams are open on your account. Stop it on your other \
          devices and try again."
             .into()
+    } else if has("says this channel is unavailable") {
+        "This channel is down at your provider right now: it couldn't read its own source.".into()
+    } else if has("509") || has("Bandwidth Limit") {
+        "Your provider says your account is at its connection limit. Stop streaming on other \
+         devices and try again."
+            .into()
     } else if has("5XX") || has("500") || has("502") || has("503") || has("Service Unavailable") {
         "Your provider's server is failing for this channel right now (5xx). Try again later, or \
          check that your account isn't streaming on another device."
@@ -783,10 +795,8 @@ fn channel_trouble(e: &xtream::Error) -> String {
     }
 }
 
-/// A conversion the standard player already knows it needs (no check first).
-fn known_conversion(client: &Client, url: &str, plan: standard::Plan) -> Feed {
-    standard::conversion(client, url, plan).map_or(Feed::Pending, Feed::Converted)
-}
+/// Shown, with the progress ring, while a dropped live stream is opened again.
+const RECONNECTING: &str = "Reconnecting…";
 
 /// Shown, with the spinner, when a channel takes unusually long to start.
 const STILL_STARTING: &str = "Still starting: your provider is slow to answer…";
@@ -2144,6 +2154,8 @@ fn Watch(
     let mut ahead = use_signal(|| 0.0_f64);
     let mut paused = use_signal(|| false);
     let mut waiting = use_signal(|| true);
+    // How far the current source has got with starting, for the progress ring.
+    let mut load_stage = use_signal(|| 0_u8);
     let mut muted = use_signal(move || saved_volume == 0);
     let mut volume = use_signal(move || saved_volume);
     let mut rate = use_signal(move || saved_speed);
@@ -2480,7 +2492,7 @@ fn Watch(
                     }
                 } else {
                     div { class: "w-load",
-                        i { class: "spinner" }
+                        LoadRing { stage: 0 }
                         strong { "{play.title}" }
                         if let Some(sub) = &play.subtitle { small { "{sub}" } }
                         span { "Starting playback…" }
@@ -2503,9 +2515,15 @@ fn Watch(
                         if let Some(s) = media_on_pause.borrow().as_ref() { s.playing(false); }
                     },
                     onwaiting: move |_| waiting.set(true),
-                    onplaying: move |_| { waiting.set(false); paused.set(false); },
+                    // A new source (its own element) starts the ring over.
+                    onloadstart: move |_| load_stage.set(1),
+                    onloadeddata: move |_| if *load_stage.peek() < 3 { load_stage.set(3) },
+                    onplaying: move |_| { load_stage.set(4); waiting.set(false); paused.set(false); },
                     oncanplay: move |_| waiting.set(false),
                     onloadedmetadata: move |_| {
+                        if *load_stage.peek() < 2 {
+                            load_stage.set(2);
+                        }
                         if let Some(v) = watch_video() {
                             v.set_volume(f64::from(volume()) / 100.0);
                             v.set_muted(volume() == 0);
@@ -2589,7 +2607,11 @@ fn Watch(
                         }
                     },
                 }
-                if waiting() && !paused() { div { class: "hud", i { class: "spinner" } } }
+                if waiting() && !paused() {
+                    div { class: "hud",
+                        if load_stage() < 4 { LoadRing { stage: load_stage() } } else { i { class: "spinner" } }
+                    }
+                }
                 if paused() && !waiting() && up_next().is_none() {
                     button { class: "bigplay", aria_label: "Play", onclick: move |_| toggle_watch(), Icon { d: PLAY } }
                 }
@@ -3078,6 +3100,8 @@ fn LivePlayer(
     let saved_volume = u32::from(use_hook(preferences::load).volume);
     let mut status = use_signal(|| "Starting playback…".to_string());
     let mut picture_ready = use_signal(|| false);
+    // How far the current start has got, for the progress ring (see `LoadRing`).
+    let mut load_stage = use_signal(|| 0_u8);
     let mut audio_only = use_signal(|| false);
     let mut paused = use_signal(|| false);
     let mut muted = use_signal(move || saved_volume == 0);
@@ -3107,93 +3131,54 @@ fn LivePlayer(
         )
     });
 
+    // Standard: the proxy's live stream, from the first moment (an iPhone, which can't play one,
+    // uses its own HLS player). Experimental: rstreamkit, and nothing else.
     let mut feed = use_signal(|| {
         if *rust_sound.peek() {
             Feed::Rust
+        } else if standard::plays_live_streams() {
+            standard::live(&client, &url, false).map_or(Feed::Pending, Feed::Converted)
         } else {
-            // A channel seen before starts the way that worked; a new one is sniffed first.
-            match standard::remembered(id) {
-                Some(standard::Plan::Browser) => {
-                    native_hls_source(&client, &url).map_or(Feed::Pending, Feed::Direct)
-                }
-                Some(plan) => known_conversion(&client, &url, plan),
-                None => Feed::Pending,
-            }
+            native_hls_source(&client, &url).map_or(Feed::Pending, Feed::Direct)
         }
     });
-    // Standard mode decides here, once, before any connection to the channel: what the stream is
-    // (container, codecs), then the browser plays it, or ffmpeg converts its sound or its video.
-    // Never alongside playback: providers that allow one connection per channel end the first
-    // when a second asks for the same stream. The experimental player skips this entirely.
-    let mut sniffed = use_signal(|| false);
-    let mut native_failed = use_signal(|| false);
+    // Reconnections in a row (a live stream that drops is reopened, a few times).
+    let mut reconnects = use_signal(|| 0_u32);
+    let mut reconnect = move || {
+        let tries = *reconnects.peek() + 1;
+        let current = feed.peek().clone();
+        let Feed::Converted(src) = current else {
+            return;
+        };
+        if tries > 3 {
+            status.set(
+                "This channel keeps dropping. Your provider may be having trouble with it.".into(),
+            );
+            return;
+        }
+        reconnects.set(tries);
+        status.set(RECONNECTING.into());
+        // A new address (same stream) so the player opens it afresh.
+        let base = src.split("&again=").next().unwrap_or(&src).to_owned();
+        feed.set(Feed::Converted(format!("{base}&again={tries}")));
+    };
+    // Only where neither of those applies (an iPhone whose own player failed): the proxy checks
+    // the stream and converts it.
     {
-        let (client, url, trace) = (client.clone(), url.clone(), trace.clone());
-        let _decide = use_resource(move || {
+        let (client, url) = (client.clone(), url.clone());
+        let _convert = use_resource(move || {
             let pending = matches!(feed(), Feed::Pending);
-            let (client, url, trace) = (client.clone(), url.clone(), trace.clone());
+            let (client, url) = (client.clone(), url.clone());
             async move {
                 if !pending {
                     return;
                 }
-                let native = (!*native_failed.peek())
-                    .then(|| native_hls_source(&client, &url))
-                    .flatten();
-                if !*rust_sound.peek() && !*sniffed.peek() {
-                    let found = standard::sniff(&client, &url).await;
-                    if sniffed.try_peek().is_err() {
-                        return; // the viewer left
-                    }
-                    sniffed.set(true);
-                    let found = found.filter(|f| f.container == "mpeg_ts");
-                    let plan = found.map(|f| standard::plan(&f, standard::browser_decodes));
-                    trace.event(
-                        "stream",
-                        serde_json::json!({
-                            "container": found.map_or("not_mpeg_ts", |f| f.container),
-                            "video": found.and_then(|f| f.video),
-                            "audio": found.and_then(|f| f.audio),
-                            "plan": plan.map(standard::Plan::name),
-                        }),
-                    );
-                    if let Some(plan) = plan {
-                        standard::remember(id, plan);
-                    }
-                    match (plan, native) {
-                        (Some(standard::Plan::Browser) | None, Some(src)) => {
-                            feed.set(Feed::Direct(src));
-                            return;
-                        }
-                        (Some(plan), _) => {
-                            if let Some(src) = standard::conversion(&client, &url, plan) {
-                                feed.set(Feed::Converted(src));
-                                return;
-                            }
-                        }
-                        (None, None) => {}
-                    }
-                }
-                // Unknown, or the browser already failed with it: the proxy checks and converts.
                 let Ok(media) = xtream::Url::parse(&url) else {
                     status.set("This channel's address is invalid".into());
                     return;
                 };
                 match client.convert(&media).await {
-                    Ok(converted) => {
-                        let src = converted.at(0).to_string();
-                        // What worked, for next time (copy is the sound-only conversion).
-                        if !*rust_sound.peek() {
-                            standard::remember(
-                                id,
-                                if src.contains("video=transcode") {
-                                    standard::Plan::ConvertVideo
-                                } else {
-                                    standard::Plan::ConvertSound
-                                },
-                            );
-                        }
-                        feed.set(Feed::Converted(src));
-                    }
+                    Ok(converted) => feed.set(Feed::Converted(converted.at(0).to_string())),
                     Err(e) => status.set(channel_trouble(&e)),
                 }
             }
@@ -3332,6 +3317,7 @@ fn LivePlayer(
             return;
         };
         *player_video.borrow_mut() = Some(video.clone());
+        load_stage.set(0); // a new source starts over
         trace_for_player.follow(&video);
         video.set_volume(f64::from(*volume.peek()) / 100.0);
         video.set_muted(*muted.peek());
@@ -3358,7 +3344,7 @@ fn LivePlayer(
             status.set("Could not start the player".into());
             return;
         };
-        let (c, converter, media) = (client.clone(), client.clone(), playlist.clone());
+        let c = client.clone();
         let upstream = client.upstream(&playlist);
         let unsupported_trace = trace_for_player.clone();
         *handle.borrow_mut() = Some(rstreamkit::mse::start(
@@ -3385,23 +3371,17 @@ fn LivePlayer(
                         "unsupported",
                         serde_json::json!({ "reason": reason.to_string() }),
                     );
-                    // Keep one neutral loading state across the Rust → ffmpeg handoff.
-                    status.set("Starting playback…".into());
-                    let (converter, media) = (converter.clone(), media.clone());
-                    let sound_only = matches!(reason, Unsupported::Sound(_));
-                    // Not Dioxus's `spawn`: this callback runs outside its runtime.
-                    wasm_bindgen_futures::spawn_local(async move {
-                        match converter.convert(&media).await {
-                            Ok(converted) => feed.set(Feed::Converted(converted.at(0).to_string())),
-                            // No ffmpeg (or it can't read the stream): a sound problem still
-                            // plays, without sound, and says why; anything else can't play.
-                            Err(e) if sound_only => {
-                                note.set(Some(format!("{reason} ({e})")));
-                                feed.set(Feed::Partial);
-                            }
-                            Err(e) => status.set(channel_trouble(&e)),
-                        }
-                    });
+                    // The experimental player stays experimental: it says what it can't do
+                    // rather than quietly handing over to the standard player.
+                    if matches!(reason, Unsupported::Sound(_)) {
+                        note.set(Some(reason.to_string()));
+                        feed.set(Feed::Partial);
+                    } else {
+                        status.set(format!(
+                            "The experimental player can't play this channel ({reason}). Turn \
+                             Experimental player off to use the standard one."
+                        ));
+                    }
                 }
                 rstreamkit::mse::Status::Ended => status.set("Stream ended".into()),
                 rstreamkit::mse::Status::Failed(e) => status.set(format!("Playback failed: {e}")),
@@ -3419,7 +3399,6 @@ fn LivePlayer(
         async move {
             let mut mode = None::<Feed>;
             let mut since = js_sys::Date::now();
-            let mut forced_video = false;
             loop {
                 rstreamkit::mse::sleep(Duration::from_secs(2)).await;
                 let current = feed.peek().clone();
@@ -3455,61 +3434,35 @@ fn LivePlayer(
                     Feed::Pending => continue,
                     Feed::Direct(_) => {
                         status.set("Trying another playback method…".into());
-                        native_failed.set(true);
-                        feed.set(if *rust_sound.peek() {
-                            Feed::Rust
-                        } else {
-                            Feed::Pending
-                        });
+                        feed.set(Feed::Pending);
                     }
                     Feed::Rust | Feed::Partial => {
-                        status.set("Trying a compatible stream…".into());
-                        let Ok(media) = xtream::Url::parse(&url) else {
-                            status.set("This channel's address is invalid".into());
-                            break;
-                        };
-                        match client.convert_video(&media).await {
-                            Ok(converted) => {
-                                forced_video = true;
-                                feed.set(Feed::Converted(converted.at(0).to_string()));
-                            }
-                            Err(xtream::Error::Proxy(why)) if why.contains("no video track") => {
-                                audio_only.set(true);
-                                picture_ready.set(true);
-                                status.set("Audio only".into());
-                                video.set_muted(*muted.peek());
-                                break;
-                            }
-                            Err(e) => {
-                                status.set(format!("No picture from this channel: {e}"));
-                                break;
-                            }
-                        }
+                        status.set(
+                            "The experimental player shows no picture for this channel. Turn \
+                             Experimental player off to use the standard one."
+                                .into(),
+                        );
+                        break;
                     }
-                    Feed::Converted(_) => {
-                        if forced_video {
-                            status.set("No picture after video conversion. The source may be offline or sending blank frames.".into());
+                    // Time moves but no frame: a stream with no video track plays as radio; a
+                    // picture this browser won't decode gets re-encoded, once.
+                    Feed::Converted(src) => {
+                        if video.video_width() == 0 && video.ready_state() >= 2 {
+                            audio_only.set(true);
+                            picture_ready.set(true);
+                            status.set("Audio only".into());
                             break;
                         }
-                        status.set("Re-encoding the video…".into());
-                        let Ok(media) = xtream::Url::parse(&url) else {
-                            status.set("This channel's address is invalid".into());
-                            break;
-                        };
-                        match client.convert_video(&media).await {
-                            Ok(converted) => {
-                                forced_video = true;
-                                feed.set(Feed::Converted(converted.at(0).to_string()));
+                        match (!src.contains("video=transcode"))
+                            .then(|| standard::live(&client, &url, true))
+                            .flatten()
+                        {
+                            Some(again) => {
+                                status.set("Re-encoding the video…".into());
+                                feed.set(Feed::Converted(again));
                             }
-                            Err(xtream::Error::Proxy(why)) if why.contains("no video track") => {
-                                audio_only.set(true);
-                                picture_ready.set(true);
-                                status.set("Audio only".into());
-                                video.set_muted(*muted.peek());
-                                break;
-                            }
-                            Err(e) => {
-                                status.set(format!("No picture from this channel: {e}"));
+                            None => {
+                                status.set("No picture from this channel: the source may be offline or sending blank frames.".into());
                                 break;
                             }
                         }
@@ -3654,7 +3607,26 @@ fn LivePlayer(
                         if let Some(s) = media_on_pause.borrow().as_ref() { s.playing(false); }
                     },
                     onwaiting: move |_| buffering.set(true),
+                    // A live channel never ends: the connection did. Open it again.
+                    onended: move |_| reconnect(),
+                    onloadstart: move |_| if *load_stage.peek() < 1 { load_stage.set(1) },
+                    onloadedmetadata: move |_| {
+                        if *load_stage.peek() < 2 {
+                            load_stage.set(2);
+                        }
+                        // No video track at all (radio): say so at once, not after waiting.
+                        if let Some(v) = video_el()
+                            && v.video_width() == 0
+                            && matches!(*feed.peek(), Feed::Converted(_))
+                        {
+                            audio_only.set(true);
+                            picture_ready.set(true);
+                            status.set("Audio only".into());
+                        }
+                    },
+                    onloadeddata: move |_| if *load_stage.peek() < 3 { load_stage.set(3) },
                     onplaying: move |_| {
+                        load_stage.set(4);
                         buffering.set(false);
                         paused.set(false);
                         if matches!(feed(), Feed::Direct(_) | Feed::Converted(_)) {
@@ -3662,29 +3634,51 @@ fn LivePlayer(
                         }
                     },
                     onerror: {
-                        let (error_client, error_url) = (sound_client.clone(), sound_url.clone());
+                        let (client, url) = (sound_client.clone(), sound_url.clone());
                         move |_| {
-                            // MEDIA_ERR_DECODE: the browser's video decoder can't take this
-                            // picture (interlaced broadcasts, typically). Copying it through ffmpeg
-                            // would hit the same decoder: re-encode it, and remember that.
-                            let decode_error = video_el()
+                            // MEDIA_ERR_DECODE: the browser's decoder rejects this picture: have
+                            // the proxy re-encode it, once.
+                            let error = video_el()
                                 .and_then(|v| js_sys::Reflect::get(&v, &"error".into()).ok())
-                                .and_then(|e| js_sys::Reflect::get(&e, &"code".into()).ok())
-                                .and_then(|c| c.as_f64())
-                                == Some(3.0);
+                                .filter(|e| !e.is_null() && !e.is_undefined());
+                            let field = |name: &str| error.as_ref().and_then(|e| js_sys::Reflect::get(e, &name.into()).ok());
+                            let decoding = field("code").and_then(|c| c.as_f64()) == Some(3.0);
+                            // A video decode error (an audio one is a damaged packet: reconnect).
+                            let decode_error = decoding
+                                && !field("message").and_then(|m| m.as_string()).is_some_and(|m| m.contains("audio"));
                             let current = feed.peek().clone();
-                            let copying = matches!(&current, Feed::Converted(src) if src.contains("video=copy"));
-                            if decode_error && !*rust_sound.peek() && (copying || matches!(current, Feed::Direct(_))) {
-                                native_failed.set(true);
-                                standard::remember(id, standard::Plan::ConvertVideo);
-                                status.set("Re-encoding the video…".into());
-                                feed.set(known_conversion(&error_client, &error_url, standard::Plan::ConvertVideo));
-                            } else if matches!(current, Feed::Direct(_)) {
-                                status.set("Starting playback…".into());
-                                native_failed.set(true);
-                                feed.set(if *rust_sound.peek() { Feed::Rust } else { Feed::Pending });
-                            } else if matches!(current, Feed::Converted(_)) {
-                                status.set("The converted stream stopped: the source may have ended".into());
+                            match current {
+                                Feed::Converted(src) if decode_error && !src.contains("video=transcode") => {
+                                    if let Some(again) = standard::live(&client, &url, true) {
+                                        status.set("Re-encoding the video…".into());
+                                        feed.set(Feed::Converted(again));
+                                    }
+                                }
+                                // It was playing, or got as far as decoding: a dropped
+                                // connection or a damaged packet. Open it again.
+                                Feed::Converted(_) if *picture_ready.peek() || decoding => reconnect(),
+                                // The proxy said why it couldn't (offline, refused, ...): ask it.
+                                Feed::Converted(src) => {
+                                    status.set("Starting playback…".into());
+                                    let client = client.clone();
+                                    wasm_bindgen_futures::spawn_local(async move {
+                                        let why = match xtream::Url::parse(&src) {
+                                            Ok(u) => client.refusal(&u).await,
+                                            Err(_) => None,
+                                        };
+                                        if status.try_peek().is_ok() {
+                                            status.set(match why {
+                                                Some(why) => channel_trouble(&xtream::Error::Proxy(why)),
+                                                None => "The stream stopped: the channel may have ended".into(),
+                                            });
+                                        }
+                                    });
+                                }
+                                Feed::Direct(_) => {
+                                    status.set("Starting playback…".into());
+                                    feed.set(Feed::Pending);
+                                }
+                                _ => {}
                             }
                         }
                     },
@@ -3699,32 +3693,26 @@ fn LivePlayer(
                             }
                         }
                     },
-                    ontimeupdate: {
-                        let (sound_client, sound_url) = (sound_client.clone(), sound_url.clone());
-                        move |_| {
+                    ontimeupdate: move |_| {
                         let Some(v) = video_el() else { return };
                         // The picture is there as soon as a frame has been decoded: no polling.
                         if !*picture_ready.peek() && v.get_video_playback_quality().total_video_frames() > 0 {
                             picture_ready.set(true);
-                            if matches!(status.peek().as_str(), "Starting playback…" | "Waiting for picture…" | STILL_STARTING) {
+                            if matches!(status.peek().as_str(), "Starting playback…" | "Waiting for picture…" | STILL_STARTING | RECONNECTING) {
                                 status.set("Live".into());
                             }
                         }
-                        // A backstop: the sniff catches known sound formats up front. Chrome's
-                        // decoded-byte count lags a little, so give it a few seconds.
+                        // Playing steadily again: the next drop gets its full set of retries.
+                        if v.current_time() > 15.0 && *reconnects.peek() > 0 {
+                            reconnects.set(0);
+                        }
+                        // Chrome's decoded-byte count lags a little: give it a few seconds. Clears
+                        // itself once sound arrives.
                         let quiet = no_audio_decoded(&v, 5.0);
-                        if quiet && matches!(*feed.peek(), Feed::Direct(_)) {
-                            // Surround sound (AC-3, E-AC-3) the browser's own HLS player can't
-                            // decode: ffmpeg converts the sound and leaves the picture alone.
-                            standard::remember(id, standard::Plan::ConvertSound);
-                            native_failed.set(true);
-                            status.set("Trying a compatible stream…".into());
-                            feed.set(known_conversion(&sound_client, &sound_url, standard::Plan::ConvertSound));
-                        } else if quiet != *silent.peek() && !matches!(*feed.peek(), Feed::Pending) {
-                            // Also clears the note once sound arrives (after a switch, say).
+                        if quiet != *silent.peek() {
                             silent.set(quiet);
                         }
-                    }},
+                    },
                     onclick: move |_| toggle_play(),
                     ondoubleclick: move |_| toggle_fullscreen("live-player", expanded),
                 }
@@ -3747,7 +3735,7 @@ fn LivePlayer(
                 if status() != "Live" && status() != "Audio only" {
                     div { class: "hud",
                         div { class: "loading-group",
-                            if status() == "Starting playback…" || status() == "Waiting for picture…" || status() == STILL_STARTING { i { class: "spinner" } }
+                            if status() == "Starting playback…" || status() == "Waiting for picture…" || status() == STILL_STARTING || status() == "Re-encoding the video…" || status() == RECONNECTING { LoadRing { stage: load_stage() } }
                             span { "{status}" }
                         }
                     }

@@ -804,60 +804,37 @@ impl Client {
         self.convert_inner(media, true).await
     }
 
-    /// The proxy's conversion of `media` with no check first, for a stream already known (by
-    /// [`Client::sniff`], or because the browser showed its picture) to need `video`: `copy` or
-    /// `transcode`. Skipping the check saves the seconds ffprobe takes. `None` without a proxy.
-    pub fn convert_known(&self, media: &Url, video: &str) -> Option<Converted> {
+    /// The proxy's live stream of a channel (`/live`): one fragmented-MP4 response, the codecs
+    /// read and converted on the proxy as needed. `can` lists codecs the browser decodes beyond
+    /// H.264 and AAC (`hevc,ac3,eac3`); `transcode` re-encodes the video whatever it is.
+    pub fn live(&self, media: &Url, can: &str, transcode: bool) -> Option<Url> {
         let mut u = self.proxy.clone()?;
-        u.set_path("/compat");
+        u.set_path("/live");
         u.set_query(None);
-        u.query_pairs_mut()
-            .append_pair("url", self.upstream(media).as_str())
-            .append_pair("video", video);
-        Some(Converted {
-            url: u,
-            duration: None,
-        })
+        {
+            let mut q = u.query_pairs_mut();
+            q.append_pair("url", self.upstream(media).as_str())
+                .append_pair("can", can);
+            if transcode {
+                q.append_pair("video", "transcode");
+            }
+        }
+        Some(u)
     }
 
-    /// What `media` is, from its first 64 KiB (following up to two playlist links, as a player
-    /// would): container and codecs. One short request per hop, through the proxy.
-    pub async fn sniff(&self, media: &Url) -> Result<Sniff> {
-        use futures_core::Stream;
-        let mut current = self.upstream(media);
-        for _ in 0..3 {
-            let resp = self
-                .http
-                .get(self.proxied(current.clone()))
-                .header("range", format!("bytes=0-{}", sniff::SAMPLE - 1))
-                .send()
-                .await;
-            let resp = checked(resp.map_err(http_error)?)?;
-            // Where redirects ended up: playlist links are relative to it.
-            let base = resp
-                .headers()
-                .get("x-upstream-url")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| Url::parse(v).ok())
-                .unwrap_or_else(|| current.clone());
-            let mut chunks = std::pin::pin!(resp.bytes_stream());
-            let mut sample = Vec::with_capacity(sniff::SAMPLE);
-            // A live `.ts` ignores the range and never ends: stop at the sample's size.
-            while sample.len() < sniff::SAMPLE
-                && let Some(chunk) = std::future::poll_fn(|cx| chunks.as_mut().poll_next(cx)).await
-            {
-                sample.extend_from_slice(&chunk.map_err(http_error)?);
-            }
-            if sample.starts_with(b"#EXTM3U") {
-                let text = String::from_utf8_lossy(&sample);
-                if let Some(next) = sniff::next_in(&text).and_then(|p| base.join(p).ok()) {
-                    current = next;
-                    continue;
-                }
-            }
-            return Ok(Sniff::of(&sample));
+    /// Why the proxy refuses `url` (its own explanation, or the HTTP status), or `None` if it
+    /// doesn't. For a player whose `<video>` failed and can't see the response.
+    pub async fn refusal(&self, url: &Url) -> Option<String> {
+        let resp = self.http.get(url.clone()).send().await.ok()?;
+        if resp.status().is_success() {
+            return None;
         }
-        Err(Error::Proxy("playlist nests too deeply".into()))
+        Some(
+            resp.headers()
+                .get("x-riptv-error")
+                .and_then(|v| v.to_str().ok())
+                .map_or_else(|| resp.status().to_string(), str::to_owned),
+        )
     }
 
     async fn convert_inner(&self, media: &Url, force_video: bool) -> Result<Converted> {

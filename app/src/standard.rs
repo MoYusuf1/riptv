@@ -1,78 +1,48 @@
-//! The standard player's one decision: given what a stream is ([`xtream::Sniff`]) and what this
-//! browser decodes, play it as is, or have the proxy's ffmpeg convert its sound or its video. The
-//! experimental (rstreamkit) player never comes here: it reads and decodes streams itself.
-
-use std::{future::Future, task::Poll, time::Duration};
+//! The standard player's live path: the proxy's `/live` stream, which reads the channel, works out
+//! its codecs and converts only what this browser can't decode (see `proxy/src/live.rs`). The
+//! experimental (rstreamkit) player never comes here, and this never uses rstreamkit.
 
 use web_sys::{
     js_sys,
     wasm_bindgen::{JsCast, JsValue},
 };
-pub use xtream::sniff::{Plan, plan};
-use xtream::{Client, Sniff};
+use xtream::Client;
 
-/// What the stream at `url` is, or `None` if that can't be told within a few seconds (the player
-/// then falls back on the proxy's own check).
-pub async fn sniff(client: &Client, url: &str) -> Option<Sniff> {
+/// The live stream for `url`: as is where the browser can, or with its video re-encoded.
+pub fn live(client: &Client, url: &str, transcode: bool) -> Option<String> {
     let media = xtream::Url::parse(url).ok()?;
-    let mut work = std::pin::pin!(client.sniff(&media));
-    let mut timer = std::pin::pin!(rstreamkit::mse::sleep(Duration::from_secs(5)));
-    std::future::poll_fn(|cx| {
-        if let Poll::Ready(found) = work.as_mut().poll(cx) {
-            return Poll::Ready(found.ok());
-        }
-        timer.as_mut().poll(cx).map(|()| None)
-    })
-    .await
+    Some(client.live(&media, &can(), transcode)?.to_string())
 }
 
-/// The proxy's conversion for `plan`, started without a check (the sniff already answered it).
-pub fn conversion(client: &Client, url: &str, plan: Plan) -> Option<String> {
-    let media = xtream::Url::parse(url).ok()?;
-    Some(
-        client
-            .convert_known(&media, plan.video())?
-            .at(0)
-            .to_string(),
-    )
+/// The codecs this browser decodes beyond H.264 and AAC, as `/live` takes them.
+fn can() -> String {
+    [
+        ("hevc", r#"video/mp4; codecs="hvc1.1.6.L120.90""#),
+        ("ac3", r#"audio/mp4; codecs="ac-3""#),
+        ("eac3", r#"audio/mp4; codecs="ec-3""#),
+    ]
+    .into_iter()
+    .filter(|(_, mime)| decodes(mime))
+    .map(|(name, _)| name)
+    .collect::<Vec<_>>()
+    .join(",")
 }
 
-/// The plan last found for channel `id` on this profile: a channel opened before starts the right
-/// way at once, without a sniff. One small map in the browser's storage, read once per channel.
-pub fn remembered(id: u64) -> Option<Plan> {
-    plans().get(&id).copied().and_then(Plan::from_name)
+/// Whether the page can play a fragmented-MP4 stream: Media Source is the tell. An iPhone has
+/// none, and plays live channels through its own HLS player instead.
+pub fn plays_live_streams() -> bool {
+    media_source().is_some()
 }
 
-pub fn remember(id: u64, plan: Plan) {
-    let mut all = plans();
-    if all.get(&id).copied() != Some(plan.name()) {
-        all.insert(id, plan.name());
-        // ponytail: whole-map rewrite per change; a few KiB even for hundreds of channels.
-        if let (Some(store), Ok(json)) = (crate::storage(), serde_json::to_string(&all)) {
-            let _ = store.set_item(&crate::shelves::scoped_key("plans"), &json);
-        }
-    }
-}
-
-fn plans() -> std::collections::HashMap<u64, &'static str> {
-    let raw: std::collections::HashMap<u64, String> = crate::storage()
-        .and_then(|s| {
-            s.get_item(&crate::shelves::scoped_key("plans"))
-                .ok()
-                .flatten()
-        })
-        .and_then(|json| serde_json::from_str(&json).ok())
-        .unwrap_or_default();
-    raw.into_iter()
-        .filter_map(|(id, name)| Some((id, Plan::from_name(&name)?.name())))
-        .collect()
-}
-
-/// Whether this browser's media pipeline decodes `mime` (`MediaSource.isTypeSupported`).
-pub fn browser_decodes(mime: &str) -> bool {
+fn media_source() -> Option<JsValue> {
     js_sys::Reflect::get(&js_sys::global(), &"MediaSource".into())
         .ok()
         .filter(|m| !m.is_undefined())
+}
+
+/// Whether this browser's media pipeline decodes `mime` (`MediaSource.isTypeSupported`).
+fn decodes(mime: &str) -> bool {
+    media_source()
         .and_then(|m| {
             let check = js_sys::Reflect::get(&m, &"isTypeSupported".into()).ok()?;
             let check: &js_sys::Function = check.dyn_ref()?;

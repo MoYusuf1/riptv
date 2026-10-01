@@ -727,3 +727,189 @@ async fn compat_mode_turns_hevc_and_ac3_into_h264_and_aac() {
         .unwrap();
     assert_eq!(cross.status(), 403);
 }
+
+/// The standard player's live path: the proxy follows an HLS playlist itself, reads the codecs from
+/// the first segment and has ffmpeg copy the picture and convert only the sound the browser lacks.
+#[tokio::test]
+async fn live_streams_copy_what_plays_and_convert_the_rest() {
+    if std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .is_err()
+    {
+        eprintln!("ffmpeg isn't installed: skipping");
+        return;
+    }
+    // H.264 + AAC (as most channels are): both copied, the AAC repackaged for MP4.
+    let aac = std::process::Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=320x240:rate=25:duration=2",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=2",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-f",
+            "mpegts",
+            "pipe:1",
+        ])
+        .output()
+        .unwrap()
+        .stdout;
+    let upstream = serve(
+        Router::new()
+            .route(
+                "/live/u/p/3.ts",
+                get(move || {
+                    let aac = aac.clone();
+                    async move { ([("content-type", "video/mp2t")], aac) }
+                }),
+            )
+            .route(
+                "/live/u/p/1.m3u8",
+                get(|| async {
+                    "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:7\n\
+                     #EXTINF:4,\n/seg.ts\n#EXTINF:4,\n/seg.ts\n#EXT-X-ENDLIST\n"
+                }),
+            )
+            .route(
+                "/live/u/p/2.ts",
+                get(|| async { ([("content-type", "video/mp2t")], INTERLACED) }),
+            )
+            .route(
+                "/seg.ts",
+                get(|| async { ([("content-type", "video/mp2t")], H264_AC3) }),
+            ),
+    )
+    .await;
+    let proxy = serve(router(AppState::new())).await;
+    assert_eq!(sign_in(proxy, "127.0.0.1").await, 204);
+    let live = |path: &str, can: &str| {
+        let url = Url::parse_with_params(
+            &format!("http://127.0.0.1:{proxy}/live"),
+            [
+                ("url", format!("http://127.0.0.1:{upstream}{path}").as_str()),
+                ("can", can),
+            ],
+        )
+        .unwrap();
+        async move { reqwest::get(url).await.unwrap() }
+    };
+
+    // H.264 + AC-3 over HLS, for a browser without AC-3: picture copied, sound made AAC.
+    let res = live("/live/u/p/1.m3u8", "").await;
+    assert_eq!(res.status(), 200);
+    assert_eq!(res.headers()["content-type"], "video/mp4");
+    let body = res.bytes().await.unwrap();
+    let (codecs, frames) = probe_bytes(&body, "live-hls");
+    assert_eq!(codecs, ["h264", "aac"], "{codecs:?}");
+    assert!(frames >= 90, "{frames} frames");
+
+    let body = live("/live/u/p/3.ts", "").await.bytes().await.unwrap();
+    let (codecs, frames) = probe_bytes(&body, "live-aac");
+    assert_eq!(codecs, ["h264", "aac"], "{codecs:?}");
+    assert!(frames >= 45, "{frames} frames");
+
+    // A continuous interlaced transport stream: deinterlaced (re-encoded) whatever the browser can.
+    let body = live("/live/u/p/2.ts", "hevc,ac3,eac3")
+        .await
+        .bytes()
+        .await
+        .unwrap();
+    let (codecs, frames) = probe_bytes(&body, "live-ts");
+    assert!(
+        codecs.contains(&"h264".to_string()) && frames > 0,
+        "{codecs:?} {frames}"
+    );
+
+    // A channel the provider doesn't have: refused with the provider's answer, for the app to show.
+    let res = live("/live/u/p/9.m3u8", "").await;
+    assert_eq!(res.status(), 502);
+    assert!(
+        res.headers()["x-riptv-error"]
+            .to_str()
+            .unwrap()
+            .contains("404")
+    );
+}
+
+/// Leaving a live channel must stop every request for it: providers count open connections
+/// against the account, and a playlist still being followed for nobody refuses the next channel.
+#[tokio::test]
+async fn leaving_a_live_channel_stops_reading_it() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    if std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    let asked = Arc::new(AtomicUsize::new(0));
+    let counter = asked.clone();
+    // A live playlist that never ends and never advances (the case that used to leak).
+    let upstream = serve(
+        Router::new()
+            .route(
+                "/live/u/p/1.m3u8",
+                get(move || {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    async {
+                        "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:1\n\
+                         #EXTINF:1,\n/seg.ts\n#EXTINF:1,\n/seg.ts\n"
+                    }
+                }),
+            )
+            .route(
+                "/seg.ts",
+                get(|| async { ([("content-type", "video/mp2t")], H264_AC3) }),
+            ),
+    )
+    .await;
+    let proxy = serve(router(AppState::new())).await;
+    assert_eq!(sign_in(proxy, "127.0.0.1").await, 204);
+    let url = Url::parse_with_params(
+        &format!("http://127.0.0.1:{proxy}/live"),
+        [(
+            "url",
+            format!("http://127.0.0.1:{upstream}/live/u/p/1.m3u8").as_str(),
+        )],
+    )
+    .unwrap();
+    let mut res = reqwest::get(url).await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert!(res.chunk().await.unwrap().is_some());
+    // Watch until everything has been fed through (the follower then idles, waiting for a
+    // segment that never comes), then leave.
+    let watched = tokio::time::Instant::now();
+    while watched.elapsed() < std::time::Duration::from_secs(2) {
+        if tokio::time::timeout(std::time::Duration::from_millis(200), res.chunk())
+            .await
+            .is_ok_and(|c| c.ok().flatten().is_none())
+        {
+            break;
+        }
+    }
+    drop(res); // the viewer leaves
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let after_leaving = asked.load(Ordering::SeqCst);
+    // Refreshes would come every half second: none may.
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    assert_eq!(asked.load(Ordering::SeqCst), after_leaving);
+}

@@ -420,6 +420,7 @@ pub fn is_failure(status: &str) -> bool {
             | "Trying another playback method…"
             | "Trying a compatible stream…"
             | "Re-encoding the video…"
+            | crate::RECONNECTING
             | "Stream ended"
             | crate::STILL_STARTING
     )

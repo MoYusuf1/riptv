@@ -281,14 +281,22 @@ Decoded sound is stereo (5.1 is mixed down) and is held uncompressed, which is a
 browser that keeps only about a minute of sound in a buffer, so the page reads a few seconds at a time. A server that doesn't answer byte-range requests, or a file it can't read the
 index of, is left to the browser.
 
-**Live TV** in the standard player is decided once per channel, before connecting: the app reads
-the stream's first 64 KiB (the playlist, then its newest segment) to learn its codecs, and plays it
-in the browser when the browser decodes them (native HTTPS HLS, where supported), or has ffmpeg
-convert just the sound (AC-3, E-AC-3, MP2, AAC-LATM: the picture is copied, which is cheap) or the
-video (HEVC the browser can't decode, MPEG-2, or a picture the browser's decoder rejects, such as
-interlaced broadcasts). The plan is remembered per channel and profile, so a channel opened before
-starts the right way at once. It never connects twice at the same time: many providers allow one
-connection per channel and end the first when a second arrives. Experimental mode uses `rstreamkit`:
+**Live TV** in the standard player is one request: `/live`, a Rust pipeline in the proxy
+(`proxy/src/live.rs`). The proxy follows the channel's HLS playlist itself (or reads a continuous
+`.ts`), starting six seconds back from the live edge so everything needed to begin is already on
+the provider's server. It reads the codecs from those same bytes (`xtream::sniff`: the program map,
+DVB AC-3/E-AC-3/AAC-LATM descriptors, and the H.264 sequence header for interlacing), starts at the
+first keyframe, and pipes the stream into ffmpeg, which copies H.264 the browser decodes and
+re-encodes only what it can't (HEVC without browser support, MPEG-2, interlaced pictures); the
+sound always becomes plain AAC. The browser receives fragmented MP4 and starts on the first
+half-second fragment. There is never a second connection to a channel (providers that allow one
+end the first), and leaving a channel stops every request for it at once. A live stream that
+drops is reopened, up to three times in a row; a picture the browser rejects is re-encoded once.
+On an account tested with this, channels start in 1–3 s (1080i and 4K re-encodes included); an
+iPhone, which can't play such a stream, uses its own HLS player.
+
+The experimental player (rstreamkit) is separate: it never falls back to ffmpeg, and says what it
+can't play instead. Experimental mode uses `rstreamkit`:
 HLS with MPEG-TS segments carrying **H.264 video and AAC audio**. Anything else is reported, not
 misplayed: HEVC, AES-128, fMP4 segments, continuous (non-HLS) `.ts` streams and AC-3/MP2 audio are not
 played directly, and compatibility mode covers them (AC-3 and MP2 can instead be decoded in Rust,

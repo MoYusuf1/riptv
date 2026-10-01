@@ -35,7 +35,7 @@ use tokio_util::io::ReaderStream;
 
 use crate::{AppState, FALLBACK_UA, diagnostics, from_app, refusal, url_ok};
 
-const MISSING: &str =
+pub(crate) const MISSING: &str =
     "ffmpeg isn't installed, and this stream needs it (Arch: sudo pacman -S ffmpeg)";
 const VIDEO_HEADER: HeaderName = HeaderName::from_static("x-riptv-video");
 const HAS_VIDEO_HEADER: HeaderName = HeaderName::from_static("x-riptv-has-video");
@@ -147,7 +147,7 @@ async fn probe(url: &str, ua: &str) -> Result<Option<Probe>, Failure> {
 }
 
 /// NVENC, when this machine really has it: listed by ffmpeg is not the same as working.
-async fn nvenc_works() -> bool {
+pub(crate) async fn nvenc_works() -> bool {
     static WORKS: OnceCell<bool> = OnceCell::const_new();
     *WORKS
         .get_or_init(|| async {
@@ -216,7 +216,23 @@ fn ffmpeg_args(
         // zero, so the page adds `start` back when it shows the position.
         a.extend(["-ss".to_string(), start.to_string()]);
     }
-    a.extend(["-i", url, "-map", "0:v:0?", "-map", "0:a:0?"].map(String::from));
+    a.extend(["-i", url].map(String::from));
+    a.extend(encode_args(video, nvenc, height, max_height, "aac"));
+    a
+}
+
+/// Everything after the input: which tracks, how the video and sound are encoded (`video` is
+/// `copy` or `transcode`; `audio` is `copy` or `aac`), and fragmented MP4 out on stdout.
+pub(crate) fn encode_args(
+    video: &str,
+    nvenc: bool,
+    height: u32,
+    max_height: u32,
+    audio: &str,
+) -> Vec<String> {
+    let mut a: Vec<String> = ["-map", "0:v:0?", "-map", "0:a:0?"]
+        .map(String::from)
+        .into();
     if video == "copy" {
         a.extend(["-c:v", "copy"].map(String::from));
     } else {
@@ -278,27 +294,33 @@ fn ffmpeg_args(
         );
         a.extend(["-g", "50", "-bf", "0"].map(String::from));
     }
-    a.extend(
-        [
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-ac",
-            "2",
-            "-af",
-            "aresample=async=1:first_pts=0",
-        ]
-        .map(String::from),
-    );
+    if audio == "copy" {
+        // Transport streams frame AAC as ADTS; MP4 wants it bare.
+        a.extend(["-c:a", "copy", "-bsf:a", "aac_adtstoasc"].map(String::from));
+    } else {
+        a.extend(
+            [
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-ac",
+                "2",
+                "-af",
+                "aresample=async=1:first_pts=0",
+            ]
+            .map(String::from),
+        );
+    }
     a.extend(
         [
             "-f",
             "mp4",
             "-movflags",
             "frag_keyframe+empty_moov+default_base_moof",
+            // Half-second fragments: the browser can start on the first one.
             "-frag_duration",
-            "1000000",
+            "500000",
             "pipe:1",
         ]
         .map(String::from),
@@ -306,7 +328,7 @@ fn ffmpeg_args(
     a
 }
 
-fn agent(headers: &HeaderMap) -> String {
+pub(crate) fn agent(headers: &HeaderMap) -> String {
     headers
         .get(header::USER_AGENT)
         .and_then(|v| v.to_str().ok())
@@ -316,7 +338,11 @@ fn agent(headers: &HeaderMap) -> String {
 }
 
 /// Checks the request is from the app and is for an address the proxy may use.
-fn vet(s: &AppState, headers: &HeaderMap, raw: &str) -> Result<Url, (StatusCode, &'static str)> {
+pub(crate) fn vet(
+    s: &AppState,
+    headers: &HeaderMap,
+    raw: &str,
+) -> Result<Url, (StatusCode, &'static str)> {
     if !from_app(headers) {
         return Err((StatusCode::FORBIDDEN, "only the app may use the proxy"));
     }
@@ -388,9 +414,9 @@ pub async fn check(
 }
 
 /// The ffmpeg child, killed when the browser goes away (the response body is dropped).
-struct Piped {
-    out: ReaderStream<ChildStdout>,
-    _child: Child,
+pub(crate) struct Piped {
+    pub(crate) out: ReaderStream<ChildStdout>,
+    pub(crate) _child: Child,
 }
 
 impl Stream for Piped {
@@ -546,7 +572,7 @@ async fn one_variant(s: &AppState, url: &Url, ua: &str) -> Url {
     }
 }
 
-fn max_height() -> u32 {
+pub(crate) fn max_height() -> u32 {
     std::env::var("RIPTV_MAX_HEIGHT")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -556,7 +582,7 @@ fn max_height() -> u32 {
 /// From a master playlist's `#EXT-X-STREAM-INF` entries: the highest bandwidth no taller than
 /// `max_height` (or the shortest, if all are taller). Returns its URI, height, and how many there
 /// were; `None` if this isn't a master playlist.
-fn pick_variant(playlist: &str, max_height: u32) -> Option<(&str, Option<u32>, usize)> {
+pub(crate) fn pick_variant(playlist: &str, max_height: u32) -> Option<(&str, Option<u32>, usize)> {
     let mut variants = vec![];
     let mut lines = playlist.lines().map(str::trim);
     while let Some(line) = lines.next() {
@@ -588,7 +614,7 @@ fn pick_variant(playlist: &str, max_height: u32) -> Option<(&str, Option<u32>, u
 
 /// What ffmpeg says while it converts, into the diagnostics log: its errors (redacted), when its
 /// first output came, and any stretch where it ran slower than real time (the viewer buffers).
-async fn watch_ffmpeg(s: AppState, url: Url, tag: String, mut stderr: ChildStderr) {
+pub(crate) async fn watch_ffmpeg(s: AppState, url: Url, tag: String, mut stderr: ChildStderr) {
     const MAX_ERRORS: usize = 40;
     let started = Instant::now();
     let (mut buf, mut pending) = ([0_u8; 4096], Vec::<u8>::new());

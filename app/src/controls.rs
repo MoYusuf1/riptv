@@ -75,3 +75,20 @@ pub fn Skip(back: bool) -> Element {
         }
     }
 }
+
+/// How far a player has got with starting, as a ring: 0 asked, 1 the stream answered, 2 its
+/// format is known, 3 a picture is decoded, 4 playing. Each stage eases the ring toward its mark
+/// over a few seconds (CSS transitions: no timers), so it never sits still while a step runs.
+#[component]
+pub fn LoadRing(stage: u8) -> Element {
+    // Circumference of r = 20.
+    const LENGTH: f64 = 125.66;
+    let filled = [0.22, 0.62, 0.8, 0.93, 1.0][usize::from(stage.min(4))];
+    let offset = LENGTH * (1.0 - filled);
+    rsx! {
+        svg { class: "ring", view_box: "0 0 48 48", role: "progressbar", "aria-valuenow": "{(filled * 100.0) as u32}",
+            circle { class: "ring-track", cx: "24", cy: "24", r: "20" }
+            circle { class: "ring-fill", cx: "24", cy: "24", r: "20", style: "stroke-dashoffset:{offset:.1}" }
+        }
+    }
+}

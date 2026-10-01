@@ -12,21 +12,46 @@ pub struct Sniff {
     pub container: &'static str,
     pub video: Option<&'static str>,
     pub audio: Option<&'static str>,
+    /// From the H.264 sequence header, when one is in the sample: whether the picture is
+    /// interlaced (fields, as broadcast TV often is), and its height.
+    pub interlaced: Option<bool>,
+    pub height: Option<u32>,
+    /// Byte offsets (packet starts) in the sample: the first keyframe's parameter sets (where a
+    /// decoder can begin), and the first PAT and PMT (what a demuxer needs before anything).
+    pub keyframe_at: Option<usize>,
+    pub pat_at: Option<usize>,
+    pub pmt_at: Option<usize>,
 }
 
 impl Sniff {
     pub fn of(bytes: &[u8]) -> Self {
         let container = container(bytes);
-        let (video, audio) = if container == "mpeg_ts" {
-            ts_codecs(bytes)
-        } else {
-            (None, None)
-        };
-        Self {
+        let mut found = Self {
             container,
-            video,
-            audio,
+            ..Self::default()
+        };
+        if container == "mpeg_ts" {
+            let program = program_map(bytes);
+            found.video = program.video.map(|v| v.1);
+            found.audio = program.audio;
+            found.pmt_at = program.at;
+            found.pat_at = bytes
+                .as_chunks::<188>()
+                .0
+                .iter()
+                .position(|p| pid(p) == 0 && unit_start(p).is_some())
+                .map(|i| i * 188);
+            if let Some((pid, codec)) = program.video
+                && let Some((at, sps)) = first_keyframe(bytes, pid, codec)
+            {
+                found.keyframe_at = Some(at);
+                if let Some(sps) = sps {
+                    found.interlaced = Some(sps.interlaced);
+                    found.height = Some(sps.height);
+                }
+            }
         }
+        found
     }
 }
 
@@ -51,62 +76,259 @@ fn ts_aligned(bytes: &[u8]) -> bool {
     bytes.len() > 376 && bytes[0] == 0x47 && bytes[188] == 0x47 && bytes[376] == 0x47
 }
 
-/// The video and audio codecs in a transport stream's first program map table.
-pub fn ts_codecs(bytes: &[u8]) -> (Option<&'static str>, Option<&'static str>) {
-    let mut found = (None, None);
-    for packet in bytes.as_chunks::<188>().0 {
+/// The video (its packet id and codec) and audio codec a transport stream's first program map
+/// announces.
+#[derive(Default)]
+struct Program {
+    video: Option<(u16, &'static str)>,
+    audio: Option<&'static str>,
+    /// Byte offset of the packet the map came in.
+    at: Option<usize>,
+}
+
+fn program_map(bytes: &[u8]) -> Program {
+    let mut found = Program::default();
+    for (n, packet) in bytes.as_chunks::<188>().0.iter().enumerate() {
         // A section starts in this packet (payload-unit-start), and it has a payload.
-        if packet[0] != 0x47 || packet[1] & 0x40 == 0 || packet[3] & 0x10 == 0 {
+        let Some(payload) = unit_start(packet) else {
             continue;
-        }
-        let mut offset = 4;
-        if packet[3] & 0x20 != 0 {
-            offset += 1 + usize::from(packet[4]);
-        }
-        if offset >= 188 {
+        };
+        let Some(&pointer) = payload.first() else {
             continue;
-        }
-        offset += 1 + usize::from(packet[offset]); // pointer field
-        if offset + 12 > 188 || packet[offset] != 0x02 {
+        };
+        let table = payload.get(1 + usize::from(pointer)..).unwrap_or_default();
+        if table.len() < 12 || table[0] != 0x02 {
             continue; // not a program map
         }
-        let length =
-            (usize::from(packet[offset + 1] & 0x0f) << 8) | usize::from(packet[offset + 2]);
-        let end = (offset + 3 + length).saturating_sub(4).min(188);
-        let info =
-            (usize::from(packet[offset + 10] & 0x0f) << 8) | usize::from(packet[offset + 11]);
-        offset += 12 + info;
+        let length = (usize::from(table[1] & 0x0f) << 8) | usize::from(table[2]);
+        let end = (3 + length).saturating_sub(4).min(table.len());
+        let info = (usize::from(table[10] & 0x0f) << 8) | usize::from(table[11]);
+        let mut offset = 12 + info;
         while offset + 5 <= end {
+            let pid = (u16::from(table[offset + 1] & 0x1f) << 8) | u16::from(table[offset + 2]);
             let es_info =
-                (usize::from(packet[offset + 3] & 0x0f) << 8) | usize::from(packet[offset + 4]);
-            let descriptors = &packet[(offset + 5).min(end)..(offset + 5 + es_info).min(end)];
-            match packet[offset] {
-                0x1b => found.0 = Some("h264"),
-                0x24 => found.0 = Some("hevc"),
-                0x01 | 0x02 => found.0 = Some("mpeg2video"),
-                0x0f => found.1 = found.1.or(Some("aac")),
+                (usize::from(table[offset + 3] & 0x0f) << 8) | usize::from(table[offset + 4]);
+            let descriptors = &table[(offset + 5).min(end)..(offset + 5 + es_info).min(end)];
+            let video = |codec| Some((pid, codec));
+            match table[offset] {
+                0x1b => found.video = found.video.or(video("h264")),
+                0x24 => found.video = found.video.or(video("hevc")),
+                0x01 | 0x02 => found.video = found.video.or(video("mpeg2video")),
+                0x0f => found.audio = found.audio.or(Some("aac")),
                 // AAC in LATM framing (DVB broadcasts): browsers don't decode it.
-                0x11 => found.1 = found.1.or(Some("aac_latm")),
-                0x03 | 0x04 => found.1 = found.1.or(Some("mp2")),
-                0x81 => found.1 = found.1.or(Some("ac3")),
-                0x87 => found.1 = found.1.or(Some("eac3")),
+                0x11 => found.audio = found.audio.or(Some("aac_latm")),
+                0x03 | 0x04 => found.audio = found.audio.or(Some("mp2")),
+                0x81 => found.audio = found.audio.or(Some("ac3")),
+                0x87 => found.audio = found.audio.or(Some("eac3")),
                 // Private data: DVB says what it is in a descriptor (AC-3 0x6a, E-AC-3 0x7a).
                 0x06 => {
                     if has_descriptor(descriptors, 0x7a) {
-                        found.1 = found.1.or(Some("eac3"));
+                        found.audio = found.audio.or(Some("eac3"));
                     } else if has_descriptor(descriptors, 0x6a) {
-                        found.1 = found.1.or(Some("ac3"));
+                        found.audio = found.audio.or(Some("ac3"));
                     }
                 }
                 _ => {}
             }
             offset += 5 + es_info;
         }
-        if found.0.is_some() || found.1.is_some() {
+        if found.video.is_some() || found.audio.is_some() {
+            found.at = Some(n * 188);
             break;
         }
     }
     found
+}
+
+/// A packet's payload, if a unit (section or PES packet) starts in it.
+fn unit_start(packet: &[u8; 188]) -> Option<&[u8]> {
+    if packet[0] != 0x47 || packet[1] & 0x40 == 0 || packet[3] & 0x10 == 0 {
+        return None;
+    }
+    let skip = if packet[3] & 0x20 != 0 {
+        5 + usize::from(packet[4])
+    } else {
+        4
+    };
+    packet.get(skip..)
+}
+
+fn pid(packet: &[u8; 188]) -> u16 {
+    (u16::from(packet[1] & 0x1f) << 8) | u16::from(packet[2])
+}
+
+struct Sps {
+    interlaced: bool,
+    height: u32,
+}
+
+/// Where a decoder can begin on `video_pid`: the first packet whose access unit carries the
+/// codec's parameter sets (H.264 SPS, HEVC VPS/SPS, MPEG-2 sequence header), with the H.264 SPS
+/// read. Providers' segments don't always start there. O(n) in `bytes`.
+fn first_keyframe(bytes: &[u8], video_pid: u16, codec: &str) -> Option<(usize, Option<Sps>)> {
+    let packets = bytes.as_chunks::<188>().0;
+    let starts = packets
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| pid(p) == video_pid && unit_start(p).is_some());
+    for (index, packet) in starts {
+        // The access unit's first bytes: past the PES header, then the packets after it on the
+        // same stream, up to 1 KiB (where encoders put parameter sets) or the next unit.
+        let pes = unit_start(packet)?;
+        let mut es = pes.get(9 + usize::from(*pes.get(8)?)..)?.to_vec();
+        for next in packets[index + 1..].iter().filter(|p| pid(p) == video_pid) {
+            if es.len() >= 1024 || next[1] & 0x40 != 0 {
+                break;
+            }
+            if next[3] & 0x10 != 0 {
+                let skip = if next[3] & 0x20 != 0 {
+                    5 + usize::from(next[4])
+                } else {
+                    4
+                };
+                es.extend_from_slice(next.get(skip..).unwrap_or_default());
+            }
+        }
+        let header = |w: &[u8]| match codec {
+            "h264" => w[3] & 0x1f == 7,
+            "hevc" => matches!((w[3] >> 1) & 0x3f, 32 | 33),
+            _ => w[3] == 0xb3,
+        };
+        let Some(at) = es.windows(4).position(|w| w[..3] == [0, 0, 1] && header(w)) else {
+            continue;
+        };
+        let sps = (codec == "h264")
+            .then(|| {
+                let from = at + 4;
+                let end = es[from..]
+                    .windows(3)
+                    .position(|w| w == [0, 0, 1])
+                    .map_or(es.len(), |e| from + e);
+                parse_sps(&es[from..end])
+            })
+            .flatten();
+        return Some((index * 188, sps));
+    }
+    None
+}
+
+/// The few fields of an H.264 SPS (after its NAL header) needed here, per ITU-T H.264 7.3.2.1.
+fn parse_sps(raw: &[u8]) -> Option<Sps> {
+    // Remove emulation prevention: 00 00 03 → 00 00.
+    let mut rbsp = Vec::with_capacity(raw.len());
+    let mut zeros = 0;
+    for &b in raw {
+        if zeros >= 2 && b == 3 {
+            zeros = 0;
+            continue;
+        }
+        zeros = if b == 0 { zeros + 1 } else { 0 };
+        rbsp.push(b);
+    }
+    let mut r = Bits { data: &rbsp, at: 0 };
+    let profile = r.bits(8)?;
+    r.bits(16)?; // constraint flags, level
+    r.ue()?; // seq_parameter_set_id
+    let mut chroma = 1;
+    if matches!(
+        profile,
+        100 | 110 | 122 | 244 | 44 | 83 | 86 | 118 | 128 | 138 | 139 | 134 | 135
+    ) {
+        chroma = r.ue()?;
+        if chroma == 3 {
+            r.bits(1)?; // separate_colour_plane_flag
+        }
+        r.ue()?; // bit_depth_luma
+        r.ue()?; // bit_depth_chroma
+        r.bits(1)?; // qpprime_y_zero_transform_bypass_flag
+        if r.bits(1)? == 1 {
+            for list in 0..if chroma == 3 { 12 } else { 8 } {
+                if r.bits(1)? == 1 {
+                    let size = if list < 6 { 16 } else { 64 };
+                    let (mut last, mut next) = (8_i64, 8_i64);
+                    for _ in 0..size {
+                        if next != 0 {
+                            next = (last + r.se()? + 256) % 256;
+                        }
+                        if next != 0 {
+                            last = next;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    r.ue()?; // log2_max_frame_num_minus4
+    match r.ue()? {
+        0 => {
+            r.ue()?;
+        }
+        1 => {
+            r.bits(1)?;
+            r.se()?;
+            r.se()?;
+            for _ in 0..r.ue()? {
+                r.se()?;
+            }
+        }
+        _ => {}
+    }
+    r.ue()?; // max_num_ref_frames
+    r.bits(1)?; // gaps_in_frame_num_value_allowed_flag
+    r.ue()?; // pic_width_in_mbs_minus1
+    let map_units = r.ue()? + 1;
+    let frame_mbs_only = r.bits(1)? == 1;
+    if !frame_mbs_only {
+        r.bits(1)?; // mb_adaptive_frame_field_flag
+    }
+    r.bits(1)?; // direct_8x8_inference_flag
+    let rows = map_units * if frame_mbs_only { 1 } else { 2 };
+    let mut height = rows * 16;
+    if r.bits(1)? == 1 {
+        // Frame cropping, in chroma rows (×2 again for fields, for 4:2:0).
+        let (_left, _right, top, bottom) = (r.ue()?, r.ue()?, r.ue()?, r.ue()?);
+        let unit = if chroma == 1 { 2 } else { 1 } * if frame_mbs_only { 1 } else { 2 };
+        height = height.saturating_sub((top + bottom) * unit);
+    }
+    Some(Sps {
+        interlaced: !frame_mbs_only,
+        height,
+    })
+}
+
+/// A big-endian bit reader with H.264's Exp-Golomb codes.
+struct Bits<'a> {
+    data: &'a [u8],
+    at: usize,
+}
+
+impl Bits<'_> {
+    fn bit(&mut self) -> Option<u32> {
+        let byte = *self.data.get(self.at / 8)?;
+        let bit = (byte >> (7 - self.at % 8)) & 1;
+        self.at += 1;
+        Some(u32::from(bit))
+    }
+
+    fn bits(&mut self, n: u32) -> Option<u32> {
+        (0..n).try_fold(0, |v, _| Some((v << 1) | self.bit()?))
+    }
+
+    fn ue(&mut self) -> Option<u32> {
+        let mut zeros = 0;
+        while self.bit()? == 0 {
+            zeros += 1;
+            if zeros > 31 {
+                return None;
+            }
+        }
+        Some((1 << zeros) - 1 + self.bits(zeros)?)
+    }
+
+    fn se(&mut self) -> Option<i64> {
+        let k = i64::from(self.ue()?);
+        Some(if k % 2 == 1 { (k + 1) / 2 } else { -(k / 2) })
+    }
 }
 
 fn has_descriptor(mut list: &[u8], tag: u8) -> bool {
@@ -240,6 +462,22 @@ mod tests {
     }
 
     #[test]
+    fn a_real_stream_shows_where_to_begin() {
+        let ts = include_bytes!("../../proxy/fixtures/h264_ac3.ts");
+        let s = Sniff::of(ts);
+        assert_eq!((s.video, s.audio), (Some("h264"), Some("ac3")));
+        assert_eq!(s.interlaced, Some(false));
+        let (key, pat, pmt) = (s.keyframe_at.unwrap(), s.pat_at.unwrap(), s.pmt_at.unwrap());
+        assert!(pat < key && pmt < key, "{pat} {pmt} {key}");
+        // Cut just past that keyframe: the next one is found further on, or none if the clip
+        // has no other, but never one before the cut.
+        let cut = &ts[key + 188..];
+        if let Some(next) = Sniff::of(cut).keyframe_at {
+            assert!(next > 0);
+        }
+    }
+
+    #[test]
     fn containers_are_told_apart() {
         assert_eq!(container(b"#EXTM3U\n"), "hls_or_m3u");
         assert_eq!(container(b"\0\0\0\x18ftypisom"), "mp4");
@@ -266,7 +504,47 @@ mod tests {
             container: "mpeg_ts",
             video,
             audio,
+            ..Sniff::default()
         }
+    }
+
+    fn hex(text: &str) -> Vec<u8> {
+        (0..text.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn sequence_headers_tell_interlaced_from_progressive() {
+        // From x264 (high/main/baseline profiles), past the NAL header byte.
+        for (sps, interlaced, height) in [
+            (
+                "4d4028f403c0227ef011000003000100000300321f162ea0",
+                true,
+                1080,
+            ),
+            ("42c01fda014016ec0440000003004000000c83c60ca8", false, 720),
+            ("4d401eeca05a126c0440000003004000000c87c50a6580", true, 576),
+            (
+                "640028acd94078044fde0220000003002000000643e2c5b2c0",
+                true,
+                1080,
+            ),
+            (
+                "640028acd940780227e5c044000003000400000300c83c60c658",
+                false,
+                1080,
+            ),
+        ] {
+            let found = parse_sps(&hex(sps)).unwrap();
+            assert_eq!(
+                (found.interlaced, found.height),
+                (interlaced, height),
+                "{sps}"
+            );
+        }
+        assert!(parse_sps(&[0x64]).is_none());
     }
 
     #[test]
