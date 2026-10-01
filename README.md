@@ -105,24 +105,45 @@ Open it in a normal browser (Chrome, Firefox, Safari). Sound and real fullscreen
 and an embedded preview pane may have neither; the player falls back to filling the page. On the live
 player Space plays or pauses, F is fullscreen, M mutes, and double-click is fullscreen.
 
-### Share a stream for local troubleshooting
+### Diagnostics: why a channel won't play or keeps buffering
 
-Run `cargo riptv --logs` to append sanitized probe results to
-`/tmp/riptv-diagnostics.log` (on systems with a different temp directory, the startup message
-prints its path). Open a live channel, press its info button, then **Share for local testing**.
-This creates an opt-in session lasting ten minutes. Either local chatbot can inspect it with:
+```sh
+cargo riptv --logs
+tail -f /tmp/riptv-diagnostics.log      # the same lines also print in the terminal
+```
+
+With `--logs`, every channel, movie and episode you open is traced automatically; there is nothing
+to press. The page reports what its player does, and the proxy adds what it sees, one line per fact,
+tagged with an 8-character session id:
+
+- **open / engine / status**: what was opened, which way it plays (native HLS, ffmpeg, the Rust
+  player), each status the viewer sees, and `failure` when the player gives up.
+- **playing** (`startup_ms`), **stall** (how long, how much was buffered), **stuck** (a wait over 8 s,
+  or no picture 15 s after opening), **media_error** (the browser's code and message), **no_sound**,
+  a **health** sample every 30 s (fps, dropped frames, buffer, resolution, decoded audio) and a
+  **closed** summary (stalls, time stalled).
+- **proxy**: upstream refusals and errors, requests slow to answer, segments slow to arrive, and
+  connections that broke off.
+- **ffmpeg**: when a conversion starts, its first output, any stretch slower than real time (the
+  viewer buffers), its errors, and when it ends.
+- **probe**: on any `failure`, `media_error` or `stuck`, the proxy fetches a 64 KiB sample of the
+  stream itself and reports HTTP status, container, codecs, the live playlist's segment length and
+  how fast the sample came, with a **verdict** such as `channel_offline_or_removed`,
+  `provider_refused_account_or_connection_limit` or `provider_too_slow_for_live`.
+
+Nothing in the log names a stream address, username, password, token or provider host: the proxy
+keeps each session's address in memory only, and redacts any text that could contain one (error
+messages included). Sessions end when you leave the stream, or ten minutes after the last event.
+A local chatbot can also list the open sessions and probe one on demand:
 
 ```sh
 curl http://127.0.0.1:3000/diagnostics
 curl -X POST http://127.0.0.1:3000/diagnostics/SESSION_ID/probe
 ```
 
-The list and report contain no stream URL, username, password, token, or provider response body.
-The proxy keeps the URL only in memory, fetches at most 64 KiB from the stream (and up to two HLS
-playlist links), and reports HTTP status, container signature, transport-stream sync and common
-codec IDs. It never passes a credential-bearing URL to a subprocess. Stop the server to erase all
-sessions. This is **local-only**: someone with access to your computer's loopback port can run a
-shared probe while it is active. No stream is shared until you press the button.
+Without `--logs` all of this is off: the endpoints answer 404 and the page sends nothing. This is
+**local-only**: anyone who can reach your computer's loopback port can read the session list and
+run a probe while it's on.
 
 ## Try it without a provider
 
@@ -134,8 +155,8 @@ cargo riptv
 Open the page and click "Try the demo". It has movies with AC-3 sound as an MP4 and as an MKV (served
 with byte ranges, like a real provider, and played by rstreamkit), one with DTS sound that needs ffmpeg, a
 two-season series whose episodes are the same two files, an HLS channel, a simulated live channel with
-a sliding playlist window, and an anamorphic PAL channel (720x576 with 64:45 pixels) that must come out
-16:9. Every channel has a generated day-long guide. `MOCK_MOVIE=/path/film.mkv cargo run -p riptv
+a sliding playlist window, an anamorphic PAL channel (720x576 with 64:45 pixels) that must come out
+16:9, and, for trying `--logs`, an offline channel (404) and one whose provider can't keep up. Every channel has a generated day-long guide. `MOCK_MOVIE=/path/film.mkv cargo run -p riptv
 --example mock_provider` adds your own file as a sixth movie, which is the best way to try seeking. `MOCK_TITLES=30000` adds that many
 channels, movies and series (and `MOCK_PORT` moves it off 8081): a big provider's catalogue, for trying how the app copes.
 
@@ -178,7 +199,7 @@ the player stays above the channel list and the EPG is hidden to leave room for 
 grids. Each section is loaded once, so category counts are exact and switching category is instant; the
 account menu's **Refresh** reloads it. Live channels are endless streams, so they can't be downloaded.
 On live TV, ↑/↓ or the player buttons change channel in the current category and sort order.
-Type a channel number and wait a moment (or press Enter); on a phone, use the **123** button.
+Type a channel number and wait a moment (or press Enter).
 
 ### Movie and series pages
 

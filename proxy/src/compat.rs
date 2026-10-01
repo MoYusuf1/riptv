@@ -13,7 +13,7 @@ use std::{
     pin::Pin,
     process::Stdio,
     task::{Context, Poll},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -26,13 +26,14 @@ use futures_core::Stream;
 use reqwest::Url;
 use serde::Deserialize;
 use tokio::{
-    process::{Child, ChildStdout, Command},
+    io::AsyncReadExt,
+    process::{Child, ChildStderr, ChildStdout, Command},
     sync::OnceCell,
     time::timeout,
 };
 use tokio_util::io::ReaderStream;
 
-use crate::{AppState, FALLBACK_UA, from_app, refusal, url_ok};
+use crate::{AppState, FALLBACK_UA, diagnostics, from_app, refusal, url_ok};
 
 const MISSING: &str =
     "ffmpeg isn't installed, and this stream needs it (Arch: sudo pacman -S ffmpeg)";
@@ -326,7 +327,18 @@ fn vet(s: &AppState, headers: &HeaderMap, raw: &str) -> Result<Url, (StatusCode,
     }
 }
 
-fn failure(f: Failure) -> Response {
+fn failure(s: &AppState, url: &Url, f: Failure) -> Response {
+    if let Failure::Failed(why) = &f {
+        diagnostics::note(
+            s,
+            &format!(
+                "{}ffprobe could not read the {}: {}",
+                diagnostics::tag(s, url),
+                diagnostics::kind_of(url),
+                diagnostics::redact(why, Some(url), 200)
+            ),
+        );
+    }
     match f {
         Failure::Missing => refusal(StatusCode::NOT_IMPLEMENTED, MISSING),
         Failure::Failed(why) => refusal(
@@ -348,9 +360,11 @@ pub async fn check(
         Ok(url) => url,
         Err((status, why)) => return refusal(status, why),
     };
-    let probed = match probe(url.as_str(), &agent(&headers)).await {
+    let ua = agent(&headers);
+    let input = one_variant(&s, &url, &ua).await;
+    let probed = match probe(input.as_str(), &ua).await {
         Ok(p) => p,
-        Err(f) => return failure(f),
+        Err(f) => return failure(&s, &url, f),
     };
     let mode = if probed.as_ref().is_none_or(Probe::can_copy) {
         "copy"
@@ -398,22 +412,20 @@ pub async fn stream(
         Err((status, why)) => return refusal(status, why),
     };
     let ua = agent(&headers);
+    let input = one_variant(&s, &url, &ua).await;
     let (mode, height) = match q.video.as_deref() {
         Some("copy") => ("copy", 0),
-        Some("transcode") => ("transcode", probe_height(&url, &ua).await),
-        _ => match probe(url.as_str(), &ua).await {
+        Some("transcode") => ("transcode", probe_height(&input, &ua).await),
+        _ => match probe(input.as_str(), &ua).await {
             Ok(Some(p)) if !p.can_copy() => ("transcode", p.height),
             Ok(_) => ("copy", 0),
-            Err(f) => return failure(f),
+            Err(f) => return failure(&s, &url, f),
         },
     };
-    let max_height = std::env::var("RIPTV_MAX_HEIGHT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1080);
+    let max_height = max_height();
     let nvenc = mode != "copy" && nvenc_works().await;
-    let args = ffmpeg_args(
-        url.as_str(),
+    let mut args = ffmpeg_args(
+        input.as_str(),
         &ua,
         mode,
         nvenc,
@@ -421,17 +433,43 @@ pub async fn stream(
         max_height,
         q.start.unwrap_or(0),
     );
+    // With `--logs`, ffmpeg reports its speed every few seconds (on stderr, even at
+    // `-loglevel error`), which tells a conversion that can't keep up from a slow source.
+    let logging = s.logs.is_some();
+    if logging {
+        args.splice(0..0, ["-stats", "-stats_period", "5"].map(String::from));
+        diagnostics::note(
+            &s,
+            &format!(
+                "{}ffmpeg start {} video={mode}{} height={height} start={}",
+                diagnostics::tag(&s, &url),
+                diagnostics::kind_of(&url),
+                if mode == "copy" {
+                    ""
+                } else if nvenc {
+                    " encoder=nvenc"
+                } else {
+                    " encoder=libx264"
+                },
+                q.start.unwrap_or(0)
+            ),
+        );
+    }
 
     let mut child = match Command::new("ffmpeg")
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(if logging {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .kill_on_drop(true)
         .spawn()
     {
         Ok(child) => child,
-        Err(e) if not_found(&e) => return failure(Failure::Missing),
+        Err(e) if not_found(&e) => return failure(&s, &url, Failure::Missing),
         Err(e) => {
             return refusal(
                 StatusCode::BAD_GATEWAY,
@@ -442,6 +480,10 @@ pub async fn stream(
     let Some(stdout) = child.stdout.take() else {
         return refusal(StatusCode::BAD_GATEWAY, "could not read ffmpeg's output");
     };
+    if let Some(stderr) = child.stderr.take() {
+        let tag = diagnostics::tag(&s, &url);
+        tokio::spawn(watch_ffmpeg(s.clone(), url.clone(), tag, stderr));
+    }
     Response::builder()
         .header(header::CONTENT_TYPE, "video/mp4")
         .header(header::CACHE_CONTROL, "no-store")
@@ -452,6 +494,203 @@ pub async fn stream(
             _child: child,
         }))
         .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
+}
+
+/// The media playlist to convert, when `url` is an HLS master playlist: ffmpeg and ffprobe
+/// otherwise open every variant to probe it, which costs seconds at start (measured: 11.6 s to the
+/// first output for a 5-variant master, 3 s for one variant). The highest-bandwidth variant no
+/// taller than `RIPTV_MAX_HEIGHT` is chosen. Anything else, or any failure, is `url` unchanged.
+async fn one_variant(s: &AppState, url: &Url, ua: &str) -> Url {
+    let fetch = async {
+        let mut response = s
+            .http
+            .get(url.clone())
+            .header(header::USER_AGENT, ua)
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        let base = response.url().clone();
+        let mut body = Vec::new();
+        while body.len() < 256 * 1024 {
+            match response.chunk().await.ok()? {
+                Some(chunk) => body.extend_from_slice(&chunk),
+                None => break,
+            }
+            // Not a playlist (a live `.ts` stream, say): stop reading at once.
+            if body.len() >= 7 && !body.starts_with(b"#EXTM3U") {
+                return None;
+            }
+        }
+        let text = String::from_utf8_lossy(&body);
+        let (path, height, count) = pick_variant(&text, max_height())?;
+        let chosen = base.join(path).ok().filter(|v| url_ok(&s.approved, v))?;
+        Some((chosen, height, count))
+    };
+    match timeout(Duration::from_secs(8), fetch).await {
+        Ok(Some((chosen, height, count))) => {
+            diagnostics::note(
+                s,
+                &format!(
+                    "{}hls master playlist: converting the {}p variant of {count}",
+                    diagnostics::tag(s, url),
+                    height.map_or("?".into(), |h| h.to_string())
+                ),
+            );
+            chosen
+        }
+        _ => url.clone(),
+    }
+}
+
+fn max_height() -> u32 {
+    std::env::var("RIPTV_MAX_HEIGHT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1080)
+}
+
+/// From a master playlist's `#EXT-X-STREAM-INF` entries: the highest bandwidth no taller than
+/// `max_height` (or the shortest, if all are taller). Returns its URI, height, and how many there
+/// were; `None` if this isn't a master playlist.
+fn pick_variant(playlist: &str, max_height: u32) -> Option<(&str, Option<u32>, usize)> {
+    let mut variants = vec![];
+    let mut lines = playlist.lines().map(str::trim);
+    while let Some(line) = lines.next() {
+        let Some(attrs) = line.strip_prefix("#EXT-X-STREAM-INF:") else {
+            continue;
+        };
+        let attr = |name: &str| {
+            attrs
+                .split(',')
+                .find_map(|a| a.trim().strip_prefix(name)?.strip_prefix('='))
+        };
+        let bandwidth: u64 = attr("BANDWIDTH").and_then(|b| b.parse().ok()).unwrap_or(0);
+        let height: Option<u32> = attr("RESOLUTION")
+            .and_then(|r| r.split_once('x'))
+            .and_then(|(_, h)| h.parse().ok());
+        if let Some(uri) = lines.find(|l| !l.is_empty() && !l.starts_with('#')) {
+            variants.push((uri, height, bandwidth));
+        }
+    }
+    let count = variants.len();
+    let fits = |v: &&(&str, Option<u32>, u64)| v.1.is_none_or(|h| h <= max_height);
+    let best = variants
+        .iter()
+        .filter(fits)
+        .max_by_key(|v| v.2)
+        .or_else(|| variants.iter().min_by_key(|v| v.1))?;
+    Some((best.0, best.1, count))
+}
+
+/// What ffmpeg says while it converts, into the diagnostics log: its errors (redacted), when its
+/// first output came, and any stretch where it ran slower than real time (the viewer buffers).
+async fn watch_ffmpeg(s: AppState, url: Url, tag: String, mut stderr: ChildStderr) {
+    const MAX_ERRORS: usize = 40;
+    let started = Instant::now();
+    let (mut buf, mut pending) = ([0_u8; 4096], Vec::<u8>::new());
+    let (mut errors, mut first, mut slow, mut last) = (0, true, false, String::new());
+    loop {
+        let n = match stderr.read(&mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
+        };
+        pending.extend_from_slice(&buf[..n]);
+        while let Some(end) = pending.iter().position(|&b| b == b'\r' || b == b'\n') {
+            let line: Vec<u8> = pending.drain(..=end).collect();
+            let line = String::from_utf8_lossy(&line).trim().to_owned();
+            if line.is_empty() {
+                continue;
+            }
+            if let Some(progress) = Progress::parse(&line) {
+                let summary = progress.to_string();
+                if first {
+                    first = false;
+                    diagnostics::note(
+                        &s,
+                        &format!(
+                            "{tag}ffmpeg first progress after {}ms: {summary}",
+                            started.elapsed().as_millis()
+                        ),
+                    );
+                } else if progress.speed < 0.95 && progress.time > 5.0 {
+                    slow = true;
+                    diagnostics::note(&s, &format!("{tag}ffmpeg slower than real time: {summary}"));
+                } else if slow && progress.speed >= 0.95 {
+                    slow = false;
+                    diagnostics::note(&s, &format!("{tag}ffmpeg back to real time: {summary}"));
+                }
+                last = summary;
+            } else if errors < MAX_ERRORS {
+                errors += 1;
+                diagnostics::note(
+                    &s,
+                    &format!(
+                        "{tag}ffmpeg says: {}",
+                        diagnostics::redact(&line, Some(&url), 200)
+                    ),
+                );
+            }
+        }
+    }
+    diagnostics::note(
+        &s,
+        &format!(
+            "{tag}ffmpeg ended after {}s (last: {})",
+            started.elapsed().as_secs(),
+            if last.is_empty() { "no output" } else { &last }
+        ),
+    );
+}
+
+/// One of ffmpeg's `-stats` lines: `frame= 75 fps= 30 … time=00:00:03.00 … speed=1.22x`.
+struct Progress {
+    fps: Option<f64>,
+    time: f64,
+    speed: f64,
+}
+
+impl Progress {
+    fn parse(line: &str) -> Option<Self> {
+        if !(line.starts_with("frame=") || line.starts_with("size=")) {
+            return None;
+        }
+        // Values may be padded after `=`: join each key to its value first.
+        let mut tidy = line.to_owned();
+        while tidy.contains("= ") {
+            tidy = tidy.replace("= ", "=");
+        }
+        let field = |key: &str| {
+            tidy.split_whitespace()
+                .find_map(|w| w.strip_prefix(key))
+                .map(str::to_owned)
+        };
+        let time = field("time=").and_then(|t| {
+            let mut secs = 0.0;
+            for part in t.split(':') {
+                secs = secs * 60.0 + part.parse::<f64>().ok()?;
+            }
+            Some(secs)
+        })?;
+        let speed = field("speed=")?.trim_end_matches('x').parse().ok()?;
+        Some(Self {
+            fps: field("fps=").and_then(|f| f.parse().ok()),
+            time,
+            speed,
+        })
+    }
+}
+
+impl std::fmt::Display for Progress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "speed={:.2}x media_time={:.0}s", self.speed, self.time)?;
+        if let Some(fps) = self.fps {
+            write!(f, " fps={fps:.0}")?;
+        }
+        Ok(())
+    }
 }
 
 async fn probe_height(url: &Url, ua: &str) -> u32 {
@@ -498,6 +737,47 @@ mod tests {
                 .unwrap()
                 .duration,
             None
+        );
+    }
+
+    #[test]
+    fn the_best_variant_that_fits_is_converted() {
+        let master = "#EXTM3U\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=2149280,CODECS=\"mp4a.40.2,avc1.64001f\",RESOLUTION=1280x720\nhd.m3u8\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=246440,RESOLUTION=320x184\nld.m3u8\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=6221600,RESOLUTION=1920x1080\nfhd.m3u8\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=16000000,RESOLUTION=3840x2160\nuhd.m3u8\n";
+        assert_eq!(
+            pick_variant(master, 1080),
+            Some(("fhd.m3u8", Some(1080), 4))
+        );
+        assert_eq!(pick_variant(master, 720), Some(("hd.m3u8", Some(720), 4)));
+        assert_eq!(pick_variant(master, 100), Some(("ld.m3u8", Some(184), 4)));
+        // No resolutions: the highest bandwidth.
+        assert_eq!(
+            pick_variant(
+                "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\na.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=9\nb.m3u8\n",
+                1080
+            ),
+            Some(("b.m3u8", None, 2))
+        );
+        // A media playlist is not a master.
+        assert_eq!(pick_variant("#EXTM3U\n#EXTINF:4,\na.ts\n", 1080), None);
+    }
+
+    #[test]
+    fn ffmpeg_progress_lines_are_read() {
+        let p = Progress::parse("frame=   55 fps= 27 q=16.0 size=       1KiB time=00:00:02.20 bitrate=   2.9kbits/s speed= 1.1x elapsed=0:00:02.00").unwrap();
+        assert_eq!((p.fps, p.time, p.speed), (Some(27.0), 2.2, 1.1));
+        // Audio only: no frame count.
+        let p =
+            Progress::parse("size=     256KiB time=01:00:05.50 bitrate= 128.0kbits/s speed=0.83x")
+                .unwrap();
+        assert_eq!((p.fps, p.time, p.speed), (None, 3605.5, 0.83));
+        assert!(Progress::parse("[hls @ 0x55] Opening 'x' for reading").is_none());
+        assert!(
+            Progress::parse("frame=    0 fps=0.0 q=0.0 size=0KiB time=N/A bitrate=N/A speed=N/A")
+                .is_none()
         );
     }
 

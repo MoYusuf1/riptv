@@ -149,7 +149,8 @@ const PLAYLIST: [(header::HeaderName, &str); 1] =
 /// Channel 1 redirects to a real VOD-style HLS master playlist. Channel 2 is a simulated live
 /// stream: a 3-segment sliding window over the same 64 Big Buck Bunny segments that advances every
 /// 10 s and wraps around (which shows up as a timestamp jump, like a real stream restart).
-/// Channel 3 is one anamorphic PAL segment.
+/// Channel 3 is one anamorphic PAL segment. Channel 6 is offline (404), and channel 7 is a provider
+/// too slow to keep up (each 4 s segment takes 9 s), for trying `riptv --logs` diagnostics.
 async fn live(Path((_user, _pass, file)): Path<(String, String, String)>) -> Response {
     for (id, segment) in [("4", "hevc.ts"), ("5", "h264.ts")] {
         if file.starts_with(&format!("{id}.")) {
@@ -159,14 +160,35 @@ async fn live(Path((_user, _pass, file)): Path<(String, String, String)>) -> Res
             }
             let body = format!(
                 "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:5\n#EXT-X-MEDIA-SEQUENCE:0\n\
-                 #EXTINF:4.000,\nhttp://127.0.0.1:8081/{segment}\n#EXT-X-ENDLIST\n"
+                 #EXTINF:4.000,\nhttp://127.0.0.1:{}/{segment}\n#EXT-X-ENDLIST\n",
+                port()
             );
             return (PLAYLIST, body).into_response();
         }
     }
     if file.starts_with("3.") {
-        let body = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n\
-                    #EXTINF:1.000,\nhttp://127.0.0.1:8081/pal.ts\n#EXT-X-ENDLIST\n";
+        let body = format!(
+            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n\
+             #EXTINF:1.000,\nhttp://127.0.0.1:{}/pal.ts\n#EXT-X-ENDLIST\n",
+            port()
+        );
+        return (PLAYLIST, body).into_response();
+    }
+    if file.starts_with("6.") {
+        return (StatusCode::NOT_FOUND, "stream not found").into_response();
+    }
+    if file.starts_with("7.") {
+        // A live window of 4 s segments that each take 9 s to arrive: it can't keep up.
+        let n = STARTED.get_or_init(Instant::now).elapsed().as_secs() / 4;
+        let mut body = format!(
+            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:{n}\n"
+        );
+        for i in n..n + 3 {
+            body += &format!(
+                "#EXT-X-DISCONTINUITY\n#EXTINF:4.000,\nhttp://127.0.0.1:{}/slow/{i}.ts\n",
+                port()
+            );
+        }
         return (PLAYLIST, body).into_response();
     }
     if !file.starts_with("2.") {
@@ -325,6 +347,8 @@ async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
                 json!({"stream_id": 3, "name": "Anamorphic PAL (720x576, 64:45)", "category_id": "1"}),
                 json!({"stream_id": 4, "name": "HEVC video + AC-3 sound (needs conversion)", "category_id": "1"}),
                 json!({"stream_id": 5, "name": "H.264 video + AC-3 sound", "category_id": "1"}),
+                json!({"stream_id": 6, "name": "Offline channel (gives 404)", "category_id": "1"}),
+                json!({"stream_id": 7, "name": "Slow provider (stalls)", "category_id": "1"}),
             ];
             all.extend(synthetic_list("live", &poster_url()));
             Value::Array(all)
@@ -424,6 +448,13 @@ async fn main() {
         .route(
             "/h264.ts",
             get(|| async { ([(header::CONTENT_TYPE, "video/mp2t")], H264_AC3) }),
+        )
+        .route(
+            "/slow/{n}",
+            get(|| async {
+                tokio::time::sleep(std::time::Duration::from_secs(9)).await;
+                ([(header::CONTENT_TYPE, "video/mp2t")], H264_AC3)
+            }),
         )
         .route(
             "/pal.ts",

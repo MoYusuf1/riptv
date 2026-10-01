@@ -18,13 +18,17 @@ use std::{
     fmt,
     net::{IpAddr, SocketAddr},
     path::PathBuf,
+    pin::Pin,
     sync::{Arc, RwLock},
-    time::Duration,
+    task::{Context, Poll},
+    time::{Duration, Instant},
 };
+
+use futures_core::Stream;
 
 use axum::{
     Router,
-    body::Body,
+    body::{Body, Bytes},
     extract::{Query, State},
     http::{HeaderMap, HeaderName, HeaderValue, StatusCode, header},
     middleware::{self, Next},
@@ -130,7 +134,7 @@ impl AppState {
         self
     }
 
-    /// Append credential-free opt-in stream probe results to a local file.
+    /// Record sanitized playback diagnostics (see `diagnostics`) in this file, and on stderr.
     pub fn with_logs(mut self, path: impl Into<PathBuf>) -> Self {
         self.logs = Some(path.into());
         self
@@ -270,7 +274,8 @@ pub fn router(state: AppState) -> Router {
             "/diagnostics",
             get(diagnostics::list).post(diagnostics::create),
         )
-        .route("/diagnostics/{id}/probe", post(diagnostics::probe));
+        .route("/diagnostics/{id}/probe", post(diagnostics::probe))
+        .route("/diagnostics/{id}/event", post(diagnostics::event));
     let r = match state.web.clone() {
         // Unknown paths get index.html with a 200 (`not_found_service` would keep the 404),
         // so client-side routes survive a reload.
@@ -371,6 +376,8 @@ async fn proxy(
         .filter(|v| !v.is_empty())
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static(FALLBACK_UA));
+    // With `--logs`: what this request was for, to say why it failed or crawled.
+    let watch = s.logs.is_some().then(|| (url.clone(), Instant::now()));
     let mut req = s.http.get(url).header(header::USER_AGENT, ua);
     for h in [header::RANGE, header::IF_RANGE] {
         if let Some(v) = headers.get(&h) {
@@ -421,11 +428,24 @@ async fn proxy(
             let why = private
                 .or(redirect)
                 .unwrap_or_else(|| format!("could not connect: {}", causes.join(": ")));
+            if let Some((url, started)) = &watch {
+                diagnostics::note(
+                    &s,
+                    &format!(
+                        "{}proxy {} failed after {}ms: {}",
+                        diagnostics::tag(&s, url),
+                        diagnostics::kind_of(url),
+                        started.elapsed().as_millis(),
+                        diagnostics::redact(&why, Some(url), 200)
+                    ),
+                );
+            }
             return refusal(StatusCode::BAD_GATEWAY, &why);
         }
     };
 
-    let mut res = Response::builder().status(up.status());
+    let status = up.status();
+    let mut res = Response::builder().status(status);
     for h in PASS {
         if let Some(v) = up.headers().get(&h) {
             res = res.header(h, v);
@@ -441,8 +461,93 @@ async fn proxy(
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
         .header(header::CONTENT_SECURITY_POLICY, "sandbox")
         // Streamed, never buffered; dropping the client connection drops the upstream request.
-        .body(Body::from_stream(up.bytes_stream()))
+        .body(match watch {
+            Some((url, started)) => {
+                let kind = diagnostics::kind_of(&url);
+                let tag = diagnostics::tag(&s, &url);
+                let ttfb = started.elapsed();
+                if status.as_u16() >= 400 || ttfb > SLOW_START {
+                    diagnostics::note(
+                        &s,
+                        &format!(
+                            "{tag}proxy {kind} http={} first_byte_ms={}",
+                            status.as_u16(),
+                            ttfb.as_millis()
+                        ),
+                    );
+                }
+                Body::from_stream(Watched {
+                    inner: Box::pin(up.bytes_stream()),
+                    state: s.clone(),
+                    tag,
+                    kind,
+                    started,
+                    bytes: 0,
+                })
+            }
+            None => Body::from_stream(up.bytes_stream()),
+        })
         .unwrap_or_else(|_| refusal(StatusCode::BAD_GATEWAY, "bad upstream response"))
+}
+
+/// A request slower than this to start answering is worth a line in the diagnostics log.
+const SLOW_START: Duration = Duration::from_secs(3);
+/// A segment slower than this to arrive in full is too (a live player has a few seconds of slack).
+const SLOW_SEGMENT: Duration = Duration::from_secs(4);
+
+type ByteStream = Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>>;
+
+/// An upstream body that notes, with `--logs`, when it breaks off or a segment crawls in.
+struct Watched {
+    inner: ByteStream,
+    state: AppState,
+    tag: String,
+    kind: &'static str,
+    started: Instant,
+    bytes: u64,
+}
+
+impl Stream for Watched {
+    type Item = reqwest::Result<Bytes>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let next = self.inner.as_mut().poll_next(cx);
+        match &next {
+            Poll::Ready(Some(Ok(chunk))) => self.bytes += chunk.len() as u64,
+            Poll::Ready(Some(Err(e))) => diagnostics::note(
+                &self.state,
+                &format!(
+                    "{}proxy {} broke off after {} bytes, {}ms ({})",
+                    self.tag,
+                    self.kind,
+                    self.bytes,
+                    self.started.elapsed().as_millis(),
+                    if e.is_timeout() {
+                        "timed out"
+                    } else {
+                        "connection error"
+                    }
+                ),
+            ),
+            Poll::Ready(None) => {
+                let took = self.started.elapsed();
+                if self.kind == "segment" && took > SLOW_SEGMENT {
+                    diagnostics::note(
+                        &self.state,
+                        &format!(
+                            "{}proxy segment slow: {} bytes in {}ms ({} kbit/s)",
+                            self.tag,
+                            self.bytes,
+                            took.as_millis(),
+                            self.bytes * 8 / took.as_millis().max(1) as u64
+                        ),
+                    );
+                }
+            }
+            Poll::Pending => {}
+        }
+        next
+    }
 }
 
 #[cfg(test)]

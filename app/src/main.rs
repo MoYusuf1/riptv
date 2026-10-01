@@ -15,6 +15,7 @@ use std::{
 };
 
 mod controls;
+mod diag;
 mod fetch;
 mod frame_stats;
 mod media_session;
@@ -255,12 +256,7 @@ svg{width:1.1rem;height:1.1rem}
 .audio-only strong{font-size:1.1rem}.audio-only small{color:var(--dim)}
 .sound-note{position:absolute;left:1rem;bottom:4.6rem;max-width:calc(100% - 2rem);padding:.35rem .8rem;border-radius:10px;background:rgba(0,0,0,.68);color:#ffd48a;font-size:.78rem;backdrop-filter:blur(10px)}
 .stats{position:absolute;top:.8rem;left:.8rem;padding:.3rem .7rem;border-radius:8px;background:rgba(0,0,0,.66);color:#fff;font:600 .72rem ui-monospace,monospace;backdrop-filter:blur(8px)}
-.diagnostic-share{margin-top:.35rem;padding:.25rem .4rem;border-radius:5px;background:#ffffff26;color:#fff;font:inherit}
-.diagnostic-share:hover{background:#ffffff44}
 .channel-dial{position:absolute;top:1rem;right:1rem;min-width:3rem;padding:.45rem .75rem;border-radius:10px;background:rgba(0,0,0,.72);color:#fff;text-align:center;font-weight:700}
-.number-panel{position:absolute;z-index:4;right:1rem;bottom:4.5rem;display:flex;align-items:center;gap:.4rem;padding:.45rem;border:1px solid var(--hair);border-radius:12px;background:rgba(16,12,16,.94);box-shadow:0 8px 30px #0008}
-.number-panel input{width:5rem;padding:.4rem .5rem;border:0;border-radius:7px;background:#fff2;color:#fff;outline:0}
-.number-panel button{padding:.4rem .6rem;border-radius:7px;background:#fff2;color:#fff}
 .hud{position:absolute;inset:0;display:grid;place-items:center;color:#fff;pointer-events:none}
 .hud span{padding:.4rem .9rem;border-radius:999px;background:rgba(0,0,0,.6);backdrop-filter:blur(10px)}
 .loading-group{display:grid;justify-items:center;gap:.7rem}
@@ -751,43 +747,45 @@ fn toggle_fullscreen(id: &'static str, mut expanded: Signal<bool>) {
 /// Chromium counts the audio bytes it has decoded. Zero after a few seconds of playing, with the
 /// element not muted, means the stream's sound isn't in a format this browser can decode (AC-3,
 /// DTS and friends) or it has none. Other browsers don't report it, and then this stays quiet.
+/// Stops a `<video>`'s download for good. A player that goes away must do this: the browser
+/// otherwise keeps a removed element's stream open for a while, and a provider that allows one
+/// connection then refuses the next channel.
+fn release(video: &web_sys::HtmlVideoElement) {
+    let _ = video.remove_attribute("src");
+    video.load();
+}
+
+/// What a failed stream request means for the viewer, from the provider's answer.
+fn channel_trouble(e: &xtream::Error) -> String {
+    let text = e.to_string();
+    let has = |s: &str| text.contains(s);
+    if has("404") || has("Not Found") {
+        "This channel is offline: your provider doesn't have it right now (404).".into()
+    } else if has("401") || has("403") || has("Forbidden") || has("Unauthorized") {
+        "Your provider refused this channel (403). Your subscription may not include it, or \
+         another device is using your connection."
+            .into()
+    } else if has("429") || has("458") || has("509") {
+        "Your provider says too many streams are open on your account. Stop it on your other \
+         devices and try again."
+            .into()
+    } else if has("timed out") || has("took too long") {
+        "Your provider isn't answering for this channel. Try again in a moment.".into()
+    } else if has("ffmpeg isn't installed") {
+        text
+    } else {
+        format!("Can't play this channel: {text}")
+    }
+}
+
+/// Shown, with the spinner, when a channel takes unusually long to start.
+const STILL_STARTING: &str = "Still starting: your provider is slow to answer…";
+
 fn no_audio_decoded(v: &web_sys::HtmlVideoElement) -> bool {
     let bytes = js_sys::Reflect::get(v, &JsValue::from_str("webkitAudioDecodedByteCount"))
         .ok()
         .and_then(|n| n.as_f64());
     v.current_time() > 4.0 && !v.muted() && bytes == Some(0.0)
-}
-
-/// Opt one channel into a ten-minute, localhost-only diagnostic session. The returned report
-/// contains no URL; the server keeps the address in memory and never writes it to its log.
-async fn share_diagnostic(client: &Client, media: &str) -> Result<(), &'static str> {
-    use wasm_bindgen_futures::JsFuture;
-    let url = xtream::Url::parse(media).map_err(|_| "Invalid stream")?;
-    let upstream = client.upstream(&url);
-    let body = serde_json::json!({ "url": upstream.as_str() }).to_string();
-    let init = web_sys::RequestInit::new();
-    init.set_method("POST");
-    init.set_body(&JsValue::from_str(&body));
-    let headers = web_sys::Headers::new().map_err(|_| "Browser request failed")?;
-    headers
-        .set("content-type", "application/json")
-        .map_err(|_| "Browser request failed")?;
-    init.set_headers(&headers);
-    let request = web_sys::Request::new_with_str_and_init("/diagnostics", &init)
-        .map_err(|_| "Browser request failed")?;
-    let response: web_sys::Response = JsFuture::from(
-        web_sys::window()
-            .ok_or("Browser window unavailable")?
-            .fetch_with_request(&request),
-    )
-    .await
-    .map_err(|_| "Could not reach local diagnostics")?
-    .unchecked_into();
-    if response.ok() {
-        Ok(())
-    } else {
-        Err("Could not share this stream")
-    }
 }
 
 /// Browser storage key for the opt-in experimental Rust playback engine.
@@ -2146,6 +2144,53 @@ fn Watch(
     let handle = use_hook(|| Rc::new(RefCell::new(None::<rstreamkit::mse::Player>)));
     let saved = use_hook(|| Rc::new(Cell::new(resume)));
 
+    let watch_element = use_hook(|| Rc::new(RefCell::new(None::<web_sys::HtmlVideoElement>)));
+    // With `riptv --logs`: what this title's player does, for the proxy's diagnostics log.
+    let trace = use_hook(|| {
+        let upstream = xtream::Url::parse(&play.url)
+            .map(|u| client.upstream(&u).to_string())
+            .unwrap_or_default();
+        diag::Trace::start(
+            &upstream,
+            serde_json::json!({
+                "kind": play.key.split(':').next().unwrap_or("title"),
+                "title": play.title,
+                "episode": play.subtitle,
+                "resume_s": resume as u64,
+                "experimental": *experimental.peek(),
+            }),
+        )
+    });
+    {
+        let (trace, watch_element) = (trace.clone(), watch_element.clone());
+        use_effect(move || {
+            match engine() {
+                None => return,
+                Some(Engine::Native) => trace.event("engine", serde_json::json!({ "engine": "native" })),
+                Some(Engine::Rust(..)) => trace.event("engine", serde_json::json!({ "engine": "rust" })),
+                Some(Engine::Converted(c, why)) => trace.event(
+                    "engine",
+                    serde_json::json!({ "engine": "ffmpeg", "why": why, "from_s": *start.peek(), "duration_s": c.duration }),
+                ),
+                Some(Engine::Failed(why)) => trace.event("failure", serde_json::json!({ "text": why })),
+            }
+            if let Some(video) = watch_video() {
+                trace.follow(&video);
+                *watch_element.borrow_mut() = Some(video);
+            }
+        });
+    }
+    {
+        let trace = trace.clone();
+        let watch_element = watch_element.clone();
+        use_drop(move || {
+            trace.close();
+            if let Some(video) = watch_element.borrow_mut().take() {
+                release(&video);
+            }
+        });
+    }
+
     // Decide what plays it, before any of it plays.
     let (c, url) = (client.clone(), play.url.clone());
     use_future(move || {
@@ -3034,6 +3079,21 @@ fn LivePlayer(
     let active = use_signal(|| true);
     let idle = use_hook(|| IdleHide::new(active, 2500.0));
     let handle = use_hook(|| Rc::new(RefCell::new(None::<rstreamkit::mse::Player>)));
+    // With `riptv --logs`: what this channel's player does, for the proxy's diagnostics log.
+    let trace = use_hook(|| {
+        let upstream = xtream::Url::parse(&url)
+            .map(|u| client.upstream(&u).to_string())
+            .unwrap_or_default();
+        diag::Trace::start(
+            &upstream,
+            serde_json::json!({
+                "kind": "live",
+                "channel": id,
+                "title": title,
+                "experimental": *rust_sound.peek(),
+            }),
+        )
+    });
 
     let mut feed = use_signal(|| {
         if *rust_sound.peek() {
@@ -3058,9 +3118,7 @@ fn LivePlayer(
             };
             match client.convert(&media).await {
                 Ok(converted) => feed.set(Feed::Converted(converted.at(0).to_string())),
-                Err(e) => status.set(format!(
-                    "Can't start this channel in compatibility mode: {e}"
-                )),
+                Err(e) => status.set(channel_trouble(&e)),
             }
         }
     });
@@ -3068,11 +3126,50 @@ fn LivePlayer(
     // frames per second actually shown, frames dropped, and how much is buffered.
     let mut show_stats = use_signal(|| false);
     let mut stats = use_signal(String::new);
-    let mut diagnostic_status = use_signal(String::new);
+    {
+        let trace = trace.clone();
+        use_effect(move || {
+            let engine = match feed() {
+                Feed::Pending => "starting_ffmpeg",
+                Feed::Direct(_) => "native_hls",
+                Feed::Rust => "rust",
+                Feed::Partial => "rust_no_sound",
+                Feed::Converted(_) => "ffmpeg",
+            };
+            trace.event("engine", serde_json::json!({ "engine": engine }));
+        });
+    }
+    {
+        let trace = trace.clone();
+        use_effect(move || {
+            let text = status();
+            let name = if diag::is_failure(&text) {
+                "failure"
+            } else {
+                "status"
+            };
+            trace.event(name, serde_json::json!({ "text": text }));
+        });
+    }
+    {
+        let trace = trace.clone();
+        use_effect(move || {
+            if let Some(why) = note() {
+                trace.event("no_sound", serde_json::json!({ "text": why }));
+            } else if silent() {
+                trace.event(
+                    "no_sound",
+                    serde_json::json!({ "text": "browser decoded no audio" }),
+                );
+            }
+        });
+    }
+    {
+        let trace = trace.clone();
+        use_drop(move || trace.close());
+    }
     let mut channel_action = use_signal(|| None::<ChannelAction>);
     let mut dial = use_signal(String::new);
-    let mut number_open = use_signal(|| false);
-    let mut number_text = use_signal(String::new);
     let digits = use_hook(|| Rc::new(RefCell::new(String::new())));
     let dial_epoch = use_hook(|| Rc::new(Cell::new(0_u64)));
     use_effect(move || {
@@ -3135,13 +3232,29 @@ fn LivePlayer(
     });
     let watchdog_client = client.clone();
     let watchdog_url = url.clone();
-    let diagnostic_client = client.clone();
-    let diagnostic_url = url.clone();
+    let player_video = use_hook(|| Rc::new(RefCell::new(None::<web_sys::HtmlVideoElement>)));
+    {
+        let player_video = player_video.clone();
+        use_drop(move || {
+            if let Some(video) = player_video.borrow_mut().take() {
+                release(&video);
+            }
+        });
+    }
+    use_future(move || async move {
+        rstreamkit::mse::sleep(Duration::from_secs(12)).await;
+        if status.try_peek().is_ok_and(|s| *s == "Starting playback…") {
+            status.set(STILL_STARTING.into());
+        }
+    });
+    let trace_for_player = trace.clone();
     use_effect(move || {
         let Some(video) = video_el() else {
             status.set("Could not start the player".into());
             return;
         };
+        *player_video.borrow_mut() = Some(video.clone());
+        trace_for_player.follow(&video);
         video.set_volume(f64::from(*volume.peek()) / 100.0);
         // Start silently until a real video frame is presented. A stream that proves to be
         // audio-only is unmuted below and gets its own visible state.
@@ -3171,6 +3284,7 @@ fn LivePlayer(
         };
         let (c, converter, media) = (client.clone(), client.clone(), playlist.clone());
         let upstream = client.upstream(&playlist);
+        let unsupported_trace = trace_for_player.clone();
         *handle.borrow_mut() = Some(rstreamkit::mse::start(
             video,
             upstream.to_string(),
@@ -3191,6 +3305,10 @@ fn LivePlayer(
                 }
                 rstreamkit::mse::Status::Note(n) => note.set(Some(n)),
                 rstreamkit::mse::Status::Unsupported(reason) => {
+                    unsupported_trace.event(
+                        "unsupported",
+                        serde_json::json!({ "reason": reason.to_string() }),
+                    );
                     // Keep one neutral loading state across the Rust → ffmpeg handoff.
                     status.set("Starting playback…".into());
                     let (converter, media) = (converter.clone(), media.clone());
@@ -3205,9 +3323,7 @@ fn LivePlayer(
                                 note.set(Some(format!("{reason} ({e})")));
                                 feed.set(Feed::Partial);
                             }
-                            Err(e) => {
-                                status.set(format!("Can't play this channel: {reason} ({e})"))
-                            }
+                            Err(e) => status.set(channel_trouble(&e)),
                         }
                     });
                 }
@@ -3515,29 +3631,7 @@ fn LivePlayer(
                     ondoubleclick: move |_| toggle_fullscreen("live-player", expanded),
                 }
                 if show_stats() {
-                    div { class: "stats",
-                        div { "{stats}" }
-                        button {
-                            class: "diagnostic-share",
-                            onclick: {
-                                let client = diagnostic_client.clone();
-                                let url = diagnostic_url.clone();
-                                move |_| {
-                                    diagnostic_status.set("Sharing…".into());
-                                    let client = client.clone();
-                                    let url = url.clone();
-                                    spawn(async move {
-                                        diagnostic_status.set(match share_diagnostic(&client, &url).await {
-                                            Ok(()) => "Available locally for 10 minutes".into(),
-                                            Err(why) => why.into(),
-                                        });
-                                    });
-                                }
-                            },
-                            "Share for local testing"
-                        }
-                        if !diagnostic_status().is_empty() { div { "{diagnostic_status}" } }
-                    }
+                    div { class: "stats", "{stats}" }
                 }
                 if audio_only() {
                     div { class: "audio-only", role: "status",
@@ -3547,25 +3641,6 @@ fn LivePlayer(
                     }
                 }
                 if !dial().is_empty() { div { class: "channel-dial", "{dial}" } }
-                if number_open() {
-                    div { class: "number-panel",
-                        input {
-                            aria_label: "Channel number",
-                            r#type: "text",
-                            inputmode: "numeric",
-                            maxlength: "5",
-                            placeholder: "#",
-                            value: "{number_text}",
-                            oninput: move |e| number_text.set(e.value().chars().filter(char::is_ascii_digit).take(5).collect())
-                        }
-                        button { onclick: move |_| {
-                            if let Ok(number) = number_text().parse() { onchannel.call(ChannelAction::Number(number)); }
-                            number_open.set(false);
-                            number_text.set(String::new());
-                        }, "Go" }
-                        button { aria_label: "Close channel number", onclick: move |_| number_open.set(false), "×" }
-                    }
-                }
                 if let Some(why) = note() {
                     div { class: "sound-note", "No sound: {why}" }
                 } else if silent() {
@@ -3574,7 +3649,7 @@ fn LivePlayer(
                 if status() != "Live" && status() != "Audio only" {
                     div { class: "hud",
                         div { class: "loading-group",
-                            if status() == "Starting playback…" || status() == "Waiting for picture…" { i { class: "spinner" } }
+                            if status() == "Starting playback…" || status() == "Waiting for picture…" || status() == STILL_STARTING { i { class: "spinner" } }
                             span { "{status}" }
                         }
                     }

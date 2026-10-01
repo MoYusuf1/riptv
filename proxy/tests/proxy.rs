@@ -51,9 +51,20 @@ async fn local_diagnostic_session_keeps_credentials_out_of_reports() {
             ),
     )
     .await;
-    let proxy = serve(router(AppState::new())).await;
-    assert_eq!(sign_in(proxy, "127.0.0.1").await, 204);
+    // Off unless asked for: without `--logs` there is nothing to share a stream with.
+    let quiet = serve(router(AppState::new())).await;
     let http = reqwest::Client::new();
+    let off = http
+        .get(format!("http://127.0.0.1:{quiet}/diagnostics"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(off.status(), 404);
+
+    let log = std::env::temp_dir().join(format!("riptv-diag-test-{}.log", std::process::id()));
+    let _ = std::fs::remove_file(&log);
+    let proxy = serve(router(AppState::new().with_logs(&log))).await;
+    assert_eq!(sign_in(proxy, "127.0.0.1").await, 204);
     let base = format!("http://127.0.0.1:{proxy}/diagnostics");
     let create = http.post(&base).header("content-type", "application/json").body(json!({
         "url": format!("http://user:very-secret@127.0.0.1:{upstream}/index.m3u8?token=hidden")
@@ -76,8 +87,56 @@ async fn local_diagnostic_session_keeps_credentials_out_of_reports() {
         .unwrap();
     assert!(checked.contains("mpeg_ts"));
     assert!(checked.contains("\"playlist_hops\":1"));
+    assert!(checked.contains("\"live\":true"));
     assert!(!checked.contains("very-secret"));
     assert!(!checked.contains("hidden"));
+
+    // The player's events land in the log, redacted; trouble probes the stream by itself.
+    let sent = http
+        .post(format!("{base}/{id}/event"))
+        .header("content-type", "application/json")
+        .body(
+            json!({
+                "event": "failure",
+                "text": format!("Playback failed: http://user:very-secret@127.0.0.1:{upstream}/index.m3u8?token=hidden"),
+                "t_ms": 5300,
+            })
+            .to_string(),
+        )
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(sent.status(), 204);
+    let mut text = String::new();
+    for _ in 0..50 {
+        text = std::fs::read_to_string(&log).unwrap_or_default();
+        if text.contains("probe (auto)") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        text.contains("failure") && text.contains("t_ms=5300"),
+        "{text}"
+    );
+    assert!(
+        text.contains("probe (auto) verdict=looks_ok status=ok") && text.contains("kind=mpeg_ts"),
+        "{text}"
+    );
+    assert!(text.contains("probe (asked)"), "{text}");
+    for secret in ["very-secret", "hidden", "index.m3u8"] {
+        assert!(!text.contains(secret), "{secret} in {text}");
+    }
+    // Unknown sessions are refused.
+    let unknown = http
+        .post(format!("{base}/{}/event", "0".repeat(32)))
+        .header("content-type", "application/json")
+        .body(r#"{"event":"x"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), 404);
+    let _ = std::fs::remove_file(&log);
 }
 
 #[tokio::test]
