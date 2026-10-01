@@ -83,6 +83,9 @@ cargo riptv --logs
 tail -f /tmp/riptv-diagnostics.log      # the same lines also print in the terminal
 ```
 
+On Windows PowerShell, follow the log with
+`Get-Content "$env:TEMP\riptv-diagnostics.log" -Wait`.
+
 With `--logs`, every channel, movie and episode you open is traced automatically; there is nothing
 to press. The page reports what its player does, and the proxy adds what it sees, one line per fact,
 tagged with an 8-character session id:

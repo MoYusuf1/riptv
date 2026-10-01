@@ -1,0 +1,106 @@
+name: Windows setup
+
+on:
+  push:
+    paths:
+      - '.github/workflows/windows.yml'
+      - 'scripts/**'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '**/*.rs'
+      - 'app/**'
+      - '.cargo/**'
+  pull_request:
+    paths:
+      - '.github/workflows/windows.yml'
+      - 'scripts/**'
+      - '**/Cargo.toml'
+      - 'Cargo.lock'
+      - '**/*.rs'
+      - 'app/**'
+      - '.cargo/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-setup-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  setup:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: riptv workspace
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: riptv workspace
+          persist-credentials: false
+      - name: Install prerequisites
+        run: |
+          rustup update stable --no-self-update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup default stable
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+            choco install ffmpeg --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          ffmpeg -version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ffprobe -version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            riptv workspace/target
+            riptv workspace/.tools
+          key: windows-setup-${{ hashFiles('riptv workspace/Cargo.lock') }}
+      - name: Help works without installing anything
+        run: |
+          .\scripts\setup.cmd -Help
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build through the Windows launcher (PowerShell 5.1)
+        run: |
+          .\scripts\setup.cmd -BuildOnly
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Native tests, including FFmpeg conversion
+        run: cargo test --locked -p xtream -p riptv
+      - name: Start with logs and check HTTP from a different working directory
+        run: |
+          $repo = (Get-Location).Path
+          $env:IPTV_PORT = '31234'
+          $stdout = Join-Path $env:RUNNER_TEMP 'riptv-stdout.log'
+          $stderr = Join-Path $env:RUNNER_TEMP 'riptv-stderr.log'
+          $server = Start-Process powershell.exe -ArgumentList @(
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+            "`"$repo\scripts\setup.ps1`"", '-Logs'
+          ) -WorkingDirectory $env:RUNNER_TEMP -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+          try {
+            $ready = $false
+            for ($attempt = 0; $attempt -lt 90; $attempt++) {
+              if ($server.HasExited) { throw "Setup exited with code $($server.ExitCode)" }
+              try {
+                $page = Invoke-WebRequest 'http://127.0.0.1:31234/' -TimeoutSec 2
+                if ($page.StatusCode -eq 200 -and $page.Content -match '<html') { $ready = $true; break }
+              } catch { }
+              Start-Sleep -Seconds 1
+            }
+            if (-not $ready) { throw 'The app did not become ready' }
+            $diagnostics = Invoke-WebRequest 'http://127.0.0.1:31234/diagnostics' -TimeoutSec 5
+            if ($diagnostics.StatusCode -ne 200 -or $diagnostics.Content.Trim() -ne '[]') {
+              throw 'The -Logs option did not enable diagnostics'
+            }
+            Write-Host 'Windows setup, HTTP serving, and diagnostic logging passed.'
+          } finally {
+            if (-not $server.HasExited) { taskkill /PID $server.Id /T /F | Out-Null }
+            if (Test-Path $stdout) { Get-Content $stdout }
+            if (Test-Path $stderr) { Get-Content $stderr }
+          }

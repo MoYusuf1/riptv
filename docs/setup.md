@@ -1,11 +1,32 @@
 # Setup help
 
-RIPTV builds from source on Linux and macOS. On Windows, use an Ubuntu terminal
-in WSL and follow the Ubuntu instructions below.
+RIPTV builds from source on Linux, macOS, and Windows 10/11 x64.
+Windows users can use native PowerShell or Command Prompt, or follow the Linux
+instructions in an Ubuntu WSL terminal.
 
 ## 1. Install prerequisites
 
 Choose the commands for your system. FFmpeg also supplies `ffprobe`.
+
+### Windows 10 / 11 (x64)
+
+Open PowerShell and install the prerequisites with WinGet:
+
+```powershell
+winget install --exact --id Microsoft.VisualStudio.2022.BuildTools --source winget --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+winget install --exact --id Git.Git --source winget
+winget install --exact --id Gyan.FFmpeg --source winget
+winget install --exact --id Rustlang.Rustup --source winget
+```
+
+Let each installer finish and accept any Windows permission prompts. Then close
+and reopen your terminal so it can find the installed tools. If Visual Studio is
+already installed, use its installer to add **Desktop development with C++**,
+including the **MSVC x64/x86 tools** and a **Windows SDK**.
+
+If WinGet is unavailable, install those tools with their regular installers.
+[Microsoft's Rust setup guide](https://learn.microsoft.com/en-us/windows/dev-environment/rust/setup)
+explains the C++ and Rust requirements. Accept Rust's default MSVC toolchain.
 
 ### Ubuntu / Debian / Ubuntu in WSL
 
@@ -36,7 +57,7 @@ brew install git ffmpeg pkg-config
 
 ### Rust
 
-Install the current stable Rust toolchain using the installer at
+If you have not already installed Rust above, install its current stable toolchain at
 <https://rustup.rs>, then reopen your terminal. If Rust is already installed
 through rustup, `rustup update stable` updates it.
 
@@ -45,6 +66,17 @@ through rustup, `rustup update stable` updates it.
 ```sh
 git clone https://github.com/MoYusuf1/riptv.git
 cd riptv
+```
+
+**Windows (PowerShell or Command Prompt):**
+
+```powershell
+.\scripts\setup.cmd
+```
+
+**Linux / macOS / WSL:**
+
+```sh
 ./scripts/setup.sh
 ```
 
@@ -52,6 +84,11 @@ The script checks prerequisites, installs the Rust WebAssembly target and
 Dioxus CLI 0.7.10 when needed, and builds both the app and server using the
 checked-in dependency versions. It downloads dependencies from public sources;
 GitHub credentials and SSH keys are not required.
+
+On Windows, Dioxus is downloaded from its official release, checked against its
+SHA-256 checksum, and kept in the ignored `.tools` folder. The `.cmd` launcher
+runs the PowerShell script with a process-only execution-policy setting; it does
+not change your system's policy. Paths containing spaces are supported.
 
 Open **http://127.0.0.1:3000**. Keep the terminal running while you watch.
 Press **Ctrl+C** to stop. The first build can take several minutes; later builds
@@ -69,7 +106,19 @@ Run these from the `riptv` folder:
 | `cargo riptv --logs` | Start with logs without rebuilding the web app |
 | `IPTV_PORT=3001 cargo riptv` | Start on port 3001 |
 
-To update, stop the app, run `git pull --ff-only`, then `./scripts/setup.sh`.
+Windows equivalents:
+
+```powershell
+.\scripts\setup.cmd -BuildOnly
+.\scripts\setup.cmd -Logs
+$env:IPTV_PORT = '3001'
+cargo riptv
+```
+
+`cargo riptv` and `cargo riptv --logs` work on all platforms after setup. Windows
+logs are in `%TEMP%\riptv-diagnostics.log`; the server prints the exact path.
+
+To update, stop the app, run `git pull --ff-only`, then rerun your setup command.
 
 ## If setup fails
 
@@ -80,5 +129,12 @@ To update, stop the app, run `git pull --ff-only`, then `./scripts/setup.sh`.
   only when rustup is available.
 - **Build killed or out of memory:** retry with `CARGO_BUILD_JOBS=1 ./scripts/setup.sh`.
 - **Address already in use:** stop the other RIPTV process, or choose another port.
+- **Windows linker or SDK error:** open Visual Studio Installer and confirm that
+  Desktop development with C++, MSVC x64/x86 tools, and a Windows SDK are installed.
+- **Windows build runs out of memory:** set `$env:CARGO_BUILD_JOBS = '1'` in
+  PowerShell, then rerun `.\scripts\setup.cmd`.
 
-The setup script does not run `sudo` or change your system packages.
+The setup scripts do not run `sudo` or install system packages. The Windows
+setup is checked by the [Windows workflow](../.github/workflows/windows.yml),
+which builds in a path containing spaces, runs native tests, and starts the
+server with diagnostic logging.

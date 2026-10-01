@@ -1,4 +1,5 @@
 /target/
+/.tools/
 .DS_Store
 *.swp
 *.swo
