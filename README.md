@@ -126,7 +126,8 @@ tagged with an 8-character session id:
   connections that broke off.
 - **ffmpeg**: when a conversion starts, its first output, any stretch slower than real time (the
   viewer buffers), its errors, and when it ends.
-- **probe**: on any `failure`, `media_error` or `stuck`, the proxy fetches a 64 KiB sample of the
+- **stream**: what each channel is (container, video and audio codecs) and the plan chosen for it.
+- **probe**: after the player gives up (`failure`), the proxy fetches a 64 KiB sample of the
   stream itself and reports HTTP status, container, codecs, the live playlist's segment length and
   how fast the sample came, with a **verdict** such as `channel_offline_or_removed`,
   `provider_refused_account_or_connection_limit` or `provider_too_slow_for_live`.
@@ -280,7 +281,14 @@ Decoded sound is stereo (5.1 is mixed down) and is held uncompressed, which is a
 browser that keeps only about a minute of sound in a buffer, so the page reads a few seconds at a time. A server that doesn't answer byte-range requests, or a file it can't read the
 index of, is left to the browser.
 
-**Live TV** first tries native HTTPS HLS on browsers that support it, then ffmpeg. Experimental mode uses `rstreamkit`:
+**Live TV** in the standard player is decided once per channel, before connecting: the app reads
+the stream's first 64 KiB (the playlist, then its newest segment) to learn its codecs, and plays it
+in the browser when the browser decodes them (native HTTPS HLS, where supported), or has ffmpeg
+convert just the sound (AC-3, E-AC-3, MP2, AAC-LATM: the picture is copied, which is cheap) or the
+video (HEVC the browser can't decode, MPEG-2, or a picture the browser's decoder rejects, such as
+interlaced broadcasts). The plan is remembered per channel and profile, so a channel opened before
+starts the right way at once. It never connects twice at the same time: many providers allow one
+connection per channel and end the first when a second arrives. Experimental mode uses `rstreamkit`:
 HLS with MPEG-TS segments carrying **H.264 video and AAC audio**. Anything else is reported, not
 misplayed: HEVC, AES-128, fMP4 segments, continuous (non-HLS) `.ts` streams and AC-3/MP2 audio are not
 played directly, and compatibility mode covers them (AC-3 and MP2 can instead be decoded in Rust,

@@ -415,7 +415,8 @@ pub async fn stream(
     let input = one_variant(&s, &url, &ua).await;
     let (mode, height) = match q.video.as_deref() {
         Some("copy") => ("copy", 0),
-        Some("transcode") => ("transcode", probe_height(&input, &ua).await),
+        // The scaler caps the height itself; probing just to learn it cost ~2 s.
+        Some("transcode") => ("transcode", 0),
         _ => match probe(input.as_str(), &ua).await {
             Ok(Some(p)) if !p.can_copy() => ("transcode", p.height),
             Ok(_) => ("copy", 0),
@@ -623,6 +624,8 @@ async fn watch_ffmpeg(s: AppState, url: Url, tag: String, mut stderr: ChildStder
                     diagnostics::note(&s, &format!("{tag}ffmpeg back to real time: {summary}"));
                 }
                 last = summary;
+            } else if benign(&line) {
+                continue;
             } else if errors < MAX_ERRORS {
                 errors += 1;
                 diagnostics::note(
@@ -643,6 +646,19 @@ async fn watch_ffmpeg(s: AppState, url: Url, tag: String, mut stderr: ChildStder
             if last.is_empty() { "no output" } else { &last }
         ),
     );
+}
+
+/// What every live join prints until the first keyframe (the decoder starts mid-stream): not news.
+fn benign(line: &str) -> bool {
+    [
+        "non-existing PPS",
+        "no frame!",
+        "decode_slice_header error",
+        "Last message repeated",
+        "co located POCs unavailable",
+    ]
+    .iter()
+    .any(|noise| line.contains(noise))
 }
 
 /// One of ffmpeg's `-stats` lines: `frame= 75 fps= 30 … time=00:00:03.00 … speed=1.22x`.
@@ -690,13 +706,6 @@ impl std::fmt::Display for Progress {
             write!(f, " fps={fps:.0}")?;
         }
         Ok(())
-    }
-}
-
-async fn probe_height(url: &Url, ua: &str) -> u32 {
-    match probe(url.as_str(), ua).await {
-        Ok(Some(p)) => p.height,
-        _ => 0,
     }
 }
 

@@ -275,7 +275,14 @@ impl Trace {
                     self.event("stall", Value::Object(fields));
                 }
             }
-            "stalled" => self.event("net_stalled", Value::Object(self.state())),
+            // The browser fires `stalled` whenever a download idles for 3 s, which HLS does
+            // between segments: only a short buffer makes it news.
+            "stalled" => {
+                let state = self.state();
+                if state.get("ahead_s").and_then(Value::as_f64).unwrap_or(0.0) < 2.0 {
+                    self.event("net_stalled", Value::Object(state));
+                }
+            }
             "error" => {
                 let error = self
                     .0
@@ -301,7 +308,10 @@ impl Trace {
                         .unwrap_or_default()
                         .into(),
                 );
-                self.event("media_error", Value::Object(fields));
+                // Code 0 is no error: a source being swapped out fires `error` too.
+                if fields.get("code").and_then(Value::as_f64).unwrap_or(0.0) > 0.0 {
+                    self.event("media_error", Value::Object(fields));
+                }
             }
             "ended" => self.event("ended", Value::Object(self.state())),
             // Context for everything else: a pause is the viewer's (or the browser's, for a
@@ -338,6 +348,8 @@ impl Trace {
                 if let Some(since) = since
                     && now() - since > STUCK_MS
                     && (!video.paused() || trace.0.first_play.get())
+                    // An error was already reported: not stuck, failed.
+                    && js_sys::Reflect::get(&video, &"error".into()).is_ok_and(|e| e.is_null())
                     && !trace.0.stuck_reported.replace(true)
                 {
                     let mut fields = trace.state();

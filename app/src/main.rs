@@ -22,6 +22,7 @@ mod media_session;
 mod preferences;
 mod profiles;
 mod shelves;
+mod standard;
 
 use controls::{IdleHide, Skip};
 use fetch::Proxied;
@@ -769,6 +770,10 @@ fn channel_trouble(e: &xtream::Error) -> String {
         "Your provider says too many streams are open on your account. Stop it on your other \
          devices and try again."
             .into()
+    } else if has("5XX") || has("500") || has("502") || has("503") || has("Service Unavailable") {
+        "Your provider's server is failing for this channel right now (5xx). Try again later, or \
+         check that your account isn't streaming on another device."
+            .into()
     } else if has("timed out") || has("took too long") {
         "Your provider isn't answering for this channel. Try again in a moment.".into()
     } else if has("ffmpeg isn't installed") {
@@ -778,14 +783,21 @@ fn channel_trouble(e: &xtream::Error) -> String {
     }
 }
 
+/// A conversion the standard player already knows it needs (no check first).
+fn known_conversion(client: &Client, url: &str, plan: standard::Plan) -> Feed {
+    standard::conversion(client, url, plan).map_or(Feed::Pending, Feed::Converted)
+}
+
 /// Shown, with the spinner, when a channel takes unusually long to start.
 const STILL_STARTING: &str = "Still starting: your provider is slow to answer…";
 
-fn no_audio_decoded(v: &web_sys::HtmlVideoElement) -> bool {
+/// Playing for `after` seconds, unmuted, and not one byte of sound decoded (Chrome counts them):
+/// the browser can't decode this sound.
+fn no_audio_decoded(v: &web_sys::HtmlVideoElement, after: f64) -> bool {
     let bytes = js_sys::Reflect::get(v, &JsValue::from_str("webkitAudioDecodedByteCount"))
         .ok()
         .and_then(|n| n.as_f64());
-    v.current_time() > 4.0 && !v.muted() && bytes == Some(0.0)
+    v.current_time() > after && !v.muted() && bytes == Some(0.0)
 }
 
 /// Browser storage key for the opt-in experimental Rust playback engine.
@@ -2537,7 +2549,7 @@ fn Watch(
                             let native = matches!(engine.peek().as_ref(), Some(Engine::Native));
                             if native
                                 && let Some(v) = watch_video()
-                                && no_audio_decoded(&v)
+                                && no_audio_decoded(&v, 4.0)
                             {
                                 switch_to_convert(c.clone(), url.clone(), "sound the browser can't decode".into(), *pos.peek(), engine, start);
                             }
@@ -3099,29 +3111,94 @@ fn LivePlayer(
         if *rust_sound.peek() {
             Feed::Rust
         } else {
-            native_hls_source(&client, &url).map_or(Feed::Pending, Feed::Direct)
-        }
-    });
-    let conversion_client = client.clone();
-    let conversion_url = url.clone();
-    let _initial_conversion = use_resource(move || {
-        let pending = matches!(feed(), Feed::Pending);
-        let client = conversion_client.clone();
-        let url = conversion_url.clone();
-        async move {
-            if !pending {
-                return;
-            }
-            let Ok(media) = xtream::Url::parse(&url) else {
-                status.set("This channel's address is invalid".into());
-                return;
-            };
-            match client.convert(&media).await {
-                Ok(converted) => feed.set(Feed::Converted(converted.at(0).to_string())),
-                Err(e) => status.set(channel_trouble(&e)),
+            // A channel seen before starts the way that worked; a new one is sniffed first.
+            match standard::remembered(id) {
+                Some(standard::Plan::Browser) => {
+                    native_hls_source(&client, &url).map_or(Feed::Pending, Feed::Direct)
+                }
+                Some(plan) => known_conversion(&client, &url, plan),
+                None => Feed::Pending,
             }
         }
     });
+    // Standard mode decides here, once, before any connection to the channel: what the stream is
+    // (container, codecs), then the browser plays it, or ffmpeg converts its sound or its video.
+    // Never alongside playback: providers that allow one connection per channel end the first
+    // when a second asks for the same stream. The experimental player skips this entirely.
+    let mut sniffed = use_signal(|| false);
+    let mut native_failed = use_signal(|| false);
+    {
+        let (client, url, trace) = (client.clone(), url.clone(), trace.clone());
+        let _decide = use_resource(move || {
+            let pending = matches!(feed(), Feed::Pending);
+            let (client, url, trace) = (client.clone(), url.clone(), trace.clone());
+            async move {
+                if !pending {
+                    return;
+                }
+                let native = (!*native_failed.peek())
+                    .then(|| native_hls_source(&client, &url))
+                    .flatten();
+                if !*rust_sound.peek() && !*sniffed.peek() {
+                    let found = standard::sniff(&client, &url).await;
+                    if sniffed.try_peek().is_err() {
+                        return; // the viewer left
+                    }
+                    sniffed.set(true);
+                    let found = found.filter(|f| f.container == "mpeg_ts");
+                    let plan = found.map(|f| standard::plan(&f, standard::browser_decodes));
+                    trace.event(
+                        "stream",
+                        serde_json::json!({
+                            "container": found.map_or("not_mpeg_ts", |f| f.container),
+                            "video": found.and_then(|f| f.video),
+                            "audio": found.and_then(|f| f.audio),
+                            "plan": plan.map(standard::Plan::name),
+                        }),
+                    );
+                    if let Some(plan) = plan {
+                        standard::remember(id, plan);
+                    }
+                    match (plan, native) {
+                        (Some(standard::Plan::Browser) | None, Some(src)) => {
+                            feed.set(Feed::Direct(src));
+                            return;
+                        }
+                        (Some(plan), _) => {
+                            if let Some(src) = standard::conversion(&client, &url, plan) {
+                                feed.set(Feed::Converted(src));
+                                return;
+                            }
+                        }
+                        (None, None) => {}
+                    }
+                }
+                // Unknown, or the browser already failed with it: the proxy checks and converts.
+                let Ok(media) = xtream::Url::parse(&url) else {
+                    status.set("This channel's address is invalid".into());
+                    return;
+                };
+                match client.convert(&media).await {
+                    Ok(converted) => {
+                        let src = converted.at(0).to_string();
+                        // What worked, for next time (copy is the sound-only conversion).
+                        if !*rust_sound.peek() {
+                            standard::remember(
+                                id,
+                                if src.contains("video=transcode") {
+                                    standard::Plan::ConvertVideo
+                                } else {
+                                    standard::Plan::ConvertSound
+                                },
+                            );
+                        }
+                        feed.set(Feed::Converted(src));
+                    }
+                    Err(e) => status.set(channel_trouble(&e)),
+                }
+            }
+        });
+    }
     // A readout for telling a slow stream from a slow decoder: what the picture really is,
     // frames per second actually shown, frames dropped, and how much is buffered.
     let mut show_stats = use_signal(|| false);
@@ -3247,6 +3324,7 @@ fn LivePlayer(
             status.set(STILL_STARTING.into());
         }
     });
+    let (sound_client, sound_url) = (client.clone(), url.clone());
     let trace_for_player = trace.clone();
     use_effect(move || {
         let Some(video) = video_el() else {
@@ -3256,9 +3334,7 @@ fn LivePlayer(
         *player_video.borrow_mut() = Some(video.clone());
         trace_for_player.follow(&video);
         video.set_volume(f64::from(*volume.peek()) / 100.0);
-        // Start silently until a real video frame is presented. A stream that proves to be
-        // audio-only is unmuted below and gets its own visible state.
-        video.set_muted(!*picture_ready.peek() || *muted.peek());
+        video.set_muted(*muted.peek());
         let partial = match feed() {
             Feed::Pending => return,
             Feed::Direct(src) => {
@@ -3343,7 +3419,6 @@ fn LivePlayer(
         async move {
             let mut mode = None::<Feed>;
             let mut since = js_sys::Date::now();
-            let mut frames = None::<frame_stats::Counter>;
             let mut forced_video = false;
             loop {
                 rstreamkit::mse::sleep(Duration::from_secs(2)).await;
@@ -3351,21 +3426,12 @@ fn LivePlayer(
                 if mode.as_ref() != Some(&current) {
                     mode = Some(current.clone());
                     since = js_sys::Date::now();
-                    frames = video_el().and_then(|video| frame_stats::Counter::start(&video));
                 }
-                let Some(video) = video_el() else { continue };
-                let presented = frames.as_ref().map_or_else(
-                    || video.get_video_playback_quality().total_video_frames() > 0,
-                    |counter| counter.presented() > 0,
-                );
-                if presented
-                    || (frames.is_none() && video.video_width() > 0 && video.ready_state() >= 2)
-                {
-                    picture_ready.set(true);
-                    status.set("Live".into());
-                    video.set_muted(*muted.peek());
+                // `ontimeupdate` notices the first decoded frame.
+                if *picture_ready.peek() || *audio_only.peek() {
                     break;
                 }
+                let Some(video) = video_el() else { continue };
                 if video.paused()
                     || web_sys::window()
                         .and_then(|w| w.document())
@@ -3374,12 +3440,13 @@ fn LivePlayer(
                     since = js_sys::Date::now();
                     continue;
                 }
-                let wait_ms = if matches!(current, Feed::Rust | Feed::Partial)
-                    && video.current_time() > 1.0
-                {
-                    6_000.0
+                // Time moving with no frame decoded means the video can't be decoded here: act
+                // soon. Nothing moving at all is a slow provider, which another method from the
+                // same provider won't fix quickly: give it longer.
+                let wait_ms = if video.current_time() > 1.0 {
+                    5_000.0
                 } else {
-                    12_000.0
+                    20_000.0
                 };
                 if js_sys::Date::now() - since < wait_ms {
                     continue;
@@ -3388,6 +3455,7 @@ fn LivePlayer(
                     Feed::Pending => continue,
                     Feed::Direct(_) => {
                         status.set("Trying another playback method…".into());
+                        native_failed.set(true);
                         feed.set(if *rust_sound.peek() {
                             Feed::Rust
                         } else {
@@ -3507,13 +3575,7 @@ fn LivePlayer(
                         epoch.set(epoch.get().wrapping_add(1));
                         expanded.set(false);
                     }
-                    "m" => {
-                        if *picture_ready.peek() {
-                            muted.set(toggle_mute().unwrap_or(false));
-                        } else {
-                            muted.set(!muted());
-                        }
-                    }
+                    "m" => muted.set(toggle_mute().unwrap_or(false)),
                     "enter" => {
                         let number = digits.borrow().parse().ok();
                         digits.borrow_mut().clear();
@@ -3599,16 +3661,34 @@ fn LivePlayer(
                             status.set(if audio_only() { "Audio only" } else if picture_ready() { "Live" } else { "Waiting for picture…" }.into());
                         }
                     },
-                    onerror: move |_| {
-                        if matches!(feed(), Feed::Direct(_)) {
-                            status.set("Starting playback…".into());
-                            feed.set(if *rust_sound.peek() { Feed::Rust } else { Feed::Pending });
-                        } else if matches!(feed(), Feed::Converted(_)) {
-                            status.set("The converted stream stopped: the source may have ended".into());
+                    onerror: {
+                        let (error_client, error_url) = (sound_client.clone(), sound_url.clone());
+                        move |_| {
+                            // MEDIA_ERR_DECODE: the browser's video decoder can't take this
+                            // picture (interlaced broadcasts, typically). Copying it through ffmpeg
+                            // would hit the same decoder: re-encode it, and remember that.
+                            let decode_error = video_el()
+                                .and_then(|v| js_sys::Reflect::get(&v, &"error".into()).ok())
+                                .and_then(|e| js_sys::Reflect::get(&e, &"code".into()).ok())
+                                .and_then(|c| c.as_f64())
+                                == Some(3.0);
+                            let current = feed.peek().clone();
+                            let copying = matches!(&current, Feed::Converted(src) if src.contains("video=copy"));
+                            if decode_error && !*rust_sound.peek() && (copying || matches!(current, Feed::Direct(_))) {
+                                native_failed.set(true);
+                                standard::remember(id, standard::Plan::ConvertVideo);
+                                status.set("Re-encoding the video…".into());
+                                feed.set(known_conversion(&error_client, &error_url, standard::Plan::ConvertVideo));
+                            } else if matches!(current, Feed::Direct(_)) {
+                                status.set("Starting playback…".into());
+                                native_failed.set(true);
+                                feed.set(if *rust_sound.peek() { Feed::Rust } else { Feed::Pending });
+                            } else if matches!(current, Feed::Converted(_)) {
+                                status.set("The converted stream stopped: the source may have ended".into());
+                            }
                         }
                     },
                     onvolumechange: move |_| {
-                        if !*picture_ready.peek() { return; }
                         if let Some(v) = video_el() {
                             if muted() != v.muted() {
                                 muted.set(v.muted());
@@ -3619,14 +3699,32 @@ fn LivePlayer(
                             }
                         }
                     },
-                    ontimeupdate: move |_| {
-                        if !silent()
-                            && let Some(v) = video_el()
-                            && no_audio_decoded(&v)
-                        {
-                            silent.set(true);
+                    ontimeupdate: {
+                        let (sound_client, sound_url) = (sound_client.clone(), sound_url.clone());
+                        move |_| {
+                        let Some(v) = video_el() else { return };
+                        // The picture is there as soon as a frame has been decoded: no polling.
+                        if !*picture_ready.peek() && v.get_video_playback_quality().total_video_frames() > 0 {
+                            picture_ready.set(true);
+                            if matches!(status.peek().as_str(), "Starting playback…" | "Waiting for picture…" | STILL_STARTING) {
+                                status.set("Live".into());
+                            }
                         }
-                    },
+                        // A backstop: the sniff catches known sound formats up front. Chrome's
+                        // decoded-byte count lags a little, so give it a few seconds.
+                        let quiet = no_audio_decoded(&v, 5.0);
+                        if quiet && matches!(*feed.peek(), Feed::Direct(_)) {
+                            // Surround sound (AC-3, E-AC-3) the browser's own HLS player can't
+                            // decode: ffmpeg converts the sound and leaves the picture alone.
+                            standard::remember(id, standard::Plan::ConvertSound);
+                            native_failed.set(true);
+                            status.set("Trying a compatible stream…".into());
+                            feed.set(known_conversion(&sound_client, &sound_url, standard::Plan::ConvertSound));
+                        } else if quiet != *silent.peek() && !matches!(*feed.peek(), Feed::Pending) {
+                            // Also clears the note once sound arrives (after a switch, say).
+                            silent.set(quiet);
+                        }
+                    }},
                     onclick: move |_| toggle_play(),
                     ondoubleclick: move |_| toggle_fullscreen("live-player", expanded),
                 }
@@ -3666,10 +3764,7 @@ fn LivePlayer(
                         button {
                             class: "ctl",
                             aria_label: "Mute",
-                            onclick: move |_| {
-                                if *picture_ready.peek() { muted.set(toggle_mute().unwrap_or(false)); }
-                                else { muted.set(!muted()); }
-                            },
+                            onclick: move |_| muted.set(toggle_mute().unwrap_or(false)),
                             Icon { d: if muted() { MUTED } else { VOLUME } }
                         }
                         input {
@@ -3686,7 +3781,7 @@ fn LivePlayer(
                                 preferences::update(|p| p.volume = level.min(100) as u8);
                                 if let Some(v) = video_el() {
                                     v.set_volume(f64::from(level) / 100.0);
-                                    v.set_muted(!*picture_ready.peek() || level == 0);
+                                    v.set_muted(level == 0);
                                 }
                             }
                         }

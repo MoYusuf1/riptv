@@ -14,7 +14,8 @@ futures-core = "0.3.34"
 tokio = { version = "1.53.1", features = ["macros", "rt", "net", "process", "sync", "time", "io-util"] }
 tokio-util = { version = "0.7.19", default-features = false, features = ["io"] }
 tower-http = { version = "0.7.1", features = ["fs", "set-header"] }
+# Shared stream sniffing (`xtream::sniff`), the same code the app decides with.
+xtream = { path = "../xtream" }
 
 [dev-dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "query", "json"] }
-xtream = { path = "../xtream" }

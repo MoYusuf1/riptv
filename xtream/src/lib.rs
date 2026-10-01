@@ -16,11 +16,13 @@ mod art;
 mod bench;
 pub mod guide;
 mod playlist;
+pub mod sniff;
 mod stream;
 mod text;
 
 pub use art::{Art, sized as sized_art};
 use playlist::Playlist;
+pub use sniff::Sniff;
 pub use text::contains_lowercase;
 
 #[derive(Debug, thiserror::Error)]
@@ -800,6 +802,62 @@ impl Client {
     /// require a real video track and re-encode it even if the codec looks browser-compatible.
     pub async fn convert_video(&self, media: &Url) -> Result<Converted> {
         self.convert_inner(media, true).await
+    }
+
+    /// The proxy's conversion of `media` with no check first, for a stream already known (by
+    /// [`Client::sniff`], or because the browser showed its picture) to need `video`: `copy` or
+    /// `transcode`. Skipping the check saves the seconds ffprobe takes. `None` without a proxy.
+    pub fn convert_known(&self, media: &Url, video: &str) -> Option<Converted> {
+        let mut u = self.proxy.clone()?;
+        u.set_path("/compat");
+        u.set_query(None);
+        u.query_pairs_mut()
+            .append_pair("url", self.upstream(media).as_str())
+            .append_pair("video", video);
+        Some(Converted {
+            url: u,
+            duration: None,
+        })
+    }
+
+    /// What `media` is, from its first 64 KiB (following up to two playlist links, as a player
+    /// would): container and codecs. One short request per hop, through the proxy.
+    pub async fn sniff(&self, media: &Url) -> Result<Sniff> {
+        use futures_core::Stream;
+        let mut current = self.upstream(media);
+        for _ in 0..3 {
+            let resp = self
+                .http
+                .get(self.proxied(current.clone()))
+                .header("range", format!("bytes=0-{}", sniff::SAMPLE - 1))
+                .send()
+                .await;
+            let resp = checked(resp.map_err(http_error)?)?;
+            // Where redirects ended up: playlist links are relative to it.
+            let base = resp
+                .headers()
+                .get("x-upstream-url")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| Url::parse(v).ok())
+                .unwrap_or_else(|| current.clone());
+            let mut chunks = std::pin::pin!(resp.bytes_stream());
+            let mut sample = Vec::with_capacity(sniff::SAMPLE);
+            // A live `.ts` ignores the range and never ends: stop at the sample's size.
+            while sample.len() < sniff::SAMPLE
+                && let Some(chunk) = std::future::poll_fn(|cx| chunks.as_mut().poll_next(cx)).await
+            {
+                sample.extend_from_slice(&chunk.map_err(http_error)?);
+            }
+            if sample.starts_with(b"#EXTM3U") {
+                let text = String::from_utf8_lossy(&sample);
+                if let Some(next) = sniff::next_in(&text).and_then(|p| base.join(p).ok()) {
+                    current = next;
+                    continue;
+                }
+            }
+            return Ok(Sniff::of(&sample));
+        }
+        Err(Error::Proxy("playlist nests too deeply".into()))
     }
 
     async fn convert_inner(&self, media: &Url, force_video: bool) -> Result<Converted> {

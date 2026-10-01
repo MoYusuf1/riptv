@@ -32,11 +32,13 @@ use crate::{AppState, from_app, url_ok};
 /// A session lives this long after its last event.
 const LIFE: Duration = Duration::from_secs(600);
 const MAX_SESSIONS: usize = 16;
-const SAMPLE_LIMIT: usize = 64 * 1024;
+const SAMPLE_LIMIT: usize = xtream::sniff::SAMPLE;
 /// At most one automatic probe per session in this long.
 const PROBE_GAP: Duration = Duration::from_secs(60);
-/// Events that mean "this isn't playing right": each one triggers a probe of the stream.
-const TROUBLE: [&str; 3] = ["failure", "media_error", "stuck"];
+/// The event after which the stream is probed: the player has given up. Never while it might
+/// still be connected: a provider that allows one connection per channel would end the
+/// player's when the probe asks for the same stream.
+const TROUBLE: [&str; 1] = ["failure"];
 
 #[derive(Clone, Default)]
 pub struct Sessions(Arc<Mutex<HashMap<String, Session>>>);
@@ -44,6 +46,8 @@ pub struct Sessions(Arc<Mutex<HashMap<String, Session>>>);
 #[derive(Clone)]
 struct Session {
     url: Url,
+    /// The browser's user agent: many providers refuse a request without a player-like one.
+    agent: String,
     opened: Instant,
     expires: Instant,
     probed: Option<Instant>,
@@ -211,6 +215,12 @@ pub async fn create(
     if !matches!(url.scheme(), "http" | "https") || !url_ok(&state.approved, &url) {
         return StatusCode::FORBIDDEN.into_response();
     }
+    let agent = headers
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.is_empty())
+        .unwrap_or(crate::FALLBACK_UA)
+        .to_owned();
     let mut bytes = [0_u8; 16];
     if getrandom::fill(&mut bytes).is_err() {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -237,6 +247,7 @@ pub async fn create(
             id.clone(),
             Session {
                 url,
+                agent,
                 opened: Instant::now(),
                 expires: Instant::now() + LIFE,
                 probed: None,
@@ -313,13 +324,13 @@ pub async fn event(
         if probe_now {
             session.probed = Some(Instant::now());
         }
-        (session.url.clone(), probe_now)
+        ((session.url.clone(), session.agent.clone()), probe_now)
     };
-    note(&state, &event_line(&id, &input, &url));
+    note(&state, &event_line(&id, &input, &url.0));
     if probe_now {
         let state = state.clone();
         tokio::spawn(async move {
-            let found = run_probe(&state, url).await;
+            let found = run_probe(&state, url.0, &url.1).await;
             note(&state, &probe_line(&id, &found, "auto"));
         });
     }
@@ -369,67 +380,10 @@ struct Report {
     live: Option<bool>,
 }
 
-fn tracks(bytes: &[u8]) -> (Option<&'static str>, Option<&'static str>) {
-    let mut found = (None, None);
-    for packet in bytes.as_chunks::<188>().0 {
-        if packet[0] != 0x47 || packet[1] & 0x40 == 0 {
-            continue;
-        }
-        let mut offset = 4;
-        if packet[3] & 0x20 != 0 {
-            offset += 1 + usize::from(packet[4]);
-        }
-        if packet[3] & 0x10 == 0 || offset >= 188 {
-            continue;
-        }
-        offset += 1 + usize::from(packet[offset]); // payload-unit-start pointer
-        if offset + 12 > 188 || packet[offset] != 0x02 {
-            continue;
-        }
-        let length =
-            (usize::from(packet[offset + 1] & 0x0f) << 8) | usize::from(packet[offset + 2]);
-        let end = (offset + 3 + length).saturating_sub(4).min(188);
-        let info =
-            (usize::from(packet[offset + 10] & 0x0f) << 8) | usize::from(packet[offset + 11]);
-        offset += 12 + info;
-        while offset + 5 <= end {
-            match packet[offset] {
-                0x1b => found.0 = Some("h264"),
-                0x24 => found.0 = Some("hevc"),
-                0x02 => found.0 = Some("mpeg2video"),
-                0x0f | 0x11 => found.1 = Some("aac"),
-                0x03 | 0x04 => found.1 = Some("mp2"),
-                0x81 => found.1 = Some("ac3"),
-                0x87 => found.1 = Some("eac3"),
-                _ => {}
-            }
-            let es_info =
-                (usize::from(packet[offset + 3] & 0x0f) << 8) | usize::from(packet[offset + 4]);
-            offset += 5 + es_info;
-        }
-        if found.0.is_some() || found.1.is_some() {
-            break;
-        }
-    }
-    found
-}
-
 fn report(status: &'static str, http_status: Option<u16>, bytes: &[u8], hops: u8) -> Report {
-    let kind = if bytes.starts_with(b"#EXTM3U") {
-        "hls_or_m3u"
-    } else if bytes.len() > 8 && &bytes[4..8] == b"ftyp" {
-        "mp4"
-    } else if bytes.starts_with(&[0x1a, 0x45, 0xdf, 0xa3]) {
-        "matroska"
-    } else if bytes.first() == Some(&0x47) {
-        "mpeg_ts"
-    } else if bytes.starts_with(b"<") {
-        "html_or_xml"
-    } else {
-        "unknown"
-    };
-    let ts_sync = bytes.len() > 376 && bytes[0] == 0x47 && bytes[188] == 0x47 && bytes[376] == 0x47;
-    let (video_codec, audio_codec) = if ts_sync { tracks(bytes) } else { (None, None) };
+    let sniffed = xtream::Sniff::of(bytes);
+    let (kind, video_codec, audio_codec) = (sniffed.container, sniffed.video, sniffed.audio);
+    let ts_sync = kind == "mpeg_ts";
     Report {
         verdict: "",
         status,
@@ -448,23 +402,9 @@ fn report(status: &'static str, http_status: Option<u16>, bytes: &[u8], hops: u8
     }
 }
 
-/// Which line of a playlist to follow: a master playlist's first variant, or a media playlist's
-/// newest segment (the oldest may already have dropped off a live server).
-fn next_in(playlist: &str) -> Option<&str> {
-    let mut uris = playlist
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'));
-    if playlist.contains("#EXTINF") {
-        uris.next_back()
-    } else {
-        uris.next()
-    }
-}
-
 /// Fetches a small sample of the stream with the proxy's network rules, following up to two
 /// playlist links. No URL or provider text comes back.
-async fn run_probe(state: &AppState, url: Url) -> Report {
+async fn run_probe(state: &AppState, url: Url, agent: &str) -> Report {
     let task = async {
         let mut current = url;
         let mut media = (None, None, None);
@@ -474,6 +414,7 @@ async fn run_probe(state: &AppState, url: Url) -> Report {
                 .http
                 .get(current.clone())
                 .header("range", "bytes=0-65535")
+                .header("user-agent", agent)
                 .send()
                 .await
                 .map_err(|e| {
@@ -503,7 +444,7 @@ async fn run_probe(state: &AppState, url: Url) -> Report {
                         Some(!text.contains("#EXT-X-ENDLIST")),
                     );
                 }
-                if let Some(path) = next_in(&text) {
+                if let Some(path) = xtream::sniff::next_in(&text) {
                     let next = final_url.join(path).map_err(|_| "invalid_playlist_link")?;
                     if !url_ok(&state.approved, &next) {
                         return Err("blocked_playlist_link");
@@ -607,9 +548,9 @@ pub async fn probe(
         let Some(session) = sessions.get(&id) else {
             return StatusCode::NOT_FOUND.into_response();
         };
-        session.url.clone()
+        (session.url.clone(), session.agent.clone())
     };
-    let found = run_probe(&state, url).await;
+    let found = run_probe(&state, url.0, &url.1).await;
     note(&state, &probe_line(&id, &found, "asked"));
     Json(found).into_response()
 }
@@ -740,19 +681,5 @@ mod tests {
             &m3u8,
             &Url::parse("http://other.tv/live/u/p/7.ts").unwrap()
         ));
-    }
-
-    #[test]
-    fn a_live_playlist_is_followed_to_its_newest_segment() {
-        assert_eq!(
-            next_in("#EXTM3U\n#EXTINF:6,\na.ts\n#EXTINF:6,\nb.ts\n"),
-            Some("b.ts")
-        );
-        assert_eq!(
-            next_in(
-                "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1\nlow.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=2\nhigh.m3u8\n"
-            ),
-            Some("low.m3u8")
-        );
     }
 }
