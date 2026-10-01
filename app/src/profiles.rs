@@ -14,10 +14,31 @@ use crate::{Icon, RustMark, add_playlist, explain, login, storage};
 
 const KEY: &str = "riptv.profiles";
 
-/// Avatar colours, chosen on the form.
+/// Small built-in avatar set: no image requests or avatar service.
 const COLORS: [&str; 8] = [
     "#e11d48", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#3b82f6", "#8b5cf6", "#ec4899",
 ];
+const AVATAR_SHAPES: [&str; 8] = [
+    "M25 35q0-8 8-8h34q8 0 8 8v31q0 8-8 8H33q-8 0-8-8zM50 27V16m-7 0h14M25 46h-7m57 0h7",
+    "M50 20c-20 0-30 16-30 32 0 20 14 30 30 30s30-10 30-30C80 36 70 20 50 20z",
+    "M24 39 19 20l19 11q12-4 24 0l19-11-5 19v26q0 13-26 17-26-4-26-17z",
+    "M50 15c-21 0-35 15-35 36v18q0 13 14 13h42q14 0 14-13V51C85 30 71 15 50 15zM15 55h-6m76 0h6",
+    "M20 27 36 13l14 14 14-14 16 14-4 34q-8 20-26 23-18-3-26-23z",
+    "M50 17c-19 0-30 15-30 34v28l12-8 9 8 9-8 9 8 9-8 12 8V51C80 32 69 17 50 17z",
+    "M17 43h66v16q0 24-33 27-33-3-33-27zM21 43l11-22 18 12 18-12 11 22",
+    "M22 33 10 48l14 7v16q0 12 26 15 26-3 26-15V55l14-7-12-15-17 5q-11-9-22 0z",
+];
+const AVATAR_DETAILS: [&str; 8] = [
+    "M37 48h2m22 0h2M39 61q11 9 22 0",
+    "M31 48q7-11 16 0-5 10-16 0zm22 0q9-11 16 0-11 10-16 0zM44 66q6 5 12 0",
+    "M36 48h2m24 0h2M46 59l4 4 4-4m-4 4v6m-31-10 17 3m45-3-17 3",
+    "M25 51q0-17 25-17t25 17v11q0 9-25 9t-25-9zM40 52h2m17 0h2M45 63h10",
+    "M36 47h2m24 0h2M39 63q11 9 22 0M22 34l14 5m42-5-14 5",
+    "M34 48q5-6 10 0m12 0q5-6 10 0M45 62q5 5 10 0",
+    "M35 51h2m26 0h2M40 66q10 7 20 0M50 33v-9",
+    "M33 54q7-7 14 0m6 0q7-7 14 0M42 69q8 5 16 0M50 30v-8",
+];
+const PUBLIC_PLAYLIST: &str = "https://iptv-org.github.io/iptv/index.m3u";
 
 const PLUS: &str = "M12 5v14M5 12h14";
 const PENCIL: &str = "M4 20h4L19 9l-4-4L4 16v4zM14 6l4 4";
@@ -41,9 +62,12 @@ struct Profile {
     user: String,
     #[serde(default)]
     pass: String,
-    /// Which of [`COLORS`].
+    /// Which of [`COLORS`]. Older profiles keep their saved colour.
     #[serde(default)]
     color: u8,
+    /// Older profiles receive a stable avatar derived from their id.
+    #[serde(default)]
+    avatar: Option<u8>,
 }
 
 impl Profile {
@@ -51,11 +75,15 @@ impl Profile {
         COLORS[usize::from(self.color) % COLORS.len()]
     }
 
-    fn initial(&self) -> String {
-        self.name
-            .chars()
-            .next()
-            .map_or_else(|| "?".into(), |c| c.to_uppercase().to_string())
+    fn avatar_index(&self) -> usize {
+        self.avatar.map_or_else(
+            || {
+                self.id.bytes().fold(0usize, |hash, b| {
+                    hash.wrapping_mul(31).wrapping_add(usize::from(b))
+                })
+            },
+            usize::from,
+        ) % AVATAR_SHAPES.len()
     }
 
     async fn connect(&self) -> xtream::Result<Client> {
@@ -89,6 +117,22 @@ fn new_id() -> String {
     )
 }
 
+fn random_index(len: usize) -> u8 {
+    (js_sys::Math::random() * len as f64) as u8
+}
+
+#[component]
+fn AvatarArt(index: u8) -> Element {
+    let index = usize::from(index) % AVATAR_SHAPES.len();
+    rsx! {
+        svg { class: "avatar-art", view_box: "0 0 100 100", fill: "none", stroke: "currentColor", stroke_width: "4", stroke_linecap: "round", stroke_linejoin: "round",
+            circle { cx: "50", cy: "50", r: "42", fill: "white", fill_opacity: ".08", stroke: "none" }
+            path { d: "{AVATAR_SHAPES[index]}" }
+            path { d: "{AVATAR_DETAILS[index]}" }
+        }
+    }
+}
+
 #[derive(Clone, PartialEq)]
 enum Screen {
     Choose,
@@ -102,13 +146,7 @@ pub fn Login() -> Element {
     let mut session = use_context::<Signal<Option<Client>>>();
     let mut account = use_context::<Signal<String>>();
     let mut profiles = use_signal(load);
-    let mut screen = use_signal(|| {
-        if profiles.peek().is_empty() {
-            Screen::Form(None)
-        } else {
-            Screen::Choose
-        }
-    });
+    let mut screen = use_signal(|| Screen::Choose);
     let mut managing = use_signal(|| false);
     // The profile being connected, and what went wrong with the last attempt.
     let mut busy = use_signal(|| None::<String>);
@@ -149,16 +187,18 @@ pub fn Login() -> Element {
         user: "demo".into(),
         pass: "demo".into(),
         color: 0,
+        avatar: Some(0),
     };
 
     let free = Profile {
         id: "free".into(),
         name: "Public TV".into(),
         source: Source::Playlist,
-        url: "https://iptv-org.github.io/iptv/categories/public.m3u".into(),
+        url: PUBLIC_PLAYLIST.into(),
         user: String::new(),
         pass: String::new(),
         color: 5,
+        avatar: Some(4),
     };
     if let Screen::Form(id) = screen() {
         let editing = id.and_then(|id| profiles().into_iter().find(|p| p.id == id));
@@ -167,11 +207,8 @@ pub fn Login() -> Element {
             ProfileForm {
                 key: "{form_key}",
                 editing: editing.clone(),
-                // The first profile has nowhere to go back to.
-                can_cancel: !profiles().is_empty(),
                 busy: busy().is_some(),
                 status: status(),
-                next_color: (profiles().len() % COLORS.len()) as u8,
                 onsubmit: move |p: Profile| {
                     if editing.is_some() {
                         let mut list = profiles();
@@ -193,11 +230,10 @@ pub fn Login() -> Element {
                     let mut list = profiles();
                     list.retain(|p| p.id != id);
                     store(&list);
-                    screen.set(if list.is_empty() { Screen::Form(None) } else { Screen::Choose });
+                    screen.set(Screen::Choose);
                     profiles.set(list);
                 },
                 ondemo: { let demo = demo.clone(); move |_| connect(demo.clone(), false) },
-                onfree: { let free = free.clone(); move |_| connect(free.clone(), false) },
             }
         };
     }
@@ -246,16 +282,29 @@ pub fn Login() -> Element {
                                 }
                             },
                             span { class: "avatar", style: "--c:{p.color()}",
-                                if busy().as_deref() == Some(p.id.as_str()) { i { class: "spinner" } } else { "{p.initial()}" }
+                                if busy().as_deref() == Some(p.id.as_str()) { i { class: "spinner" } } else { AvatarArt { index: p.avatar_index() as u8 } }
                                 if managing() { span { class: "edit", Icon { d: PENCIL } } }
                             }
                             strong { "{p.name}" }
                             small { if p.source == Source::Xtream { "Xtream" } else { "Playlist" } }
                         }
                     }
+                    if !managing() {
+                        button {
+                            class: "profile public-profile",
+                            style: "--i:{count}",
+                            disabled: busy().is_some(),
+                            onclick: { let free = free.clone(); move |_| connect(free.clone(), false) },
+                            span { class: "avatar", style: "--c:{free.color()}",
+                                if busy().as_deref() == Some("free") { i { class: "spinner" } } else { AvatarArt { index: free.avatar_index() as u8 } }
+                            }
+                            strong { "Public TV" }
+                            small { "Free playlist" }
+                        }
+                    }
                     button {
                         class: "profile add",
-                        style: "--i:{count}",
+                        style: "--i:{count + 1}",
                         disabled: busy().is_some(),
                         onclick: move |_| {
                             status.set(None);
@@ -267,7 +316,7 @@ pub fn Login() -> Element {
                     // On a phone this is a tile like the others; a desktop has the button below.
                     button {
                         class: "profile edit-tile",
-                        style: "--i:{count + 1}",
+                        style: "--i:{count + 2}",
                         disabled: busy().is_some(),
                         onclick: move |_| managing.set(!managing()),
                         span { class: "avatar tool", if managing() { Icon { d: CHECK_MARK } } else { Icon { d: PENCIL } } }
@@ -287,15 +336,12 @@ pub fn Login() -> Element {
 #[component]
 fn ProfileForm(
     editing: Option<Profile>,
-    can_cancel: bool,
     busy: bool,
     status: Option<String>,
-    next_color: u8,
     onsubmit: EventHandler<Profile>,
     oncancel: EventHandler<()>,
     ondelete: EventHandler<String>,
     ondemo: EventHandler<()>,
-    onfree: EventHandler<()>,
 ) -> Element {
     let start = editing.clone();
     let mut source = use_signal(|| start.as_ref().map_or(Source::Xtream, |p| p.source));
@@ -303,19 +349,25 @@ fn ProfileForm(
     let mut url = use_signal(|| start.as_ref().map(|p| p.url.clone()).unwrap_or_default());
     let mut user = use_signal(|| start.as_ref().map(|p| p.user.clone()).unwrap_or_default());
     let mut pass = use_signal(|| start.as_ref().map(|p| p.pass.clone()).unwrap_or_default());
-    let mut color = use_signal(|| start.as_ref().map_or(next_color, |p| p.color));
+    let color = use_signal(|| {
+        start
+            .as_ref()
+            .map_or_else(|| random_index(COLORS.len()), |p| p.color)
+    });
+    let avatar = use_signal(|| {
+        start.as_ref().map_or_else(
+            || random_index(AVATAR_SHAPES.len()),
+            |p| p.avatar_index() as u8,
+        )
+    });
     let mut confirm = use_signal(|| false);
     let is_new = editing.is_none();
     let id = editing.as_ref().map_or_else(new_id, |p| p.id.clone());
 
-    let shown = name()
-        .trim()
-        .chars()
-        .next()
-        .map_or("?".to_string(), |c| c.to_uppercase().to_string());
     let delete_id = id.clone();
     rsx! {
-        div { class: "login-page",
+        div { class: "login-page profile-page",
+            div { class: "login-stage",
             form { class: "login",
                 onsubmit: move |e| {
                     e.prevent_default();
@@ -339,11 +391,13 @@ fn ProfileForm(
                         user: if source() == Source::Xtream { user().trim().to_string() } else { String::new() },
                         pass: if source() == Source::Xtream { pass() } else { String::new() },
                         color: color(),
+                        avatar: Some(avatar()),
                     });
                 },
                 div { class: "brand", RustMark {} span { "RIPTV" } }
                 h1 { if is_new { "Add profile" } else { "Edit profile" } }
-                span { class: "avatar preview", style: "--c:{COLORS[usize::from(color()) % COLORS.len()]}", "{shown}" }
+                p { class: "login-intro", if is_new { "Your next watch starts here." } else { "Update your connection." } }
+                span { class: "avatar preview", style: "--c:{COLORS[usize::from(color()) % COLORS.len()]}", AvatarArt { index: avatar() } }
                 div { class: "login-modes", aria_label: "Source type",
                     button { r#type: "button", disabled: busy, class: if source() == Source::Xtream { "on" } else { "" }, onclick: move |_| source.set(Source::Xtream), "Xtream" }
                     button { r#type: "button", disabled: busy, class: if source() == Source::Playlist { "on" } else { "" }, onclick: move |_| source.set(Source::Playlist), "M3U / M3U8" }
@@ -356,22 +410,8 @@ fn ProfileForm(
                 } else {
                     input { aria_label: "Playlist URL", placeholder: "Playlist URL", value: "{url}", oninput: move |e| url.set(e.value()) }
                 }
-                div { class: "swatches", role: "radiogroup", aria_label: "Colour",
-                    for (i, c) in COLORS.iter().enumerate() {
-                        button {
-                            key: "{i}",
-                            r#type: "button",
-                            class: if usize::from(color()) == i { "swatch on" } else { "swatch" },
-                            style: "--c:{c}",
-                            role: "radio",
-                            aria_checked: usize::from(color()) == i,
-                            aria_label: "Colour {i + 1}",
-                            onclick: move |_| color.set(i as u8),
-                        }
-                    }
-                }
                 button { r#type: "submit", disabled: busy, if busy { "Connecting…" } else if is_new { "Save and connect" } else { "Save" } }
-                if can_cancel { button { r#type: "button", class: "ghost", disabled: busy, onclick: move |_| oncancel.call(()), "Cancel" } }
+                button { r#type: "button", class: "ghost", disabled: busy, onclick: move |_| oncancel.call(()), "Cancel" }
                 if !is_new {
                     button {
                         r#type: "button",
@@ -385,11 +425,16 @@ fn ProfileForm(
                 if is_new && source() == Source::Xtream {
                     button { r#type: "button", class: "ghost", disabled: busy, onclick: move |_| ondemo.call(()), "Try the demo" }
                 }
-                if is_new && source() == Source::Playlist {
-                    button { r#type: "button", class: "ghost", disabled: busy, onclick: move |_| onfree.call(()), "Try free channels" }
-                }
                 if let Some(msg) = status { p { class: "err", "{msg}" } }
                 small { class: "note", "Saved on this device, in this browser, password included." }
+            }
+            aside { class: "login-art", aria_hidden: "true",
+                div { class: "art-orbit orbit-one" }
+                div { class: "art-orbit orbit-two" }
+                div { class: "art-orbit orbit-three" }
+                div { class: "art-glow" }
+                div { class: "art-caption", span { "ONE SCREEN" } strong { "Every channel.\nEvery story." } }
+            }
             }
         }
     }

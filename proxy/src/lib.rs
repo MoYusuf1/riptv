@@ -10,6 +10,7 @@
 //!    machine, works. Bind to localhost only.
 
 mod compat;
+mod diagnostics;
 
 use std::{
     collections::HashSet,
@@ -81,6 +82,8 @@ pub struct AppState {
     http: reqwest::Client,
     pub(crate) approved: Approved,
     web: Option<PathBuf>,
+    diagnostics: diagnostics::Sessions,
+    logs: Option<PathBuf>,
 }
 
 impl Default for AppState {
@@ -116,12 +119,20 @@ impl AppState {
             http,
             approved,
             web: None,
+            diagnostics: diagnostics::Sessions::default(),
+            logs: None,
         }
     }
 
     /// Also serve the compiled web app in `dir` (a single-page app) at `/`.
     pub fn with_web(mut self, dir: impl Into<PathBuf>) -> Self {
         self.web = Some(dir.into());
+        self
+    }
+
+    /// Append credential-free opt-in stream probe results to a local file.
+    pub fn with_logs(mut self, path: impl Into<PathBuf>) -> Self {
+        self.logs = Some(path.into());
         self
     }
 }
@@ -254,6 +265,12 @@ pub fn router(state: AppState) -> Router {
         .route("/allow", post(allow))
         .route("/compat/check", get(compat::check))
         .route("/compat", get(compat::stream));
+    let r = r
+        .route(
+            "/diagnostics",
+            get(diagnostics::list).post(diagnostics::create),
+        )
+        .route("/diagnostics/{id}/probe", post(diagnostics::probe));
     let r = match state.web.clone() {
         // Unknown paths get index.html with a 200 (`not_found_service` would keep the 404),
         // so client-side routes survive a reload.

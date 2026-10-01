@@ -14,6 +14,7 @@ use std::sync::Arc;
 mod art;
 #[cfg(test)]
 mod bench;
+pub mod guide;
 mod playlist;
 mod stream;
 mod text;
@@ -792,6 +793,16 @@ impl Client {
     /// ffmpeg or can't read the stream. A `.m3u8` address is tried as the plain `.ts` stream first,
     /// which is what ffmpeg reads best.
     pub async fn convert(&self, media: &Url) -> Result<Converted> {
+        self.convert_inner(media, false).await
+    }
+
+    /// Fallback when playback produced audio but no video frames. Unlike [`Self::convert`],
+    /// require a real video track and re-encode it even if the codec looks browser-compatible.
+    pub async fn convert_video(&self, media: &Url) -> Result<Converted> {
+        self.convert_inner(media, true).await
+    }
+
+    async fn convert_inner(&self, media: &Url, force_video: bool) -> Result<Converted> {
         let Some(proxy) = &self.proxy else {
             return Err(Error::Proxy("there is no proxy to convert it".into()));
         };
@@ -822,7 +833,15 @@ impl Client {
                 Ok(resp) => {
                     let header =
                         |name: &str| resp.headers().get(name).and_then(|v| v.to_str().ok());
-                    let video = header("x-riptv-video").unwrap_or("transcode");
+                    if force_video && header("x-riptv-has-video") == Some("0") {
+                        last = Error::Proxy("this source has audio but no video track".into());
+                        continue;
+                    }
+                    let video = if force_video {
+                        "transcode"
+                    } else {
+                        header("x-riptv-video").unwrap_or("transcode")
+                    };
                     return Ok(Converted {
                         url: endpoint("/compat", &[("url", candidate.as_str()), ("video", video)]),
                         duration: header("x-riptv-duration").and_then(|d| d.parse().ok()),

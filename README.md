@@ -38,9 +38,9 @@ service worker keeps only the app's HTML shell and icons for a fallback when off
 caches IPTV lists, credentials, or video. Watching still requires a connection.
 
 For HTTPS HLS (`.m3u8`) on a browser that supports it, live TV first tries the device's native
-video player. If that provider or format fails, playback returns to the Rust HLS player and then
-the existing server-conversion fallback. MP4 movies already use native playback when supported;
-MKV and unusual codecs use the Rust or conversion paths. An iPhone cannot reach this project's
+video player. Other live streams use the local ffmpeg compatibility converter by default.
+The Rust player is an opt-in Experimental setting. MP4 movies use native playback when supported;
+MKV and unusual codecs use conversion by default. An iPhone cannot reach this project's
 default `127.0.0.1` server on another computer. The proxy is intentionally localhost-only; **do
 not expose it to a network by just changing its bind address**. A phone-accessible deployment
 needs HTTPS and public-hosting security work first.
@@ -105,6 +105,25 @@ Open it in a normal browser (Chrome, Firefox, Safari). Sound and real fullscreen
 and an embedded preview pane may have neither; the player falls back to filling the page. On the live
 player Space plays or pauses, F is fullscreen, M mutes, and double-click is fullscreen.
 
+### Share a stream for local troubleshooting
+
+Run `cargo riptv --logs` to append sanitized probe results to
+`/tmp/riptv-diagnostics.log` (on systems with a different temp directory, the startup message
+prints its path). Open a live channel, press its info button, then **Share for local testing**.
+This creates an opt-in session lasting ten minutes. Either local chatbot can inspect it with:
+
+```sh
+curl http://127.0.0.1:3000/diagnostics
+curl -X POST http://127.0.0.1:3000/diagnostics/SESSION_ID/probe
+```
+
+The list and report contain no stream URL, username, password, token, or provider response body.
+The proxy keeps the URL only in memory, fetches at most 64 KiB from the stream (and up to two HLS
+playlist links), and reports HTTP status, container signature, transport-stream sync and common
+codec IDs. It never passes a credential-bearing URL to a subprocess. Stop the server to erase all
+sessions. This is **local-only**: someone with access to your computer's loopback port can run a
+shared probe while it is active. No stream is shared until you press the button.
+
 ## Try it without a provider
 
 ```sh
@@ -125,7 +144,7 @@ channels, movies and series (and `MOCK_PORT` moves it off 8081): a big provider'
 RIPTV opens on **Who's watching?**: one tile for each account you have saved, a **+** to add another, and
 **Edit** (**Manage profiles** on a desktop) to change or delete them. Tapping a tile signs in with that
 account straight away. A profile is an Xtream account (server, username, password) or an M3U/M3U8
-playlist, with a name and a colour, and you can keep as many of each as you like. **Switch profile** in
+playlist, with a name and an automatically assigned avatar and colour, and you can keep as many of each as you like. **Switch profile** in
 the account menu brings the tiles back.
 
 Profiles are saved on the device, in this browser's storage for this address, **as plain text, the
@@ -138,9 +157,10 @@ open the app at (`127.0.0.1:3000` and `localhost:3000` keep separate lists).
 
 Add a profile and choose **M3U / M3U8**, paste an HTTP(S) playlist URL, and select **Save and connect**.
 An IPTV `.m3u` channel list becomes Live TV categories and channels. A direct HLS `.m3u8` manifest
-becomes one live channel; its video segments are not mistaken for separate channels. Use **Try free
-channels** for a small [iptv-org public playlist](https://github.com/iptv-org/iptv/blob/master/PLAYLISTS.md)
-without entering an account. Public streams can go offline or be region-blocked.
+becomes one live channel; its video segments are not mistaken for separate channels. **Public TV**
+on the profile chooser opens the [iptv-org all-channel playlist](https://iptv-org.github.io/iptv/index.m3u)
+with one click, without entering credentials or saving a profile. Public streams can go offline or be
+region-blocked; the all-channel list may take longer to load than a smaller playlist.
 
 M3U mode currently covers Live TV only. Movies, series, and XMLTV guide data need separate metadata
 support, so those tabs are hidden rather than showing empty pages. Xtream sign-in and its guide are
@@ -193,26 +213,31 @@ place. Both rows are kept per profile on the device.
 
 ## Compatibility mode (ffmpeg)
 
-Many browsers, Chrome on Linux among them, can't decode HEVC (every 4K channel), AC-3, MP2 or
+Many browsers, Chrome on Linux among them, can't decode some HEVC video, AC-3, MP2 or
 AAC-Main sound, interlaced video smoothly, or raw MPEG-TS streams. When a stream is one of those the
 player hands it to the proxy, which uses `ffmpeg` (if installed) to turn it into H.264 + AAC on the
-fly: the video is copied untouched when it's already fine, and only HEVC or interlaced video is
+fly: the video is copied untouched when it's already fine, while unsupported video is
 re-encoded (NVENC if you have an NVIDIA card, otherwise x264), deinterlaced to full motion rate and
 capped at 1080p (`RIPTV_MAX_HEIGHT=2160` for full 4K, if your browser decodes it smoothly). Without
 ffmpeg those channels say why, and a sound-only problem still plays the picture. Everything else stays
 in the pure-Rust player. ffmpeg follows redirects itself, so its own connections aren't held to the
 public-address rule the proxy applies to the page's requests.
 
+If audio arrives but no video frame does, RIPTV gives the picture another chance by forcing video
+re-encoding even when the source claims to be browser-compatible. A source with no video track is
+reported as audio-only; no player can reconstruct a picture the provider did not send. Audio stays
+muted during video startup, then follows the saved volume setting when a frame appears or an
+audio-only source is confirmed.
+
 A converted movie or episode is one continuous stream with no index, which the browser can't seek in,
 so its seek bar restarts the conversion from the chosen second (a moment's wait). Movies and episodes
 are converted only when nothing in the page can play them (HEVC, DTS and TrueHD sound, interlaced
 video), and that is decided before playback starts, never halfway through.
 
-**Sound in Rust (experimental)** is a switch in the account menu. On, live channels with
-AC-3, E-AC-3 or MP2 sound are decoded by rstreamkit inside the browser (5.1 is mixed down to stereo,
-played as FLAC) and skip ffmpeg. It applies to the next channel you open and is remembered. Off is
-the default: ffmpeg does it. It is checked against ffmpeg's own decoding in rstreamkit's tests, but has
-seen less real-world use. The decoder code is part of the current web build whether this switch is on or off.
+**Experimental player** is a switch in the account menu. On, live channels use rstreamkit in the
+browser (including its AC-3/E-AC-3/MP2 decoding), and movies and episodes may use its Rust path.
+It applies to the next stream you open and is remembered. Off is the default: native video or
+ffmpeg compatibility mode handles playback. The decoder code remains in the web build.
 
 Press `I` on the live player (or the info button) for the picture size, real frame rate, dropped
 frames and buffer, which tells a slow stream from a slow decoder. When supported, the frame rate
@@ -221,20 +246,20 @@ overlay is open.
 
 ## What plays
 
-**Movies and episodes** are read by the page itself, in Rust. Before anything plays, rstreamkit looks at
-the file's index (MP4's `moov`, Matroska's tracks and cues: a few range requests) and decides:
+**Movies and episodes** are probed before playback. The browser plays native-compatible files;
+the proxy converts unsupported formats by default. Experimental mode can instead use rstreamkit:
 
 | If the file is... | it is played by... |
 |---|---|
 | something the browser plays itself (H.264 with AAC, say) | the browser, as a plain `<video>` |
-| H.264 with AC-3, E-AC-3, MP2 (or AAC where the browser can't read the container) | **rstreamkit**: the picture is copied, the sound is decoded in Rust, and both are fed to MediaSource a few seconds ahead of the playhead. Nothing is converted, nothing buffers while sound is "fixed", and a seek reads from the new place |
+| H.264 with AC-3, E-AC-3, MP2 (or AAC where the browser can't read the container) | ffmpeg by default; rstreamkit only in Experimental mode |
 | HEVC, DTS, TrueHD, interlaced, or anything it can't read | the proxy's ffmpeg (above), chosen up front |
 
 Decoded sound is stereo (5.1 is mixed down) and is held uncompressed, which is a lot of memory for a
 browser that keeps only about a minute of sound in a buffer, so the page reads a few seconds at a time. A server that doesn't answer byte-range requests, or a file it can't read the
 index of, is left to the browser.
 
-**Live TV** first tries native HTTPS HLS on browsers that support it, then `rstreamkit`:
+**Live TV** first tries native HTTPS HLS on browsers that support it, then ffmpeg. Experimental mode uses `rstreamkit`:
 HLS with MPEG-TS segments carrying **H.264 video and AAC audio**. Anything else is reported, not
 misplayed: HEVC, AES-128, fMP4 segments, continuous (non-HLS) `.ts` streams and AC-3/MP2 audio are not
 played directly, and compatibility mode covers them (AC-3 and MP2 can instead be decoded in Rust,

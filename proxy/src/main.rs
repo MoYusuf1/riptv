@@ -16,13 +16,18 @@ async fn main() {
     let port: u16 = env("IPTV_PORT")
         .and_then(|p| p.parse().ok())
         .unwrap_or(3000);
+    let logs = std::env::args().skip(1).any(|arg| arg == "--logs");
+    let mut state = AppState::new().with_web(web);
+    if logs {
+        let path = std::env::temp_dir().join("riptv-diagnostics.log");
+        println!("Sanitized stream diagnostics: {}", path.display());
+        state = state.with_logs(path);
+    }
     // ponytail: localhost only. Anyone who can reach the port can use it (see the checks in lib.rs
     // for what that means); add auth before binding wider.
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
         .await
         .expect("bind");
     println!("RIPTV is running: http://127.0.0.1:{port}");
-    axum::serve(listener, router(AppState::new().with_web(web)))
-        .await
-        .expect("serve");
+    axum::serve(listener, router(state)).await.expect("serve");
 }

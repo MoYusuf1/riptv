@@ -71,7 +71,7 @@ pub fn Skip(back: bool) -> Element {
             stroke_linecap: "round",
             stroke_linejoin: "round",
             path { d: if back { "M4 9.5a8 8 0 1 1 .7 6.1M4 5v4.5h4.5" } else { "M20 9.5a8 8 0 1 0-.7 6.1M20 5v4.5h-4.5" } }
-            text { x: "12", y: "14.7", text_anchor: "middle", font_size: "7.4", font_weight: "700", fill: "currentColor", stroke: "none", "15" }
+            text { x: "12", y: "12", text_anchor: "middle", dominant_baseline: "central", font_size: "7.4", font_weight: "700", fill: "currentColor", stroke: "none", "15" }
         }
     }
 }

@@ -37,6 +37,7 @@ use crate::{AppState, FALLBACK_UA, from_app, refusal, url_ok};
 const MISSING: &str =
     "ffmpeg isn't installed, and this stream needs it (Arch: sudo pacman -S ffmpeg)";
 const VIDEO_HEADER: HeaderName = HeaderName::from_static("x-riptv-video");
+const HAS_VIDEO_HEADER: HeaderName = HeaderName::from_static("x-riptv-has-video");
 const DURATION_HEADER: HeaderName = HeaderName::from_static("x-riptv-duration");
 
 /// Only plain network protocols: a playlist from a provider must not be able to make ffmpeg read
@@ -336,7 +337,8 @@ fn failure(f: Failure) -> Response {
 }
 
 /// `GET /compat/check?url=`: can this be converted, and does its video need re-encoding? 204 with
-/// `x-riptv-video: copy|transcode` if so, otherwise an explanation in `x-riptv-error`.
+/// `x-riptv-video: copy|transcode` and `x-riptv-has-video: 0|1` if so, otherwise an explanation
+/// in `x-riptv-error`. Audio-only sources remain valid for normal conversion.
 pub async fn check(
     State(s): State<AppState>,
     Query(q): Query<CompatQuery>,
@@ -358,6 +360,10 @@ pub async fn check(
     let mut res = StatusCode::NO_CONTENT.into_response();
     res.headers_mut()
         .insert(VIDEO_HEADER, HeaderValue::from_static(mode));
+    res.headers_mut().insert(
+        HAS_VIDEO_HEADER,
+        HeaderValue::from_static(if probed.is_some() { "1" } else { "0" }),
+    );
     // A movie or episode's length, so the page can offer a seek bar.
     if let Some(secs) = probed.as_ref().and_then(|p| p.duration)
         && let Ok(v) = HeaderValue::from_str(&(secs as u64).to_string())

@@ -30,7 +30,7 @@ use web_sys::{
     js_sys,
     wasm_bindgen::{JsCast, JsValue, closure::Closure},
 };
-use xtream::{Client, Details, EpgListing, Episode, LiveStream, Season, VodStream};
+use xtream::{Client, Details, Episode, LiveStream, Season, VodStream};
 
 /// Items per page: a screen or so of posters, and the narrower channel list beside a player.
 const PAGE_GRID: usize = 60;
@@ -56,18 +56,34 @@ svg{width:1.1rem;height:1.1rem}
 .icon-btn.on svg{fill:currentColor}
 "#,
     // Sign-in
-    r#".login-page{display:grid;place-items:center;min-height:100vh;padding:1.4rem;background:radial-gradient(circle at 50% 0,rgba(225,29,72,.22),transparent 45%),var(--bg)}
-.login{display:flex;flex-direction:column;gap:.75rem;width:min(100%,24rem);padding:2rem;border-radius:22px;background:var(--panel);box-shadow:0 30px 80px rgba(0,0,0,.5)}
-.login .brand{align-self:center}
-.login h1{margin:.4rem 0 .5rem;font-size:1.9rem;letter-spacing:-.03em}
-.login input{width:100%;padding:.85rem 1rem;border:0;border-radius:12px;outline:0;background:var(--row)}
-.login input:focus{box-shadow:0 0 0 2px var(--accent)}
-.login button{padding:.85rem;border-radius:12px;background:var(--fill);color:#fff;font-weight:600;text-align:center}
+    r#".login-page{display:grid;place-items:center;min-height:100vh;min-height:100dvh;padding:1.4rem;background:radial-gradient(circle at 15% 80%,rgba(110,58,151,.24),transparent 40%),radial-gradient(circle at 85% 12%,rgba(225,29,72,.18),transparent 42%),var(--bg)}
+.login-stage{display:grid;grid-template-columns:minmax(19rem,24rem) minmax(18rem,26rem);width:min(100%,50rem);min-height:34rem;overflow:hidden;border:1px solid var(--hair);border-radius:28px;background:var(--panel);box-shadow:0 30px 90px rgba(0,0,0,.46)}
+.login{display:flex;flex-direction:column;justify-content:center;gap:.72rem;width:100%;padding:2.2rem 2.35rem;background:rgba(12,8,11,.94)}
+.login .brand{align-self:flex-start;color:var(--text)}
+.login h1{margin:1.05rem 0 0;font-size:2rem;line-height:1.1;letter-spacing:-.04em}
+.login-intro{margin:0 0 .55rem;color:var(--dim);font-size:.87rem}
+.login input{width:100%;min-height:2.9rem;padding:.76rem .95rem;border:1px solid var(--hair);border-radius:11px;outline:0;background:rgba(255,255,255,.045)}
+.login input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--soft)}
+.login input::placeholder{color:var(--faint)}
+.login button{padding:.78rem;border-radius:11px;background:var(--fill);color:#fff;font-weight:650;text-align:center;transition:background .15s ease,transform .15s ease}
+.login button:not(:disabled):hover{background:#f02b58;transform:translateY(-1px)}
 .login button:disabled{opacity:.6;cursor:wait}
-.login button.ghost{background:none;color:var(--accent)}
-.login-modes{display:flex;gap:.2rem;padding:.2rem;border-radius:12px;background:var(--row)}
-.login .login-modes button{flex:1;padding:.55rem;border-radius:9px;background:none;color:var(--dim);font-size:.85rem}
-.login .login-modes button.on{background:var(--panel);color:var(--text);box-shadow:0 2px 8px rgba(0,0,0,.2)}
+.login button.ghost{background:none;color:var(--dim)}
+.login button.ghost:hover{background:rgba(255,255,255,.05);color:var(--text)}
+.login-modes{display:flex;gap:.2rem;padding:.23rem;border:1px solid var(--hair);border-radius:12px;background:rgba(255,255,255,.04)}
+.login .login-modes button{flex:1;padding:.56rem;border-radius:9px;background:none;color:var(--dim);font-size:.85rem}
+.login .login-modes button.on{background:rgba(255,255,255,.1);color:var(--text);box-shadow:0 2px 8px rgba(0,0,0,.2)}
+.login-art{position:relative;min-height:100%;overflow:hidden;background:radial-gradient(circle at 77% 24%,#f7a271 0,transparent 30%),linear-gradient(145deg,#ee7a70 0%,#953e93 36%,#4d388d 68%,#252956 100%)}
+.login-art:before,.login-art:after{content:"";position:absolute;width:135%;height:56%;left:-18%;border-radius:50%;transform:rotate(-22deg)}
+.login-art:before{top:32%;background:#503486;box-shadow:0 -12px 0 rgba(255,255,255,.11)}
+.login-art:after{top:63%;background:#252950;box-shadow:0 -12px 0 rgba(187,166,238,.24)}
+.art-orbit{position:absolute;z-index:1;width:115%;height:22%;left:-9%;border:16px solid rgba(205,194,255,.8);border-radius:50%;transform:rotate(-24deg)}
+.orbit-one{top:49%}.orbit-two{top:66%;left:8%}.orbit-three{top:82%;left:-22%}
+.art-glow{position:absolute;z-index:1;right:5%;top:9%;width:7rem;height:7rem;border-radius:50%;background:#ffd2a3;filter:blur(1px);opacity:.85}
+.art-caption{position:absolute;z-index:2;left:2rem;bottom:2rem;display:grid;gap:.4rem;color:#fff;text-shadow:0 2px 12px rgba(0,0,0,.35)}
+.art-caption span{font-size:.68rem;font-weight:700;letter-spacing:.22em;opacity:.78}
+.art-caption strong{font-size:1.55rem;line-height:1.15;white-space:pre-line}
+@media(max-width:680px){.profile-page{padding:1rem}.login-stage{display:block;width:min(100%,25rem);min-height:0;border-radius:22px}.login{padding:1.55rem}.login-art{display:none}}
 "#,
     // Floating chrome: top bar, section rail, account menu
     r#".topbar,.rail{position:fixed;z-index:20;display:flex;border:1px solid var(--hair);background:var(--glass);box-shadow:0 10px 30px rgba(0,0,0,.35);backdrop-filter:blur(24px) saturate(180%)}
@@ -234,8 +250,13 @@ svg{width:1.1rem;height:1.1rem}
 .player.fill{position:fixed;z-index:60;inset:0}
 .player:not(.active):not(.paused){cursor:none}
 .player video{width:100%;height:100%;object-fit:contain}
+.audio-only{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.45rem;background:radial-gradient(circle at 50% 42%,rgba(225,29,72,.2),transparent 33%),#100b11;color:var(--text);pointer-events:none}
+.audio-only .audio-orb{display:grid;place-items:center;width:5rem;height:5rem;margin-bottom:.45rem;border:1px solid rgba(255,255,255,.15);border-radius:50%;background:var(--soft);color:var(--accent);font-size:2rem}
+.audio-only strong{font-size:1.1rem}.audio-only small{color:var(--dim)}
 .sound-note{position:absolute;left:1rem;bottom:4.6rem;max-width:calc(100% - 2rem);padding:.35rem .8rem;border-radius:10px;background:rgba(0,0,0,.68);color:#ffd48a;font-size:.78rem;backdrop-filter:blur(10px)}
 .stats{position:absolute;top:.8rem;left:.8rem;padding:.3rem .7rem;border-radius:8px;background:rgba(0,0,0,.66);color:#fff;font:600 .72rem ui-monospace,monospace;backdrop-filter:blur(8px)}
+.diagnostic-share{margin-top:.35rem;padding:.25rem .4rem;border-radius:5px;background:#ffffff26;color:#fff;font:inherit}
+.diagnostic-share:hover{background:#ffffff44}
 .channel-dial{position:absolute;top:1rem;right:1rem;min-width:3rem;padding:.45rem .75rem;border-radius:10px;background:rgba(0,0,0,.72);color:#fff;text-align:center;font-weight:700}
 .number-panel{position:absolute;z-index:4;right:1rem;bottom:4.5rem;display:flex;align-items:center;gap:.4rem;padding:.45rem;border:1px solid var(--hair);border-radius:12px;background:rgba(16,12,16,.94);box-shadow:0 8px 30px #0008}
 .number-panel input{width:5rem;padding:.4rem .5rem;border:0;border-radius:7px;background:#fff2;color:#fff;outline:0}
@@ -270,6 +291,7 @@ svg{width:1.1rem;height:1.1rem}
 .block{position:absolute;top:1.5rem;bottom:0;padding:.5rem .7rem;border-right:3px solid var(--panel);border-radius:10px;background:var(--row)}
 .block.now{background:var(--soft);outline:1px solid rgba(255,125,146,.45);outline-offset:-1px}
 .block .txt{position:sticky;left:.7rem;max-width:min(100%,18rem);overflow:hidden}
+.block.compact{padding:.5rem .35rem}.block.compact time,.block.compact p{display:none}.block.compact strong{font-size:.72rem}
 .block time{display:block;color:var(--dim);font-size:.7rem}
 .block strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .block p{display:-webkit-box;margin:.25rem 0 0;overflow:hidden;color:var(--dim);font-size:.75rem;-webkit-box-orient:vertical;-webkit-line-clamp:2}
@@ -355,7 +377,8 @@ svg{width:1.1rem;height:1.1rem}
 .profile:disabled{cursor:wait;opacity:.6}
 .profile strong{max-width:100%;overflow:hidden;font-size:1rem;font-weight:500;text-overflow:ellipsis;white-space:nowrap}
 .profile small{margin-top:-.35rem;color:var(--faint);font-size:.64rem;letter-spacing:.08em;text-transform:uppercase}
-.avatar{position:relative;display:grid;place-items:center;width:9rem;height:9rem;border-radius:1.1rem;background:linear-gradient(155deg,rgba(255,255,255,.26),transparent 52%,rgba(0,0,0,.18)),var(--c,#e11d48);color:#fff;font-size:3.4rem;font-weight:700;box-shadow:0 12px 34px rgba(0,0,0,.42);transition:transform .18s ease,box-shadow .18s ease}
+.avatar{position:relative;display:grid;place-items:center;width:9rem;height:9rem;border-radius:1.1rem;background:radial-gradient(circle at 27% 18%,rgba(255,255,255,.3),transparent 55%),var(--c,#e11d48);color:#fff;font-size:3.4rem;font-weight:700;box-shadow:0 12px 34px rgba(0,0,0,.42);transition:transform .18s ease,box-shadow .18s ease}
+.avatar .avatar-art{width:76%;height:76%;filter:drop-shadow(0 5px 8px rgba(0,0,0,.18))}
 .profile:not(:disabled):hover .avatar,.profile:focus-visible .avatar{transform:scale(1.06);box-shadow:0 0 0 3px var(--text),0 16px 38px rgba(0,0,0,.5)}
 .avatar .spinner{width:2.4rem;height:2.4rem}
 .avatar .edit{position:absolute;inset:0;display:grid;place-items:center;border-radius:inherit;background:rgba(0,0,0,.55)}
@@ -368,10 +391,7 @@ svg{width:1.1rem;height:1.1rem}
 .who .manage:hover{border-color:var(--text);color:var(--text)}
 .note{color:var(--faint);font-size:.72rem}
 .login .note{text-align:center}
-.login .avatar.preview{align-self:center;width:4.8rem;height:4.8rem;border-radius:.9rem;font-size:1.8rem;box-shadow:0 6px 18px rgba(0,0,0,.4)}
-.login .swatches{display:flex;justify-content:center;gap:.6rem;padding:.2rem 0}
-.login .swatches .swatch{width:1.6rem;height:1.6rem;padding:0;border-radius:50%;background:var(--c);box-shadow:inset 0 0 0 2px rgba(255,255,255,.14)}
-.login .swatches .swatch.on{box-shadow:0 0 0 2px var(--panel),0 0 0 4px var(--text)}
+.login .avatar.preview{align-self:center;width:4.7rem;height:4.7rem;margin:.1rem 0 .25rem;border-radius:1rem;font-size:2.6rem;box-shadow:0 8px 22px rgba(0,0,0,.3)}
 .login button.danger{color:#ff8a8a}
 @media(max-width:820px){.login-page.who{justify-content:flex-start;background:radial-gradient(ellipse at 50% 26%,rgba(225,29,72,.3),transparent 58%),var(--bg)}
 .who-hero{position:relative;inset:auto;flex:1 0 auto;display:grid;place-content:center;justify-items:center;gap:.8rem;width:100%;padding:max(2.6rem,env(safe-area-inset-top)) 1rem 2.2rem;background:radial-gradient(rgba(255,255,255,.055) 1px,transparent 1.6px) 0 0/14px 14px}
@@ -475,9 +495,6 @@ const LIST: &str = "M4 6h16M4 12h16M4 18h10";
 const NEXT: &str = "M6 5l10 7-10 7V5zM19 5v14";
 const EXTERNAL: &str = "M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5";
 const GEAR: &str = "M12 9a3 3 0 100 6 3 3 0 000-6zM19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z";
-
-/// Pixels on the guide timeline are this many seconds wide (90 px per hour).
-const SECS_PER_PX: u64 = 40;
 
 /// The Rust logo, as the paths of the ring's teeth and of the R inside it (the ring is a circle).
 const MARK_TEETH: &str = "M32 2v8M32 54v8M2 32h8M54 32h8M11 11l6 6M47 47l6 6M53 11l-6 6M17 47l-6 6M20 5l3 8M44 51l3 8M5 20l8 3M51 44l8 3M44 5l-3 8M23 51l-3 8M59 20l-8 3M13 41l-8 3";
@@ -741,8 +758,40 @@ fn no_audio_decoded(v: &web_sys::HtmlVideoElement) -> bool {
     v.current_time() > 4.0 && !v.muted() && bytes == Some(0.0)
 }
 
-/// Browser storage key for the experimental "decode sound in Rust" setting.
-const RUST_SOUND: &str = "riptv.rust-sound";
+/// Opt one channel into a ten-minute, localhost-only diagnostic session. The returned report
+/// contains no URL; the server keeps the address in memory and never writes it to its log.
+async fn share_diagnostic(client: &Client, media: &str) -> Result<(), &'static str> {
+    use wasm_bindgen_futures::JsFuture;
+    let url = xtream::Url::parse(media).map_err(|_| "Invalid stream")?;
+    let upstream = client.upstream(&url);
+    let body = serde_json::json!({ "url": upstream.as_str() }).to_string();
+    let init = web_sys::RequestInit::new();
+    init.set_method("POST");
+    init.set_body(&JsValue::from_str(&body));
+    let headers = web_sys::Headers::new().map_err(|_| "Browser request failed")?;
+    headers
+        .set("content-type", "application/json")
+        .map_err(|_| "Browser request failed")?;
+    init.set_headers(&headers);
+    let request = web_sys::Request::new_with_str_and_init("/diagnostics", &init)
+        .map_err(|_| "Browser request failed")?;
+    let response: web_sys::Response = JsFuture::from(
+        web_sys::window()
+            .ok_or("Browser window unavailable")?
+            .fetch_with_request(&request),
+    )
+    .await
+    .map_err(|_| "Could not reach local diagnostics")?
+    .unchecked_into();
+    if response.ok() {
+        Ok(())
+    } else {
+        Err("Could not share this stream")
+    }
+}
+
+/// Browser storage key for the opt-in experimental Rust playback engine.
+const RUST_SOUND: &str = "riptv.experimental-rust-player";
 
 fn storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok()?
@@ -752,7 +801,7 @@ fn storage() -> Option<web_sys::Storage> {
 fn App() -> Element {
     let session = use_context_provider(|| Signal::new(None::<Client>));
     use_context_provider(|| Signal::new(String::new())); // the account name, if any
-    // Experimental: decode AC-3 and MP2 live sound in Rust instead of having ffmpeg convert it.
+    // The browser/ffmpeg path is the stable default; Rust playback is opt-in.
     use_context_provider(|| {
         Signal::new(
             storage()
@@ -1559,7 +1608,7 @@ fn Browse() -> Element {
                             class: "setting",
                             role: "switch",
                             aria_checked: rust_sound(),
-                            title: "Experimental: decode AC-3 and MP2 sound on live channels in the page, without ffmpeg. Applies to the next channel you open.",
+                            title: "Experimental Rust playback engine. Applies to the next stream you open.",
                             onclick: move |_| {
                                 let on = !rust_sound();
                                 rust_sound.set(on);
@@ -1567,7 +1616,7 @@ fn Browse() -> Element {
                                     let _ = s.set_item(RUST_SOUND, if on { "1" } else { "0" });
                                 }
                             },
-                            "Sound in Rust"
+                            "Experimental player"
                             i { class: "switch" }
                         }
                         button { onclick: move |_| session.set(None), "Switch profile" }
@@ -1864,7 +1913,7 @@ enum Engine {
     Failed(String),
 }
 
-async fn choose(c: &Client, url: &str) -> Engine {
+async fn choose(c: &Client, url: &str, experimental: bool) -> Engine {
     let Ok(media) = xtream::Url::parse(url) else {
         return Engine::Failed("that address is not valid".into());
     };
@@ -1875,7 +1924,8 @@ async fn choose(c: &Client, url: &str) -> Engine {
     };
     match movie.verdict(&rstreamkit::mse::can_play) {
         Verdict::Native => Engine::Native,
-        Verdict::Rust => Engine::Rust(movie, media),
+        Verdict::Rust if experimental => Engine::Rust(movie, media),
+        Verdict::Rust => convert(c, &media, "a format requiring conversion".into()).await,
         Verdict::Unsupported(why) => convert(c, &media, why.to_string()).await,
         _ => Engine::Failed("unsupported movie format".into()),
     }
@@ -2067,6 +2117,7 @@ fn Watch(
 ) -> Element {
     let session = use_context::<Signal<Option<Client>>>();
     let client = use_hook(|| session.read().clone().expect("logged in"));
+    let experimental = use_context::<Signal<bool>>();
     let key = play.key.clone();
     let resume = use_hook(|| shelves::position(&key));
     let remembered = use_hook(preferences::load);
@@ -2099,7 +2150,7 @@ fn Watch(
     let (c, url) = (client.clone(), play.url.clone());
     use_future(move || {
         let (c, url) = (c.clone(), url.clone());
-        async move { engine.set(Some(choose(&c, &url).await)) }
+        async move { engine.set(Some(choose(&c, &url, *experimental.peek()).await)) }
     });
     // The hint about resuming fades on its own.
     use_future(move || async move {
@@ -2918,6 +2969,7 @@ fn DetailPage(
 /// given up on (when the proxy can't convert it), or the proxy's ffmpeg-converted stream.
 #[derive(Clone, PartialEq)]
 enum Feed {
+    Pending,
     Direct(String),
     Rust,
     Partial,
@@ -2968,6 +3020,8 @@ fn LivePlayer(
     });
     let saved_volume = u32::from(use_hook(preferences::load).volume);
     let mut status = use_signal(|| "Starting playback…".to_string());
+    let mut picture_ready = use_signal(|| false);
+    let mut audio_only = use_signal(|| false);
     let mut paused = use_signal(|| false);
     let mut muted = use_signal(move || saved_volume == 0);
     let mut volume = use_signal(move || saved_volume);
@@ -2981,11 +3035,40 @@ fn LivePlayer(
     let idle = use_hook(|| IdleHide::new(active, 2500.0));
     let handle = use_hook(|| Rc::new(RefCell::new(None::<rstreamkit::mse::Player>)));
 
-    let mut feed = use_signal(|| native_hls_source(&client, &url).map_or(Feed::Rust, Feed::Direct));
+    let mut feed = use_signal(|| {
+        if *rust_sound.peek() {
+            Feed::Rust
+        } else {
+            native_hls_source(&client, &url).map_or(Feed::Pending, Feed::Direct)
+        }
+    });
+    let conversion_client = client.clone();
+    let conversion_url = url.clone();
+    let _initial_conversion = use_resource(move || {
+        let pending = matches!(feed(), Feed::Pending);
+        let client = conversion_client.clone();
+        let url = conversion_url.clone();
+        async move {
+            if !pending {
+                return;
+            }
+            let Ok(media) = xtream::Url::parse(&url) else {
+                status.set("This channel's address is invalid".into());
+                return;
+            };
+            match client.convert(&media).await {
+                Ok(converted) => feed.set(Feed::Converted(converted.at(0).to_string())),
+                Err(e) => status.set(format!(
+                    "Can't start this channel in compatibility mode: {e}"
+                )),
+            }
+        }
+    });
     // A readout for telling a slow stream from a slow decoder: what the picture really is,
     // frames per second actually shown, frames dropped, and how much is buffered.
     let mut show_stats = use_signal(|| false);
     let mut stats = use_signal(String::new);
+    let mut diagnostic_status = use_signal(String::new);
     let mut channel_action = use_signal(|| None::<ChannelAction>);
     let mut dial = use_signal(String::new);
     let mut number_open = use_signal(|| false);
@@ -3036,6 +3119,7 @@ fn LivePlayer(
                 .map_or(0.0, |end| (end - v.current_time()).max(0.0))
                 as u32;
             let source = match feed() {
+                Feed::Pending => "starting compatibility mode",
                 Feed::Direct(_) => "native HLS",
                 Feed::Rust => "Rust player",
                 Feed::Partial => "Rust player, no sound",
@@ -3049,14 +3133,21 @@ fn LivePlayer(
             ));
         }
     });
+    let watchdog_client = client.clone();
+    let watchdog_url = url.clone();
+    let diagnostic_client = client.clone();
+    let diagnostic_url = url.clone();
     use_effect(move || {
         let Some(video) = video_el() else {
             status.set("Could not start the player".into());
             return;
         };
         video.set_volume(f64::from(*volume.peek()) / 100.0);
-        video.set_muted(*muted.peek());
+        // Start silently until a real video frame is presented. A stream that proves to be
+        // audio-only is unmuted below and gets its own visible state.
+        video.set_muted(!*picture_ready.peek() || *muted.peek());
         let partial = match feed() {
+            Feed::Pending => return,
             Feed::Direct(src) => {
                 handle.borrow_mut().take();
                 video.set_src(&src);
@@ -3088,7 +3179,16 @@ fn LivePlayer(
             // `peek`: changing the setting must not restart a channel that is playing.
             *rust_sound.peek(),
             move |s| match s {
-                rstreamkit::mse::Status::Playing => status.set("Live".into()),
+                rstreamkit::mse::Status::Playing => {
+                    status.set(
+                        if *picture_ready.peek() {
+                            "Live"
+                        } else {
+                            "Waiting for picture…"
+                        }
+                        .into(),
+                    );
+                }
                 rstreamkit::mse::Status::Note(n) => note.set(Some(n)),
                 rstreamkit::mse::Status::Unsupported(reason) => {
                     // Keep one neutral loading state across the Rust → ffmpeg handoff.
@@ -3116,6 +3216,123 @@ fn LivePlayer(
                 _ => {}
             },
         ));
+    });
+
+    // Some providers append data successfully but never deliver a decodable picture. In that
+    // case MSE can say "Playing" while the screen stays black. Watch only until the first frame;
+    // each fallback gets one chance, so a broken upstream does not loop forever.
+    use_future(move || {
+        let client = watchdog_client.clone();
+        let url = watchdog_url.clone();
+        async move {
+            let mut mode = None::<Feed>;
+            let mut since = js_sys::Date::now();
+            let mut frames = None::<frame_stats::Counter>;
+            let mut forced_video = false;
+            loop {
+                rstreamkit::mse::sleep(Duration::from_secs(2)).await;
+                let current = feed.peek().clone();
+                if mode.as_ref() != Some(&current) {
+                    mode = Some(current.clone());
+                    since = js_sys::Date::now();
+                    frames = video_el().and_then(|video| frame_stats::Counter::start(&video));
+                }
+                let Some(video) = video_el() else { continue };
+                let presented = frames.as_ref().map_or_else(
+                    || video.get_video_playback_quality().total_video_frames() > 0,
+                    |counter| counter.presented() > 0,
+                );
+                if presented
+                    || (frames.is_none() && video.video_width() > 0 && video.ready_state() >= 2)
+                {
+                    picture_ready.set(true);
+                    status.set("Live".into());
+                    video.set_muted(*muted.peek());
+                    break;
+                }
+                if video.paused()
+                    || web_sys::window()
+                        .and_then(|w| w.document())
+                        .is_some_and(|d| d.hidden())
+                {
+                    since = js_sys::Date::now();
+                    continue;
+                }
+                let wait_ms = if matches!(current, Feed::Rust | Feed::Partial)
+                    && video.current_time() > 1.0
+                {
+                    6_000.0
+                } else {
+                    12_000.0
+                };
+                if js_sys::Date::now() - since < wait_ms {
+                    continue;
+                }
+                match current {
+                    Feed::Pending => continue,
+                    Feed::Direct(_) => {
+                        status.set("Trying another playback method…".into());
+                        feed.set(if *rust_sound.peek() {
+                            Feed::Rust
+                        } else {
+                            Feed::Pending
+                        });
+                    }
+                    Feed::Rust | Feed::Partial => {
+                        status.set("Trying a compatible stream…".into());
+                        let Ok(media) = xtream::Url::parse(&url) else {
+                            status.set("This channel's address is invalid".into());
+                            break;
+                        };
+                        match client.convert_video(&media).await {
+                            Ok(converted) => {
+                                forced_video = true;
+                                feed.set(Feed::Converted(converted.at(0).to_string()));
+                            }
+                            Err(xtream::Error::Proxy(why)) if why.contains("no video track") => {
+                                audio_only.set(true);
+                                picture_ready.set(true);
+                                status.set("Audio only".into());
+                                video.set_muted(*muted.peek());
+                                break;
+                            }
+                            Err(e) => {
+                                status.set(format!("No picture from this channel: {e}"));
+                                break;
+                            }
+                        }
+                    }
+                    Feed::Converted(_) => {
+                        if forced_video {
+                            status.set("No picture after video conversion. The source may be offline or sending blank frames.".into());
+                            break;
+                        }
+                        status.set("Re-encoding the video…".into());
+                        let Ok(media) = xtream::Url::parse(&url) else {
+                            status.set("This channel's address is invalid".into());
+                            break;
+                        };
+                        match client.convert_video(&media).await {
+                            Ok(converted) => {
+                                forced_video = true;
+                                feed.set(Feed::Converted(converted.at(0).to_string()));
+                            }
+                            Err(xtream::Error::Proxy(why)) if why.contains("no video track") => {
+                                audio_only.set(true);
+                                picture_ready.set(true);
+                                status.set("Audio only".into());
+                                video.set_muted(*muted.peek());
+                                break;
+                            }
+                            Err(e) => {
+                                status.set(format!("No picture from this channel: {e}"));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     });
 
     // A document listener also works after a channel-row click leaves focus outside the player.
@@ -3174,7 +3391,13 @@ fn LivePlayer(
                         epoch.set(epoch.get().wrapping_add(1));
                         expanded.set(false);
                     }
-                    "m" => muted.set(toggle_mute().unwrap_or(false)),
+                    "m" => {
+                        if *picture_ready.peek() {
+                            muted.set(toggle_mute().unwrap_or(false));
+                        } else {
+                            muted.set(!muted());
+                        }
+                    }
                     "enter" => {
                         let number = digits.borrow().parse().ok();
                         digits.borrow_mut().clear();
@@ -3257,18 +3480,19 @@ fn LivePlayer(
                         buffering.set(false);
                         paused.set(false);
                         if matches!(feed(), Feed::Direct(_) | Feed::Converted(_)) {
-                            status.set("Live".into());
+                            status.set(if audio_only() { "Audio only" } else if picture_ready() { "Live" } else { "Waiting for picture…" }.into());
                         }
                     },
                     onerror: move |_| {
                         if matches!(feed(), Feed::Direct(_)) {
                             status.set("Starting playback…".into());
-                            feed.set(Feed::Rust);
+                            feed.set(if *rust_sound.peek() { Feed::Rust } else { Feed::Pending });
                         } else if matches!(feed(), Feed::Converted(_)) {
                             status.set("The converted stream stopped: the source may have ended".into());
                         }
                     },
                     onvolumechange: move |_| {
+                        if !*picture_ready.peek() { return; }
                         if let Some(v) = video_el() {
                             if muted() != v.muted() {
                                 muted.set(v.muted());
@@ -3291,7 +3515,36 @@ fn LivePlayer(
                     ondoubleclick: move |_| toggle_fullscreen("live-player", expanded),
                 }
                 if show_stats() {
-                    div { class: "stats", "{stats}" }
+                    div { class: "stats",
+                        div { "{stats}" }
+                        button {
+                            class: "diagnostic-share",
+                            onclick: {
+                                let client = diagnostic_client.clone();
+                                let url = diagnostic_url.clone();
+                                move |_| {
+                                    diagnostic_status.set("Sharing…".into());
+                                    let client = client.clone();
+                                    let url = url.clone();
+                                    spawn(async move {
+                                        diagnostic_status.set(match share_diagnostic(&client, &url).await {
+                                            Ok(()) => "Available locally for 10 minutes".into(),
+                                            Err(why) => why.into(),
+                                        });
+                                    });
+                                }
+                            },
+                            "Share for local testing"
+                        }
+                        if !diagnostic_status().is_empty() { div { "{diagnostic_status}" } }
+                    }
+                }
+                if audio_only() {
+                    div { class: "audio-only", role: "status",
+                        span { class: "audio-orb", "♫" }
+                        strong { "Audio only" }
+                        small { "This channel isn't sending a video track." }
+                    }
                 }
                 if !dial().is_empty() { div { class: "channel-dial", "{dial}" } }
                 if number_open() {
@@ -3318,10 +3571,10 @@ fn LivePlayer(
                 } else if silent() {
                     div { class: "sound-note", "No sound: this stream's audio format can't be decoded by your browser" }
                 }
-                if status() != "Live" {
+                if status() != "Live" && status() != "Audio only" {
                     div { class: "hud",
                         div { class: "loading-group",
-                            if status() == "Starting playback…" { i { class: "spinner" } }
+                            if status() == "Starting playback…" || status() == "Waiting for picture…" { i { class: "spinner" } }
                             span { "{status}" }
                         }
                     }
@@ -3338,7 +3591,10 @@ fn LivePlayer(
                         button {
                             class: "ctl",
                             aria_label: "Mute",
-                            onclick: move |_| { muted.set(toggle_mute().unwrap_or(false)); },
+                            onclick: move |_| {
+                                if *picture_ready.peek() { muted.set(toggle_mute().unwrap_or(false)); }
+                                else { muted.set(!muted()); }
+                            },
                             Icon { d: if muted() { MUTED } else { VOLUME } }
                         }
                         input {
@@ -3355,15 +3611,12 @@ fn LivePlayer(
                                 preferences::update(|p| p.volume = level.min(100) as u8);
                                 if let Some(v) = video_el() {
                                     v.set_volume(f64::from(level) / 100.0);
-                                    v.set_muted(level == 0);
+                                    v.set_muted(!*picture_ready.peek() || level == 0);
                                 }
                             }
                         }
                     }
                     button { class: "live-pill", title: "Jump to live", onclick: move |_| { go_live(); if paused() { toggle_play(); } }, "LIVE" }
-                    button { class: "ctl", aria_label: "Previous channel", title: "Previous channel (↑)", onclick: move |_| onchannel.call(ChannelAction::Up), "↑" }
-                    button { class: "ctl", aria_label: "Next channel", title: "Next channel (↓)", onclick: move |_| onchannel.call(ChannelAction::Down), "↓" }
-                    button { class: "ctl", aria_label: "Enter channel number", title: "Enter channel number", onclick: move |_| number_open.set(!number_open()), "123" }
                     span { class: "grow" }
                     button { class: "ctl", aria_label: "Stream info", title: "Stream info (I)", onclick: move |_| show_stats.set(!show_stats()), Icon { d: INFO } }
                     button { class: "ctl", aria_label: "Picture in picture", title: "Picture in picture", onclick: move |_| toggle_pip(video_el()), Icon { d: PIP } }
@@ -3391,8 +3644,9 @@ fn Guide(id: u64, title: String) -> Element {
     let table = use_resource(move || {
         let c = client.clone();
         async move {
+            let now = now_secs();
             match c.epg_table(id).await {
-                Ok(t) if t.iter().any(|e| e.start_ts.is_some()) => Ok(t),
+                Ok(t) if xtream::guide::has_nearby(&t, now) => Ok(t),
                 _ => c.short_epg(id, 8).await,
             }
         }
@@ -3425,51 +3679,58 @@ fn Guide(id: u64, title: String) -> Element {
         None => rsx! { p { class: "dim", "Loading the guide…" } },
         Some(Err(_)) => rsx! { p { class: "dim", "The guide isn't available for this channel." } },
         Some(Ok(t)) => {
-            let mut slots: Vec<(u64, u64, &EpgListing)> = t
-                .iter()
-                .filter_map(|l| {
-                    let (s, e) = (l.start_ts?, l.end_ts?);
-                    (e > s).then_some((s, e, l))
-                })
-                .collect();
-            slots.sort_by_key(|s| s.0);
+            let slots = xtream::guide::normalize(t);
             current = slots
                 .iter()
-                .find(|(s, e, _)| *s <= now && now < *e)
-                .map(|(_, _, l)| l.title.clone());
+                .find(|slot| slot.start <= now && now < slot.end)
+                .map(|slot| slot.listing.title.clone());
             if slots.is_empty() {
                 rsx! { p { class: "dim", "This provider has no guide for the channel." } }
             } else {
                 // From up to eight hours back to a day ahead, on whole hours.
-                let lo = slots[0].0.max(now.saturating_sub(8 * 3600)) / 3600 * 3600;
-                let last = slots.last().map_or(now, |s| s.1);
-                let hi = last.min(now + 24 * 3600).div_ceil(3600) * 3600;
-                let px = |t: u64| t.clamp(lo, hi).saturating_sub(lo) / SECS_PER_PX;
+                let lo = slots[0].start.max(now.saturating_sub(8 * 3600)).min(now) / 3600 * 3600;
+                let last = slots.last().map_or(now, |slot| slot.end);
+                let hi = last.max(now + 3600).min(now + 24 * 3600).div_ceil(3600) * 3600;
+                let scale = xtream::guide::seconds_per_px(&slots, lo, hi);
+                let px = |t: u64| t.clamp(lo, hi).saturating_sub(lo) / scale;
                 let (width, here) = (px(hi), px(now));
-                rsx! {
-                    div {
-                        class: "timeline",
-                        id: "timeline",
-                        div { class: "tl", style: "width:{width}px", "data-now": "{here}",
-                            for hour in (lo..hi).step_by(3600) {
-                                span { class: "tick", key: "{hour}", style: "left:{px(hour)}px", "{clock(hour)}" }
-                            }
-                            for (start, end, l) in slots.into_iter().filter(|(s, e, _)| *e > lo && *s < hi) {
-                                div {
-                                    key: "{start}",
-                                    class: if start <= now && now < end { "block now" } else { "block" },
-                                    style: "left:{px(start)}px;width:{px(end).saturating_sub(px(start)).max(3)}px",
-                                    div { class: "txt",
-                                        time { "{clock(start)} – {clock(end)}" }
-                                        strong { if l.title.is_empty() { "Untitled programme" } else { "{l.title}" } }
-                                        if !l.description.is_empty() { p { "{l.description}" } }
-                                    }
-                                    if start <= now && now < end {
-                                        i { class: "prog", style: "width:{(now - start) * 100 / (end - start)}%" }
+                let visible: Vec<_> = slots
+                    .into_iter()
+                    .filter(|slot| slot.end > lo && slot.start < hi)
+                    .map(|slot| {
+                        let block_width = px(slot.end).saturating_sub(px(slot.start)).max(3);
+                        (slot.start, slot.end, slot.listing, block_width)
+                    })
+                    .collect();
+                if visible.is_empty() {
+                    rsx! { p { class: "dim", "No current guide data for this channel." } }
+                } else {
+                    rsx! {
+                        div {
+                            class: "timeline",
+                            id: "timeline",
+                            div { class: "tl", style: "width:{width}px", "data-now": "{here}",
+                                for hour in (lo..hi).step_by(3600) {
+                                    span { class: "tick", key: "{hour}", style: "left:{px(hour)}px", "{clock(hour)}" }
+                                }
+                                for (start, end, l, block_width) in visible {
+                                    div {
+                                        key: "{start}",
+                                        class: if start <= now && now < end { if block_width < 90 { "block now compact" } else { "block now" } } else if block_width < 90 { "block compact" } else { "block" },
+                                        style: "left:{px(start)}px;width:{block_width}px",
+                                        title: "{clock(start)} – {clock(end)} · {l.title} · {l.description}",
+                                        div { class: "txt",
+                                            time { "{clock(start)} – {clock(end)}" }
+                                            strong { if l.title.is_empty() { "Untitled programme" } else { "{l.title}" } }
+                                            if !l.description.is_empty() { p { "{l.description}" } }
+                                        }
+                                        if start <= now && now < end {
+                                            i { class: "prog", style: "width:{(now - start) * 100 / (end - start)}%" }
+                                        }
                                     }
                                 }
+                                div { class: "now-line", style: "left:{here}px", span { "{clock(now)}" } }
                             }
-                            div { class: "now-line", style: "left:{here}px", span { "{clock(now)}" } }
                         }
                     }
                 }

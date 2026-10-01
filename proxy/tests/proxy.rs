@@ -32,6 +32,55 @@ fn proxied(proxy: u16, target: &str) -> Url {
 }
 
 #[tokio::test]
+async fn local_diagnostic_session_keeps_credentials_out_of_reports() {
+    let upstream = serve(
+        Router::new()
+            .route(
+                "/index.m3u8",
+                get(|| async { "#EXTM3U\n#EXTINF:4,\nsegment.ts\n" }),
+            )
+            .route(
+                "/segment.ts",
+                get(|| async {
+                    let mut bytes = vec![0_u8; 188 * 4];
+                    for packet in bytes.as_chunks_mut::<188>().0 {
+                        packet[0] = 0x47;
+                    }
+                    bytes
+                }),
+            ),
+    )
+    .await;
+    let proxy = serve(router(AppState::new())).await;
+    assert_eq!(sign_in(proxy, "127.0.0.1").await, 204);
+    let http = reqwest::Client::new();
+    let base = format!("http://127.0.0.1:{proxy}/diagnostics");
+    let create = http.post(&base).header("content-type", "application/json").body(json!({
+        "url": format!("http://user:very-secret@127.0.0.1:{upstream}/index.m3u8?token=hidden")
+    }).to_string()).send().await.unwrap();
+    assert_eq!(create.status(), 200);
+    let created: Value = serde_json::from_str(&create.text().await.unwrap()).unwrap();
+    let id = created["id"].as_str().unwrap();
+    assert_eq!(id.len(), 32);
+    let listed = http.get(&base).send().await.unwrap().text().await.unwrap();
+    assert!(listed.contains(id));
+    assert!(!listed.contains("very-secret"));
+    assert!(!listed.contains("hidden"));
+    let checked = http
+        .post(format!("{base}/{id}/probe"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(checked.contains("mpeg_ts"));
+    assert!(checked.contains("\"playlist_hops\":1"));
+    assert!(!checked.contains("very-secret"));
+    assert!(!checked.contains("hidden"));
+}
+
+#[tokio::test]
 async fn range_passthrough_and_private_addresses() {
     let file = std::env::temp_dir().join(format!("riptv-test-{}.bin", std::process::id()));
     std::fs::write(&file, (0..=255u8).collect::<Vec<_>>()).unwrap();
@@ -413,6 +462,25 @@ async fn compat_mode_turns_hevc_and_ac3_into_h264_and_aac() {
         eprintln!("ffmpeg isn't installed: skipping");
         return;
     }
+    let audio_only = std::process::Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=1",
+            "-c:a",
+            "aac",
+            "-f",
+            "mpegts",
+            "pipe:1",
+        ])
+        .output()
+        .unwrap();
+    assert!(audio_only.status.success());
+    let radio = audio_only.stdout;
     let upstream = serve(
         Router::new()
             .route(
@@ -430,6 +498,13 @@ async fn compat_mode_turns_hevc_and_ac3_into_h264_and_aac() {
             .route(
                 "/i.ts",
                 get(|| async { ([("content-type", "video/mp2t")], INTERLACED) }),
+            )
+            .route(
+                "/radio.ts",
+                get(move || {
+                    let audio = radio.clone();
+                    async move { ([("content-type", "video/mp2t")], audio) }
+                }),
             ),
     )
     .await;
@@ -459,6 +534,10 @@ async fn compat_mode_turns_hevc_and_ac3_into_h264_and_aac() {
         ),
         (reqwest::StatusCode::NO_CONTENT, "copy")
     );
+    assert_eq!(h264.headers()["x-riptv-has-video"], "1");
+    let radio_check = ask("/compat/check", "radio.ts", "").await.unwrap();
+    assert_eq!(radio_check.status(), 204);
+    assert_eq!(radio_check.headers()["x-riptv-has-video"], "0");
 
     for (name, mode) in [("hevc.ts", "transcode"), ("h264.ts", "copy")] {
         let res = ask("/compat", name, &format!("&video={mode}"))
@@ -512,6 +591,32 @@ async fn compat_mode_turns_hevc_and_ac3_into_h264_and_aac() {
         .unwrap()
         .via_proxy(&format!("http://127.0.0.1:{proxy}/proxy"))
         .unwrap();
+    let forced = c
+        .convert_video(&Url::parse(&target("h264.ts")).unwrap())
+        .await
+        .unwrap();
+    assert!(
+        forced
+            .at(0)
+            .query_pairs()
+            .any(|(key, value)| key == "video" && value == "transcode")
+    );
+    let (codecs, frames) = probe_bytes(
+        &client
+            .get(forced.at(0))
+            .send()
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap(),
+        "forced",
+    );
+    assert!(codecs.contains(&"h264".to_string()) && frames >= 90);
+    assert!(matches!(
+        c.convert_video(&Url::parse(&target("radio.ts")).unwrap()).await,
+        Err(xtream::Error::Proxy(why)) if why.contains("no video track")
+    ));
     let converted = c.convert(&c.live_url(0, "m3u8")).await;
     // (This server has no /live/u/p/0.ts, so ffprobe fails: the reason comes back.)
     assert!(
