@@ -6,8 +6,9 @@ Download your app below, then open it. Everything is included.
 
 Your browser opens automatically. No Rust or FFmpeg setup.
 
-This update fixes seeking in movies and TV episodes, puts pinned categories first,
-and adds update notices in the app and terminal. Windows source setup is fixed too.
+This update keeps sound in sync with the picture when you resume or skip around in a
+movie or TV episode, and adds **Quit** to the account menu (under **Check for updates**)
+to close RIPTV without the system monitor.
 
 Apps are unsigned, so your computer may show a security warning.
 The checksums and FFmpeg source download are for verification, not for running the app.
