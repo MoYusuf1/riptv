@@ -191,7 +191,7 @@ fn flex_id<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<u64, D::Error
     flex_u64(d)?.ok_or_else(|| serde::de::Error::custom("expected a numeric id"))
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Category {
     #[serde(deserialize_with = "flex_id")]
     pub category_id: u64,

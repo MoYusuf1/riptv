@@ -12,16 +12,34 @@ pub(crate) const CSS: &str = r#"
 @media(hover:none){.category-pin{opacity:1}}
 "#;
 
+/// Compare immutable catalogue snapshots by identity, not by walking thousands of titles.
+#[derive(Clone)]
+pub(crate) struct CategoryData {
+    pub list: Rc<Vec<xtream::Category>>,
+    pub library: Option<Rc<Library>>,
+}
+
+impl PartialEq for CategoryData {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.list, &other.list)
+            && match (&self.library, &other.library) {
+                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
 #[component]
 pub(crate) fn CategoryList(
-    list: Rc<Vec<xtream::Category>>,
-    library: Option<Rc<Library>>,
+    data: CategoryData,
     selected: Option<u64>,
     pins: Vec<u64>,
     query: Signal<String>,
     onselect: EventHandler<Option<u64>>,
     onpin: EventHandler<u64>,
 ) -> Element {
+    let CategoryData { list, library } = data;
     let mut query = query;
     let q = query().to_lowercase();
     let matches =

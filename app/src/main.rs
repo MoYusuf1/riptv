@@ -1340,16 +1340,14 @@ fn Browse() -> Element {
                     .filter(|l| l.kind == kind());
                 rsx! {
                     categories::CategoryList {
-                        list: list.clone(), library: lib.cloned(), selected: category(),
+                        data: categories::CategoryData { list: list.clone(), library: lib.cloned() }, selected: category(),
                         pins: pinned_categories()[kind() as usize].clone(), query: category_search,
                         onselect: move |id| select(id),
                         onpin: move |id| {
-                            preferences::update(|p| {
-                                let pins = &mut p.pinned_categories[kind() as usize];
-                                if pins.contains(&id) { pins.retain(|pin| *pin != id); }
-                                else if pins.len() < 100 { pins.push(id); }
-                            });
-                            pinned_categories.set(preferences::load().pinned_categories);
+                            let mut pins = pinned_categories();
+                            preferences::toggle_pin(&mut pins[kind() as usize], id);
+                            pinned_categories.set(pins.clone());
+                            preferences::update(|p| p.pinned_categories = pins);
                         }
                     }
                 }
@@ -1536,11 +1534,6 @@ fn Browse() -> Element {
         }
     });
 
-    let page_name = match kind() {
-        Kind::Live => "Live TV",
-        Kind::Movies => "Movies",
-        Kind::Series => "Series",
-    };
     let category_name = match &*cats.read() {
         Some(Ok((k, list))) if *k == kind() => category()
             .and_then(|id| list.iter().find(|c| c.category_id == id))
