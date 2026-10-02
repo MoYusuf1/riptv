@@ -40,10 +40,10 @@ pub fn start(
     video.load();
     spawn_local(async move {
         let result = pump(&video, &media, &src, &signal).await;
-        if !signal.aborted() {
-            if let Err(why) = result {
-                on_error(why);
-            }
+        if !signal.aborted()
+            && let Err(why) = result
+        {
+            on_error(why);
         }
     });
     Ok(Stream { abort, object })
