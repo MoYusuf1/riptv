@@ -1,27 +1,15 @@
-Download the archive for your computer below. Extract **the entire folder** before starting.
+Download your app below, then open it. Everything is included.
 
-- **Windows x64:** open `riptv.exe`.
-- **Linux x64:** run `./riptv` in the extracted folder (Ubuntu 22.04+ / glibc 2.35+).
-- **Mac, Apple Silicon:** choose `macos-arm64`, then open `RIPTV.command` (macOS 15+).
-- **Mac, Intel:** choose `macos-x64`, then open `RIPTV.command` (macOS 15+).
+- **Windows:** `RIPTV-Windows.exe`
+- **Linux:** `RIPTV-Linux` — allow the file to run first if asked.
+- **Mac:** choose Apple Silicon or Intel, unzip, then open `RIPTV.app`.
 
-Your browser opens automatically. Keep the terminal window open while watching;
-press **Ctrl+C** to stop. **No Rust, Git, or separate FFmpeg installation needed.**
+Your browser opens automatically. No Rust or FFmpeg setup.
 
-### What's new
+This update fixes sticky guide previews, tidies category pins, simplifies sorting,
+and adds a Back button to the profile form.
 
-- Hover/focus a live channel to preview its current programme from the provider guide.
-- A Rust-logo search bar, separate section navigation, a new TV Shows icon, and softer scrollbars.
-- Per-profile pinned categories and a roomier, adaptive programme guide.
-- Missing or placeholder guide data gives the space back to the player.
-- More resilient live playback: a real buffer, safe retries, faster recovery, and better diagnostics.
-- Download-first instructions and native, tested application bundles.
+Apps are unsigned, so your computer may show a security warning.
+The checksums and FFmpeg source download are for verification, not for running the app.
 
-Every platform download includes the web app, FFmpeg/ffprobe, third-party notices,
-and checksums. `ffmpeg-sources` contains corresponding media-tool sources, not the
-application to run. GitHub's “Source code” assets are for developers.
-
-**Security:** builds are unsigned/not notarized and may trigger Windows/macOS
-warnings. Verify the repository and download checksums before trusting a download.
-
-[Download help](https://github.com/MoYusuf1/riptv/blob/main/docs/downloads.md)
+[Help](https://github.com/MoYusuf1/riptv/blob/main/docs/downloads.md)

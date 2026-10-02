@@ -103,7 +103,8 @@ svg{width:1.1rem;height:1.1rem}
 .profile-form .primary{margin-top:.5rem;text-align:center;padding:.82rem;border-radius:12px;background:var(--fill);color:#fff;font-weight:600;transition:filter .2s,transform .15s var(--ease)}
 .profile-form .primary:hover{filter:brightness(1.1)}.profile-form .primary:active{transform:scale(.98)}.profile-form .primary:disabled{opacity:.6}
 .row-actions{display:flex;justify-content:center;flex-wrap:wrap;gap:.3rem}
-.profile-form .note{text-align:center;color:var(--faint);font-size:.72rem}
+.profile-form-heading{position:relative;display:flex;align-items:center;justify-content:center;min-height:2.7rem;margin-bottom:.5rem}
+.profile-form-heading h1{margin:0}.profile-back{position:absolute;left:0;border:1px solid var(--line);background:rgba(255,255,255,.035)}
 @media(max-width:520px){.profiles{gap:1.4rem 1rem}.profile{width:6.2rem}.avatar{width:5.5rem;font-size:2.1rem}}
 "#,
     // Top chrome: logo, search, account. Section navigation lives in navigation.rs.
@@ -858,12 +859,9 @@ fn RustMark() -> Element {
 /// How a section's list is ordered. The first entry of `Sort::options` is each section's default.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Sort {
-    Provider,
-    Newest,
-    Oldest,
-    AZ,
-    ZA,
-    Rating,
+    // Preserve the stored IDs used by earlier versions.
+    AZ = 3,
+    ZA = 4,
 }
 
 impl Sort {
@@ -881,33 +879,14 @@ impl Sort {
 
     fn label(self) -> &'static str {
         match self {
-            Sort::Provider => "Provider order",
-            Sort::Newest => "Newest added",
-            Sort::Oldest => "Oldest added",
-            Sort::AZ => "A to Z",
-            Sort::ZA => "Z to A",
-            Sort::Rating => "Top rated",
+            Sort::AZ => "Ascending",
+            Sort::ZA => "Descending",
         }
     }
 
-    fn options(kind: Kind) -> &'static [Sort] {
-        match kind {
-            Kind::Live => &[Sort::Provider, Sort::AZ, Sort::ZA],
-            _ => &[Sort::Newest, Sort::Oldest, Sort::AZ, Sort::ZA, Sort::Rating],
-        }
+    fn options(_kind: Kind) -> &'static [Sort] {
+        &[Sort::AZ, Sort::ZA]
     }
-}
-
-/// "7.3" as 73, "8" as 80, junk as 0: enough to rank by without parsing floats.
-fn tenths(rating: &Option<String>) -> u32 {
-    let r = rating.as_deref().unwrap_or("").trim();
-    let (whole, frac) = r.split_once('.').unwrap_or((r, ""));
-    let digit = frac
-        .bytes()
-        .next()
-        .filter(u8::is_ascii_digit)
-        .map_or(0, |b| u32::from(b - b'0'));
-    whole.parse::<u32>().unwrap_or(0) * 10 + digit
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -959,37 +938,16 @@ impl Library {
     /// Positions in the list, in the order `sort` asks for. The list itself stays as the provider
     /// sent it; sorting 30,000 titles by name takes a few milliseconds, once per change of sort.
     fn order(&self, sort: Sort) -> Vec<u32> {
-        // Build only the index plus the cached keys for the requested sort. The previous code
-        // allocated three full-length arrays even for provider order and alphabetical sorts.
+        // Sort an index, not the catalogue; normalize each title only once.
         let mut order: Vec<u32> = (0..self.len() as u32).collect();
         let name = |i: u32| match &self.items {
             Items::Live(v) => v[i as usize].name.as_str(),
             Items::Movies(v) => v[i as usize].name.as_str(),
             Items::Series(v) => v[i as usize].name.as_str(),
         };
-        // Every numeric sort is "smallest key first"; titles with no date go last either way.
-        let number = |i: u32| -> u64 {
-            let i = i as usize;
-            let (date, rating) = match &self.items {
-                Items::Live(_) => (None, 0),
-                Items::Movies(v) => (v[i].added, tenths(&v[i].rating)),
-                Items::Series(v) => (v[i].last_modified, tenths(&v[i].rating)),
-            };
-            match sort {
-                Sort::Newest => date.map_or(u64::MAX, |d| u64::MAX - d),
-                Sort::Oldest => date.unwrap_or(u64::MAX),
-                _ => u64::from(u32::MAX - rating),
-            }
-        };
-        match sort {
-            Sort::Provider => {}
-            Sort::AZ | Sort::ZA => {
-                order.sort_by_cached_key(|&i| name(i).to_lowercase());
-                if sort == Sort::ZA {
-                    order.reverse();
-                }
-            }
-            _ => order.sort_by_cached_key(|&i| number(i)),
+        order.sort_by_cached_key(|&i| name(i).to_lowercase());
+        if sort == Sort::ZA {
+            order.reverse();
         }
         order
     }
@@ -1792,8 +1750,9 @@ fn ChannelRow(row: Row, active: bool, onpick: EventHandler<Row>) -> Element {
             class: if active { "row on" } else { "row" },
             aria_describedby: if (pointer() || focused()) && !escaped() { Some(format!("{anchor}-guide")) } else { None },
             onmouseenter: move |_| { escaped.set(false); pointer.set(true); },
-            onmouseleave: move |_| pointer.set(false),
-            onfocus: move |_| { escaped.set(false); focused.set(true); },
+            onmouseleave: move |_| { pointer.set(false); focused.set(false); },
+            onmousedown: move |_| focused.set(false),
+            onfocus: move |_| { escaped.set(false); focused.set(!pointer()); },
             onblur: move |_| focused.set(false),
             onkeydown: move |e| { if e.key() == Key::Escape { escaped.set(true); } },
             onclick: move |_| onpick.call(r.clone()),
@@ -1842,8 +1801,9 @@ fn Card(row: Row, onpick: EventHandler<Row>) -> Element {
             title: if id.is_none() { Some(row.title.clone()) } else { None },
             aria_describedby: if id.is_some() && (pointer() || focused()) && !escaped() { Some(format!("{anchor}-guide")) } else { None },
             onmouseenter: move |_| { escaped.set(false); pointer.set(true); },
-            onmouseleave: move |_| pointer.set(false),
-            onfocus: move |_| { escaped.set(false); focused.set(true); },
+            onmouseleave: move |_| { pointer.set(false); focused.set(false); },
+            onmousedown: move |_| focused.set(false),
+            onfocus: move |_| { escaped.set(false); focused.set(!pointer()); },
             onblur: move |_| focused.set(false),
             onkeydown: move |e| { if e.key() == Key::Escape { escaped.set(true); } },
             onclick: move |_| onpick.call(r.clone()),

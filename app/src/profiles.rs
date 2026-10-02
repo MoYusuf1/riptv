@@ -144,16 +144,6 @@ pub fn Login() -> Element {
             }
         });
     };
-    let demo = Profile {
-        id: "demo".into(),
-        name: "Demo".into(),
-        source: Source::Xtream,
-        url: "http://127.0.0.1:8081".into(),
-        user: "demo".into(),
-        pass: "demo".into(),
-        color: 0,
-    };
-
     let free = Profile {
         id: "free".into(),
         name: "Public TV".into(),
@@ -196,7 +186,6 @@ pub fn Login() -> Element {
                     screen.set(Screen::Choose);
                     profiles.set(list);
                 },
-                ondemo: { let demo = demo.clone(); move |_| connect(demo.clone(), false) },
             }
         };
     }
@@ -275,7 +264,6 @@ fn ProfileForm(
     onsubmit: EventHandler<Profile>,
     oncancel: EventHandler<()>,
     ondelete: EventHandler<String>,
-    ondemo: EventHandler<()>,
 ) -> Element {
     let start = editing.clone();
     let mut source = use_signal(|| start.as_ref().map_or(Source::Xtream, |p| p.source));
@@ -320,7 +308,11 @@ fn ProfileForm(
                         color: color(),
                     });
                 },
-                h1 { if is_new { "Add profile" } else { "Edit profile" } }
+                div { class: "profile-form-heading",
+                    button { r#type: "button", class: "icon-btn profile-back", aria_label: "Back", title: "Back", disabled: busy,
+                        onclick: move |_| oncancel.call(()), Icon { d: crate::BACK } }
+                    h1 { if is_new { "Add profile" } else { "Edit profile" } }
+                }
                 // Tap to change its colour.
                 button {
                     r#type: "button",
@@ -344,9 +336,8 @@ fn ProfileForm(
                 }
                 if let Some(msg) = status { p { class: "err", "{msg}" } }
                 button { r#type: "submit", class: "primary", disabled: busy, if busy { "Connecting…" } else if is_new { "Connect" } else { "Save" } }
-                div { class: "row-actions",
-                    button { r#type: "button", class: "text-btn", disabled: busy, onclick: move |_| oncancel.call(()), "Cancel" }
-                    if !is_new {
+                if !is_new {
+                    div { class: "row-actions",
                         button {
                             r#type: "button",
                             class: "text-btn danger",
@@ -356,11 +347,7 @@ fn ProfileForm(
                             if confirm() { "Delete?" } else { "Delete" }
                         }
                     }
-                    if is_new && source() == Source::Xtream {
-                        button { r#type: "button", class: "text-btn", disabled: busy, onclick: move |_| ondemo.call(()), "Demo" }
-                    }
                 }
-                small { class: "note", "Saved on this device, password included." }
             }
         }
     }

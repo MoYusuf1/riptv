@@ -2,13 +2,13 @@
 use super::*;
 
 pub(crate) const CSS: &str = r#"
-.category-item{display:flex;align-items:center;border-radius:10px}.category-item:hover{background:var(--row)}.category-item.selected{background:var(--soft)}
-.category-item .cat{flex:1;min-width:0;padding-right:.2rem}.category-item .cat:hover,.category-item .cat.on{background:transparent}
-.category-pin{display:grid;place-items:center;flex:none;width:1.8rem;height:1.8rem;margin-right:.2rem;border-radius:8px;color:var(--dim);opacity:0;transition:opacity .15s,background .15s}
+.category-item{position:relative;display:flex;align-items:center;border-radius:10px}.category-item:hover{background:var(--row)}.category-item.selected{background:var(--soft)}
+.category-item.is-pinned:not(.selected){background:color-mix(in srgb,var(--accent) 5%,transparent)}
+.category-item .cat{flex:1;min-width:0;padding-left:2.1rem}.category-item .cat:hover,.category-item .cat.on{background:transparent}
+.category-pin{position:absolute;left:.3rem;display:grid;place-items:center;width:1.5rem;height:1.6rem;border-radius:7px;color:var(--dim);opacity:0;transition:opacity .15s,background .15s}
 .category-pin svg{width:.9rem;height:.9rem}.category-pin:hover{background:rgba(255,255,255,.08);color:var(--text)}
 .category-pin.pinned{color:var(--accent);opacity:1}.category-item:hover .category-pin,.category-item:focus-within .category-pin{opacity:1}
-.category-label{display:flex;align-items:center;gap:.4rem;margin:1rem .7rem .35rem;color:var(--faint);font-size:.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.09em}
-.category-label svg{width:.75rem;height:.75rem;color:var(--accent)}.category-note{padding:.5rem .7rem;color:var(--dim);font-size:.8rem}
+.category-all{padding-left:2.1rem}.category-note{padding:.5rem .7rem;color:var(--dim);font-size:.8rem}
 @media(hover:none){.category-pin{opacity:1}}
 "#;
 
@@ -51,16 +51,6 @@ pub(crate) fn CategoryList(
             .copied()
             .unwrap_or(0)
     };
-    let pinned: Vec<_> = list
-        .iter()
-        .filter(|c| pins.contains(&c.category_id))
-        .filter(matches)
-        .collect();
-    let others: Vec<_> = list
-        .iter()
-        .filter(|c| !pins.contains(&c.category_id))
-        .filter(matches)
-        .collect();
     let total = library.as_ref().map_or(0, |l| l.len());
     rsx! {
         input {
@@ -68,20 +58,13 @@ pub(crate) fn CategoryList(
             value: "{query}", oninput: move |e| query.set(e.value())
         }
         button {
-            class: if selected.is_none() { "cat on" } else { "cat" },
+            class: if selected.is_none() { "cat category-all on" } else { "cat category-all" },
             onclick: move |_| onselect.call(None), span { "All" } small { "{thousands(total)}" }
         }
-        if !pinned.is_empty() {
-            h2 { class: "category-label", Icon { d: PIN } "Pinned" }
-            for c in pinned {
-                CategoryItem { key: "pinned-{c.category_id}", category: c.clone(), count: count(c.category_id),
-                    selected: selected == Some(c.category_id), pinned: true, onselect, onpin }
-            }
-            if !others.is_empty() { h2 { class: "category-label", "Categories" } }
-        }
-        for c in others {
+        // Stable keys and order: toggling a pin never moves a row or its label.
+        for c in list.iter().filter(matches) {
             CategoryItem { key: "category-{c.category_id}", category: c.clone(), count: count(c.category_id),
-                selected: selected == Some(c.category_id), pinned: false, onselect, onpin }
+                selected: selected == Some(c.category_id), pinned: pins.contains(&c.category_id), onselect, onpin }
         }
         if !q.is_empty() && !list.iter().any(|c| xtream::contains_lowercase(&c.category_name, &q)) {
             p { class: "category-note", "No matching categories" }
@@ -101,7 +84,7 @@ fn CategoryItem(
     let id = category.category_id;
     let action = if pinned { "Unpin" } else { "Pin" };
     rsx! {
-        div { class: if selected { "category-item selected" } else { "category-item" },
+        div { class: format!("category-item{}{}", if selected { " selected" } else { "" }, if pinned { " is-pinned" } else { "" }),
             button {
                 class: if selected { "cat on" } else { "cat" },
                 title: "{category.category_name}", onclick: move |_| onselect.call(Some(id)),

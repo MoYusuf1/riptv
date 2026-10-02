@@ -1009,7 +1009,7 @@ fn Guide(id: u64, playing: bool) -> Element {
                                         title: "{clock(start)} – {clock(end)} · {l.title} · {l.description}",
                                         div { class: "txt",
                                             time { "{clock(start)} – {clock(end)}" }
-                                            strong { if l.title.is_empty() { "Untitled programme" } else { "{l.title}" } }
+                                            strong { if l.title.is_empty() { "Untitled program" } else { "{l.title}" } }
                                             if !l.description.is_empty() { p { "{l.description}" } }
                                         }
                                         if start <= now && now < end {
@@ -1028,7 +1028,7 @@ fn Guide(id: u64, playing: bool) -> Element {
 
     rsx! {
         section { class: "guide",
-            div { class: "guide-heading", strong { "Programme guide" } small { "Local time · {clock(now)}" } }
+            div { class: "guide-heading", strong { "Program guide" } small { "Local time · {clock(now)}" } }
             {body}
         }
     }

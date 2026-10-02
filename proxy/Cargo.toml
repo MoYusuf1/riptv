@@ -1,6 +1,6 @@
 [package]
 name = "riptv"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Localhost pass-through proxy that also serves the RIPTV web app"
 
@@ -11,7 +11,7 @@ serde_json = "1.0.151"
 reqwest = { version = "0.13.5", features = ["rustls", "stream"], default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 futures-core = "0.3.34"
-tokio = { version = "1.53.1", features = ["macros", "rt", "net", "process", "sync", "time", "io-util"] }
+tokio = { version = "1.53.1", features = ["macros", "rt", "net", "process", "sync", "time", "io-util", "signal"] }
 tokio-util = { version = "0.7.19", default-features = false, features = ["io"] }
 tower-http = { version = "0.7.1", features = ["fs", "set-header"] }
 # Shared stream sniffing (`xtream::sniff`), the same code the app decides with.

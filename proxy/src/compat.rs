@@ -35,7 +35,7 @@ use tokio_util::io::ReaderStream;
 
 use crate::{AppState, FALLBACK_UA, diagnostics, from_app, refusal, url_ok};
 
-pub(crate) const MISSING: &str = "ffmpeg isn't installed, and this stream needs it. Extract the complete RIPTV download, or install FFmpeg (see the setup guide).";
+pub(crate) const MISSING: &str = "This stream needs FFmpeg. Use the RIPTV app download, which includes it, or install FFmpeg for a source build.";
 
 /// Prefer the release's bundled tools without changing PATH or the working directory.
 pub(crate) fn media_tool(name: &str) -> std::path::PathBuf {
@@ -44,6 +44,9 @@ pub(crate) fn media_tool(name: &str) -> std::path::PathBuf {
     } else {
         name.to_owned()
     };
+    if let Some(root) = crate::bundle::root() {
+        return root.join("bin").join(&filename);
+    }
     if let Some(path) = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|p| p.join("bin").join(filename)))

@@ -1,29 +1,19 @@
 # RIPTV
 
-Watch live TV, movies, and TV shows in your browser using your IPTV account or
-an M3U playlist. RIPTV runs on your computer; no hosting or GitHub account needed.
+Watch TV, movies, and shows using your IPTV account or playlist.
 
-## Start watching
+## Download and open
 
-1. [Download RIPTV for your computer](https://github.com/MoYusuf1/riptv/releases/latest).
-   Choose **Windows x64**, **Linux x64**, or **macOS** (Apple Silicon or Intel).
-2. Extract the **entire folder**. On Windows, open `riptv.exe`; on Mac, open
-   `RIPTV.command`; on Linux, run `./riptv` in that folder.
-3. Your browser opens automatically. Choose **Public TV** to try free channels,
-   or **Add** to connect your account or playlist.
+[Windows](https://github.com/MoYusuf1/riptv/releases/latest/download/RIPTV-Windows.exe) ·
+[Linux](https://github.com/MoYusuf1/riptv/releases/latest/download/RIPTV-Linux) ·
+[Mac — Apple Silicon](https://github.com/MoYusuf1/riptv/releases/latest/download/RIPTV-Mac-AppleSilicon.zip) ·
+[Mac — Intel](https://github.com/MoYusuf1/riptv/releases/latest/download/RIPTV-Mac-Intel.zip)
 
-Keep the terminal window open while watching. Press **Ctrl+C** to stop.
-Rust and a separate FFmpeg installation are **not required** for these downloads.
+Open the download. On Mac, unzip it and open **RIPTV.app**.
+On Linux, you may need to allow the file to run first.
+Your browser opens automatically. Choose **Public TV** or add your account.
 
-## Good to know
+Everything is included. No Rust, Git, or FFmpeg setup.
+Unsigned apps may show a security warning. Profiles and passwords are saved in your browser.
 
-- Hover over a live channel to see what its provider's guide says is on now.
-- Pin favourite categories with the pin button beside their names.
-- RIPTV is a player, not a TV subscription. Some channels may be offline,
-  restricted to your region, or slow at the provider.
-- Profiles and passwords are saved in your browser. Use a trusted computer.
-- To update, stop RIPTV and download the new release. Your browser keeps your profiles.
-- Builds are unsigned; Windows or macOS may show a security warning.
-
-[Download help](docs/downloads.md) · [Build from source](docs/setup.md) ·
-[Features and troubleshooting](docs/reference.md)
+[Help](docs/downloads.md) · [Build from source](docs/setup.md)

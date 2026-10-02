@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Build a portable release from already-compiled server and web assets. Stdlib only."""
+"""Build a single-file app with its web app and media tools embedded. Stdlib only."""
 import argparse
 import hashlib
 import json
 import os
+import plistlib
+import re
 from pathlib import Path
 import shutil
 import subprocess
-import tarfile
 import tempfile
 import urllib.request
-import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = json.loads((ROOT / "scripts/ffmpeg.json").read_text())
@@ -56,15 +56,26 @@ def package(platform, version, server, web, output, target):
     suffix = ".exe" if platform.startswith("windows") else ""
     if not server.is_file() or not (web / "index.html").is_file():
         raise RuntimeError("Build the native server and web app before packaging")
-    if subprocess.check_output([str(server), "--version"], text=True).strip() != f"RIPTV {version}":
-        raise RuntimeError("Package version does not match the executable")
     output.mkdir(parents=True, exist_ok=True)
-    stem = f"riptv-{version}-{platform}"
+    filename = {"windows-x64": "RIPTV-Windows.exe", "linux-x64": "RIPTV-Linux",
+                "macos-arm64": "RIPTV-Mac-AppleSilicon.zip", "macos-x64": "RIPTV-Mac-Intel.zip"}[platform]
     with tempfile.TemporaryDirectory(prefix="riptv-package-") as temporary:
-        bundle = Path(temporary) / stem
+        bundle = Path(temporary) / "resources"
         bundle.mkdir()
-        shutil.copy2(server, bundle / f"riptv{suffix}")
         shutil.copytree(web, bundle / "web")
+        # Local builds retain old hashed assets; embed only the current app version.
+        html = (bundle / "web/index.html").read_text()
+        current_js = re.findall(r'src="([^"]*/assets/app-[^"]+\.js)"', html)
+        keep = {Path(p).name for p in current_js}
+        for name in list(keep):
+            js = (bundle / "web/assets" / name).read_text()
+            keep.update(Path(p).name for p in re.findall(r'["\x27](/[^"\x27]+\.wasm)["\x27]', js))
+        if not current_js or not any(p.endswith(".wasm") for p in keep):
+            raise RuntimeError("Missing current JavaScript or WebAssembly")
+        for pattern in ("app-*.js", "app_bg-*.wasm"):
+            for path in (bundle / "web/assets").glob(pattern):
+                if path.name not in keep:
+                    path.unlink()
         (bundle / "bin").mkdir()
         for asset, digest in MANIFEST["assets"][platform].items():
             name = "ffprobe" if asset.startswith("ffprobe") else "ffmpeg"
@@ -73,52 +84,50 @@ def package(platform, version, server, web, output, target):
             download(url, path, digest)
             path.chmod(0o755)
             subprocess.run([str(path), "-version"], check=True, stdout=subprocess.DEVNULL)
-        (bundle / f"riptv{suffix}").chmod(0o755)
+            if platform.startswith("macos"):
+                subprocess.run(["codesign", "--force", "--sign", "-", str(path)], check=True)
         notices(bundle / "licenses", target)
         shutil.copytree(ROOT / "target/release-sources/licenses", bundle / "licenses/media")
         shutil.copy2(ROOT / "docs/third-party.md", bundle / "licenses/FFmpeg-NOTICE.md")
         shutil.copy2(ROOT / "scripts/ffmpeg.json", bundle / "licenses/ffmpeg-downloads.json")
         shutil.copy2(ROOT / "target/release-sources/COPYING.GPLv3", bundle / "licenses/COPYING.GPLv3")
-        instruction = "Double-click riptv.exe." if suffix else "Run ./riptv in this folder."
-        if platform.startswith("macos"):
-            launcher = bundle / "RIPTV.command"
-            launcher.write_text('#!/bin/sh\ncd "$(dirname "$0")"\nexec ./riptv "$@"\n')
-            launcher.chmod(0o755)
-            instruction = "Double-click RIPTV.command."
-        (bundle / "START-HERE.txt").write_text(
-            f"RIPTV {version}\n\nExtract the entire folder first. {instruction}\n"
-            "Your browser opens automatically at http://127.0.0.1:3000.\n"
-            "Keep the terminal window open while watching; press Ctrl+C to stop.\n"
-            "Choose Public TV to try free channels, or Add your IPTV account/playlist.\n\n"
-            "Rust, Git and a separate FFmpeg installation are NOT needed.\n"
-            "Keep bin/ and web/ alongside riptv. Do not run inside the archive.\n"
-            "Profiles are saved in your browser; use a trusted device.\n"
-            "Unsigned builds may trigger Windows/macOS security warnings. Verify the\n"
-            "download came from MoYusuf1/riptv Releases before choosing to allow it.\n\n"
-            "Help: https://github.com/MoYusuf1/riptv/blob/main/docs/downloads.md\n"
-            "FFmpeg licenses: licenses/. Corresponding source: the release's\n"
-            "ffmpeg-sources archive. RIPTV source: the release tag on GitHub.\n")
-        # Ad-hoc signing lets macOS validate executable integrity; it is NOT notarization.
-        if platform.startswith("macos"):
-            for binary in [bundle / "riptv", bundle / "bin/ffmpeg", bundle / "bin/ffprobe"]:
-                subprocess.run(["codesign", "--force", "--sign", "-", str(binary)], check=True)
+        shutil.copytree(bundle / "licenses", bundle / "web/licenses")
         hashes = []
         for path in sorted(bundle.rglob("*")):
             if path.is_file():
                 hashes.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(bundle).as_posix()}")
         (bundle / "SHA256SUMS.txt").write_text("\n".join(hashes) + "\n")
-        if suffix:
-            archive = output / (stem + ".zip")
-            # Build tools can timestamp deterministic assets at the Unix epoch.
-            # ZIP starts at 1980; clamp metadata without changing file contents.
-            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as z:
-                for path in sorted(bundle.rglob("*")):
-                    if path.is_file():
-                        z.write(path, path.relative_to(bundle.parent))
+        # Keep native test tools outside the published downloads.
+        tools = ROOT / "target/test-tools" / platform / "bin"
+        tools.mkdir(parents=True, exist_ok=True)
+        for path in (bundle / "bin").iterdir():
+            shutil.copy2(path, tools / path.name)
+        env = os.environ.copy()
+        env["IPTV_BUNDLE_DIR"] = str(bundle)
+        subprocess.run(["cargo", "build", "--release", "--locked", "-p", "riptv", "--target", target],
+                       cwd=ROOT, env=env, check=True)
+        server = ROOT / "target" / target / "release" / ("riptv" + suffix)
+        if subprocess.check_output([str(server), "--version"], text=True).strip() != f"RIPTV {version}":
+            raise RuntimeError("Package version does not match the executable")
+        if platform.startswith("macos"):
+            app = Path(temporary) / "RIPTV.app"
+            binary = app / "Contents/MacOS/riptv"
+            binary.parent.mkdir(parents=True)
+            shutil.copy2(server, binary)
+            binary.chmod(0o755)
+            with (app / "Contents/Info.plist").open("wb") as info:
+                plistlib.dump({"CFBundleExecutable": "riptv", "CFBundleIdentifier": "io.github.moyusuf1.riptv",
+                              "CFBundleName": "RIPTV", "CFBundlePackageType": "APPL",
+                              "CFBundleShortVersionString": version, "CFBundleVersion": version,
+                              "LSMinimumSystemVersion": "15.0"}, info)
+            # Integrity signing only; these builds are still not Apple-notarized.
+            subprocess.run(["codesign", "--force", "--sign", "-", str(app)], check=True)
+            archive = output / filename
+            subprocess.run(["ditto", "-c", "-k", "--keepParent", str(app), str(archive)], check=True)
         else:
-            archive = output / (stem + ".tar.gz")
-            with tarfile.open(archive, "w:gz") as tar:
-                tar.add(bundle, arcname=stem)
+            archive = output / filename
+            shutil.copy2(server, archive)
+            archive.chmod(0o755)
     print(archive)
     return archive
 

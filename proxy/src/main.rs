@@ -43,6 +43,25 @@ fn open_browser(url: &str) {
     }
 }
 
+async fn shutdown() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        if let Ok(mut terminate) = signal(SignalKind::terminate()) {
+            tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate.recv() => {} }
+            return;
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(mut close) = tokio::signal::windows::ctrl_close() {
+            tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = close.recv() => {} }
+            return;
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let env = |k: &str| std::env::var(k).ok();
@@ -66,14 +85,25 @@ async fn main() {
         eprintln!("Unknown option: {arg}. Use --help for options.");
         std::process::exit(2);
     }
-    let web = web_root(env("IPTV_WEB"), std::env::current_exe().ok());
-    let packaged = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.join("web")))
-        .is_some_and(|p| p.join("index.html").is_file());
+    let _bundle = match riptv::bundle::prepare() {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            eprintln!("Could not prepare RIPTV: {error}");
+            std::process::exit(1);
+        }
+    };
+    let web = env("IPTV_WEB")
+        .map(PathBuf::from)
+        .or_else(|| riptv::bundle::root().map(|p| p.join("web")))
+        .unwrap_or_else(|| web_root(None, std::env::current_exe().ok()));
+    let packaged = _bundle.is_some()
+        || std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.join("web")))
+            .is_some_and(|p| p.join("index.html").is_file());
     if !web.join("index.html").exists() {
         eprintln!(
-            "warning: no web app in {}; extract the whole release folder, or run the setup script (or set IPTV_WEB)",
+            "warning: no web app in {}; download the RIPTV app, or run the source setup script (or set IPTV_WEB)",
             web.display()
         );
     }
@@ -96,6 +126,7 @@ async fn main() {
             eprintln!(
                 "Could not start RIPTV on port {port}: {error}\nAnother copy may already be running. Close it or choose another IPTV_PORT."
             );
+            drop(_bundle);
             std::process::exit(1);
         }
     };
@@ -104,7 +135,10 @@ async fn main() {
     if !args.iter().any(|a| a == "--no-open") && (packaged || args.iter().any(|a| a == "--open")) {
         open_browser(&format!("http://127.0.0.1:{port}"));
     }
-    axum::serve(listener, router(state)).await.expect("serve");
+    axum::serve(listener, router(state))
+        .with_graceful_shutdown(shutdown())
+        .await
+        .expect("serve");
 }
 
 #[cfg(test)]

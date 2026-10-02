@@ -139,12 +139,10 @@ jobs:
       - name: Package with verified bundled media tools
         run: python scripts/package.py --platform ${{ matrix.platform }} --version "$PACKAGE_VERSION" --target ${{ matrix.target }} --server target/${{ matrix.target }}/release/${{ matrix.executable }}
       - name: Test extracted application and bundled conversion
-        run: python scripts/smoke_package.py target/packages/riptv-${PACKAGE_VERSION}-${{ matrix.platform }}.*
+        run: python scripts/smoke_package.py target/packages/*
       - name: Unit and integration tests with bundled FFmpeg
         run: |
-          mkdir -p target/test-tools
-          python -c 'import glob, pathlib, tarfile, zipfile; p=glob.glob("target/packages/*")[0]; d=pathlib.Path("target/test-tools"); zipfile.ZipFile(p).extractall(d) if p.endswith(".zip") else tarfile.open(p).extractall(d, filter="data")'
-          export PATH="$PWD/target/test-tools/riptv-${PACKAGE_VERSION}-${{ matrix.platform }}/bin:$PATH"
+          export PATH="$PWD/target/test-tools/${{ matrix.platform }}/bin:$PATH"
           cargo test --locked -p xtream -p riptv --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
@@ -180,7 +178,7 @@ jobs:
           test "$RELEASE_TAG" = "v$RELEASE_VERSION"
           cp ffmpeg-sources/ffmpeg-sources-*.tar.gz release-assets/
           cd release-assets
-          sha256sum *.zip *.tar.gz > SHA256SUMS.txt
+          sha256sum RIPTV-* ffmpeg-sources-* > SHA256SUMS.txt
           gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "RIPTV $RELEASE_VERSION" --notes-file ../docs/release-notes.md
           gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" ./*
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest

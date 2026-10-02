@@ -9,6 +9,7 @@
 //!  - signing in approves that provider's own address, which is how a server on your LAN, or this
 //!    machine, works. Bind to localhost only.
 
+pub mod bundle;
 mod compat;
 mod diagnostics;
 mod live;

@@ -1,4 +1,4 @@
-//! On-demand programme previews. Hovering never opens a playback connection.
+//! On-demand program previews. Hovering never opens a playback connection.
 use super::*;
 
 pub(crate) struct Preview {
@@ -81,7 +81,7 @@ pub(crate) fn use_preview(id: Option<u64>, anchor: String) -> Preview {
                 style: "left:{position.0}px;top:{position.1}px",
                 span { class: "preview-label", "ON NOW · PROVIDER GUIDE" }
                 if let Some(slot) = listing {
-                    strong { if slot.listing.title.trim().is_empty() { "Untitled programme" } else { "{slot.listing.title}" } }
+                    strong { if slot.listing.title.trim().is_empty() { "Untitled program" } else { "{slot.listing.title}" } }
                     time { "{clock(slot.start)} – {clock(slot.end)}" }
                     if !slot.listing.description.trim().is_empty() {
                         span { class: "preview-description", "{slot.listing.description}" }
@@ -89,7 +89,7 @@ pub(crate) fn use_preview(id: Option<u64>, anchor: String) -> Preview {
                 } else if data.as_ref().is_none_or(|result| result.is_none()) {
                     span { class: "dim", "Checking what’s on…" }
                 } else {
-                    span { class: "dim", "Current programme unavailable" }
+                    span { class: "dim", "Current program unavailable" }
                 }
             }
         }
