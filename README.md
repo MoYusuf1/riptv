@@ -14,6 +14,7 @@ On Linux, you may need to allow the file to run first.
 Your browser opens automatically. Choose **Public TV** or add your account.
 
 Everything is included. No Rust, Git, or FFmpeg setup.
+RIPTV tells you when an update is ready. You can also check from the account menu.
 Unsigned apps may show a security warning. Profiles and passwords are saved in your browser.
 
 [Help](docs/downloads.md) · [Build from source](docs/setup.md)

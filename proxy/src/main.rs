@@ -73,9 +73,25 @@ async fn main() {
     }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!(
-            "RIPTV {}\nUsage: riptv [--logs] [--open | --no-open]\n\nDownloads open your browser automatically. Keep this window open while watching.\nPress Ctrl+C to stop. Set IPTV_PORT to change port 3000.",
+            "RIPTV {}\nUsage: riptv [--logs] [--open | --no-open]\n       riptv --check-updates\n\nDownloads open your browser automatically. Keep this window open while watching.\nPress Ctrl+C to stop. Set IPTV_PORT to change port 3000.",
             env!("CARGO_PKG_VERSION")
         );
+        return;
+    }
+    if args.as_slice() == ["--check-updates"] {
+        let info = riptv::updates::Checker::default().check(true).await;
+        if !info.checked {
+            eprintln!("Couldn’t check for updates. Try again later.");
+            std::process::exit(1);
+        }
+        if let Some(url) = info.download {
+            println!(
+                "RIPTV {} is ready. Download: {url}",
+                info.latest.unwrap_or_default()
+            );
+        } else {
+            println!("RIPTV {} is up to date.", info.current);
+        }
         return;
     }
     if let Some(arg) = args
@@ -132,6 +148,22 @@ async fn main() {
     };
     println!("RIPTV is running: http://127.0.0.1:{port}");
     println!("Keep this window open while watching. Press Ctrl+C to stop.");
+    let checker = state.update_checker();
+    tokio::spawn(async move {
+        let mut announced = None;
+        loop {
+            let info = checker.check(false).await;
+            if info.available && info.latest != announced {
+                println!(
+                    "RIPTV {} is ready. Download: {}",
+                    info.latest.as_deref().unwrap_or_default(),
+                    info.download.as_deref().unwrap_or_default()
+                );
+                announced = info.latest;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
+        }
+    });
     if !args.iter().any(|a| a == "--no-open") && (packaged || args.iter().any(|a| a == "--open")) {
         open_browser(&format!("http://127.0.0.1:{port}"));
     }

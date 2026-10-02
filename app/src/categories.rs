@@ -61,8 +61,9 @@ pub(crate) fn CategoryList(
             class: if selected.is_none() { "cat category-all on" } else { "cat category-all" },
             onclick: move |_| onselect.call(None), span { "All" } small { "{thousands(total)}" }
         }
-        // Stable keys and order: toggling a pin never moves a row or its label.
-        for c in list.iter().filter(matches) {
+        // Pinned first, preserving provider order within both groups and each row's identity.
+        for c in list.iter().filter(matches).filter(|c| pins.contains(&c.category_id))
+            .chain(list.iter().filter(matches).filter(|c| !pins.contains(&c.category_id))) {
             CategoryItem { key: "category-{c.category_id}", category: c.clone(), count: count(c.category_id),
                 selected: selected == Some(c.category_id), pinned: pins.contains(&c.category_id), onselect, onpin }
         }

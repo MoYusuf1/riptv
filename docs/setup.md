@@ -101,6 +101,7 @@ Run these from the `riptv` folder:
 | Command | What it does |
 | --- | --- |
 | `cargo riptv` | Start the app after setup |
+| `cargo riptv --check-updates` | Check for a newer release |
 | `./scripts/setup.sh --build-only` | Build the app and server without starting them |
 | `./scripts/setup.sh --logs` | Build and start with diagnostic logs |
 | `cargo riptv --logs` | Start with logs without rebuilding the web app |
@@ -118,7 +119,8 @@ cargo riptv
 `cargo riptv` and `cargo riptv --logs` work on all platforms after setup. Windows
 logs are in `%TEMP%\riptv-diagnostics.log`; the server prints the exact path.
 
-To update, stop the app, run `git pull --ff-only`, then rerun your setup command.
+The app checks for new releases while running, including when started from a terminal.
+To update your source copy, stop the app, run `git pull --ff-only`, then rerun your setup command.
 
 ## If setup fails
 

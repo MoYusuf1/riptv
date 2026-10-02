@@ -19,6 +19,7 @@ mod playlist;
 pub mod sniff;
 mod stream;
 mod text;
+pub mod updates;
 
 pub use art::{Art, sized as sized_art};
 use playlist::Playlist;

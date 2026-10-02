@@ -65,8 +65,10 @@ jobs:
           key: windows-setup-${{ hashFiles('riptv workspace/Cargo.lock') }}
       - name: Help works without installing anything
         run: |
+          $modulePath = $env:PSModulePath
           .\scripts\setup.cmd -Help
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($env:PSModulePath -ne $modulePath) { throw 'Launcher changed the parent module path' }
       - name: Build through the Windows launcher (PowerShell 5.1)
         run: |
           .\scripts\setup.cmd -BuildOnly

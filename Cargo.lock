@@ -2222,7 +2222,7 @@ dependencies = [
 
 [[package]]
 name = "riptv"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "axum",
  "futures-core",
@@ -2239,7 +2239,7 @@ dependencies = [
 [[package]]
 name = "rstreamkit"
 version = "0.1.0"
-source = "git+https://github.com/MoYusuf1/rstreamkit.git#b64673587c43faee05a56c48b2842494d77e8ec3"
+source = "git+https://github.com/MoYusuf1/rstreamkit.git#72f8cddebcbc0cd6705888c740b792a68dc06ca3"
 dependencies = [
  "futures-core",
  "js-sys",

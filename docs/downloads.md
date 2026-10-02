@@ -17,7 +17,8 @@ Linux needs Ubuntu 22.04 or newer (glibc 2.35+); Mac needs macOS 15+.
 - **Port busy:** another copy may already be running.
 - **Buffering:** try another channel. A slow provider can still cause buffering.
 
-To update, close the old app and download the new one. Use the same browser to keep your profiles.
+The app tells you when an update is ready. Close the old app and open the new download.
+Use the same browser to keep your profiles.
 On Windows/Linux, keep the app's terminal open while watching; Ctrl+C stops it.
 On Mac, Activity Monitor can stop RIPTV if needed.
 

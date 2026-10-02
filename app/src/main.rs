@@ -27,6 +27,8 @@ mod preferences;
 mod profiles;
 mod shelves;
 mod standard;
+mod timeline;
+mod updates;
 
 use controls::{IdleHide, LoadRing, Skip};
 use fetch::Proxied;
@@ -802,6 +804,7 @@ fn storage() -> Option<web_sys::Storage> {
 #[component]
 fn App() -> Element {
     let session = use_context_provider(|| Signal::new(None::<Client>));
+    updates::use_updates();
     use_context_provider(|| Signal::new(String::new())); // the account name, if any
     // The browser/ffmpeg path is the stable default; Rust playback is opt-in.
     use_context_provider(|| {
@@ -816,8 +819,9 @@ fn App() -> Element {
         // No `document::Title`: Dioxus web sets it via eval(), which the app's CSP forbids.
         // The title comes from Dioxus.toml instead.
         style { "{CSS}" }
-        style { "{navigation::CSS}{categories::CSS}" }
+        style { "{navigation::CSS}{categories::CSS}{updates::CSS}" }
         if session.read().is_some() { Browse {} } else { Login {} }
+        updates::Notice {}
     }
 }
 
@@ -1594,6 +1598,7 @@ fn Browse() -> Element {
                             i { class: "switch" }
                         }
                         button { onclick: move |_| session.set(None), "Switch profile" }
+                        updates::Check {}
                     }
                 }
             }
@@ -1868,6 +1873,7 @@ struct Play {
     /// What a download is called.
     file: String,
     url: String,
+    duration: Option<u64>,
     /// The title as a shelf remembers it (a series, for an episode).
     entry: Option<shelves::Entry>,
 }
@@ -2127,7 +2133,8 @@ fn Watch(
     // the second of the movie where it begins.
     let mut start = use_signal(move || resume as u64);
     let mut pos = use_signal(move || resume);
-    let mut total = use_signal(|| 0.0_f64);
+    let duration_hint = play.duration;
+    let mut total = use_signal(move || duration_hint.unwrap_or(0) as f64);
     let mut ahead = use_signal(|| 0.0_f64);
     let mut paused = use_signal(|| false);
     let mut waiting = use_signal(|| true);
@@ -2247,12 +2254,8 @@ fn Watch(
         if !*scrubbing.peek() {
             pos.set(offset + v.current_time());
         }
-        let d = v.duration();
-        let length = if d.is_finite() && d > 0.0 && offset == 0.0 {
-            d
-        } else {
-            known.unwrap_or(0.0)
-        };
+        let converted = matches!(engine.peek().as_ref(), Some(Engine::Converted(..)));
+        let length = timeline::duration(converted, known, duration_hint, v.duration());
         if length != *total.peek() {
             total.set(length);
         }
@@ -2444,7 +2447,11 @@ fn Watch(
     let class = format!(
         "watch{}{}",
         if paused() { " paused" } else { "" },
-        if active() { " active" } else { "" }
+        if active() || scrubbing() {
+            " active"
+        } else {
+            ""
+        }
     );
     let (c, url, key, saved, entry) = (
         client.clone(),
@@ -2820,6 +2827,7 @@ fn DetailPage(
             subtitle: None,
             file: title.clone(),
             url: url.clone(),
+            duration: details.runtime_secs,
             entry: Some(entry_of(&row, &title, poster.clone(), extension(url), None)),
         }),
         (Target::Series(_), Some(Ok((_, seasons)))) => {
@@ -2838,6 +2846,7 @@ fn DetailPage(
                         subtitle: Some(format!("S{} E{num} · {}", season.number, ep.title)),
                         file: format!("{title} S{}E{num}: {}", season.number, ep.title),
                         url: client.episode_url(ep.id, ext).to_string(),
+                        duration: ep.info.runtime_secs,
                         entry: Some(entry_of(
                             &row,
                             &title,

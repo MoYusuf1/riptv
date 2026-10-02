@@ -13,6 +13,7 @@ pub mod bundle;
 mod compat;
 mod diagnostics;
 mod live;
+pub mod updates;
 
 use std::{
     collections::HashSet,
@@ -90,6 +91,7 @@ pub struct AppState {
     web: Option<PathBuf>,
     diagnostics: diagnostics::Sessions,
     logs: Option<PathBuf>,
+    updates: updates::Checker,
 }
 
 impl Default for AppState {
@@ -99,6 +101,9 @@ impl Default for AppState {
 }
 
 impl AppState {
+    pub fn update_checker(&self) -> updates::Checker {
+        self.updates.clone()
+    }
     pub fn new() -> Self {
         let approved = Approved::default();
         let a = approved.clone();
@@ -127,6 +132,7 @@ impl AppState {
             web: None,
             diagnostics: diagnostics::Sessions::default(),
             logs: None,
+            updates: updates::Checker::default(),
         }
     }
 
@@ -272,6 +278,7 @@ pub fn router(state: AppState) -> Router {
         .route("/compat/check", get(compat::check))
         .route("/compat", get(compat::stream))
         .route("/live", get(live::stream));
+    let r = r.route("/updates", get(updates::automatic).post(updates::manual));
     let r = r
         .route(
             "/diagnostics",
