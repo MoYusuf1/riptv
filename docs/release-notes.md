@@ -11,7 +11,8 @@ press **Ctrl+C** to stop. **No Rust, Git, or separate FFmpeg installation needed
 ### What's new
 
 - Hover/focus a live channel to preview its current programme from the provider guide.
-- Clearer labelled navigation, a new TV Shows icon, and softer scrollbars.
+- A Rust-logo search bar, separate section navigation, a new TV Shows icon, and softer scrollbars.
+- Per-profile pinned categories and a roomier, adaptive programme guide.
 - Missing or placeholder guide data gives the space back to the player.
 - More resilient live playback: a real buffer, safe retries, faster recovery, and better diagnostics.
 - Download-first instructions and native, tested application bundles.

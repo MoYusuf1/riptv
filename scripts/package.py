@@ -73,6 +73,7 @@ def package(platform, version, server, web, output, target):
             subprocess.run([str(path), "-version"], check=True, stdout=subprocess.DEVNULL)
         (bundle / f"riptv{suffix}").chmod(0o755)
         notices(bundle / "licenses", target)
+        shutil.copytree(ROOT / "target/release-sources/licenses", bundle / "licenses/media")
         shutil.copy2(ROOT / "docs/third-party.md", bundle / "licenses/FFmpeg-NOTICE.md")
         shutil.copy2(ROOT / "scripts/ffmpeg.json", bundle / "licenses/ffmpeg-downloads.json")
         shutil.copy2(ROOT / "target/release-sources/COPYING.GPLv3", bundle / "licenses/COPYING.GPLv3")

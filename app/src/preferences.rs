@@ -11,6 +11,8 @@ pub struct Preferences {
     pub speed: f64,
     pub categories: [Option<u64>; 3],
     pub sorts: [u8; 3],
+    /// Category IDs only, scoped to the signed-in profile and library section.
+    pub pinned_categories: [Vec<u64>; 3],
 }
 
 impl Default for Preferences {
@@ -20,6 +22,7 @@ impl Default for Preferences {
             speed: 1.0,
             categories: [None; 3],
             sorts: [0; 3],
+            pinned_categories: Default::default(),
         }
     }
 }
@@ -36,6 +39,11 @@ pub fn load() -> Preferences {
             p.volume = p.volume.min(100);
             if !p.speed.is_finite() || !(0.5..=2.0).contains(&p.speed) {
                 p.speed = 1.0;
+            }
+            for pins in &mut p.pinned_categories {
+                pins.sort_unstable();
+                pins.dedup();
+                pins.truncate(100);
             }
             p
         })

@@ -14,6 +14,7 @@ use std::{
     time::Duration,
 };
 
+mod categories;
 mod channel_preview;
 mod controls;
 mod diag;
@@ -21,6 +22,7 @@ mod fetch;
 mod frame_stats;
 mod live;
 mod media_session;
+mod navigation;
 mod preferences;
 mod profiles;
 mod shelves;
@@ -104,21 +106,16 @@ svg{width:1.1rem;height:1.1rem}
 .profile-form .note{text-align:center;color:var(--faint);font-size:.72rem}
 @media(max-width:520px){.profiles{gap:1.4rem 1rem}.profile{width:6.2rem}.avatar{width:5.5rem;font-size:2.1rem}}
 "#,
-    // One labelled navigation bar, with search and the account menu.
-    r#".topbar{position:fixed;z-index:20;display:flex;border:1px solid var(--hair);background:var(--glass);box-shadow:0 10px 30px rgba(0,0,0,.25);backdrop-filter:blur(24px) saturate(180%);inset:.7rem .7rem auto;align-items:center;gap:1.2rem;height:3.6rem;padding:0 .7rem 0 1rem;border-radius:18px}
-.brand{display:inline-flex;align-items:center;gap:.5rem;font-size:.85rem;font-weight:700;letter-spacing:.06em}
-.rust-mark{width:1.6rem;height:1.6rem;color:var(--accent)}
-.search{position:relative;display:flex;align-items:center;flex:1;min-width:6rem;max-width:28rem;margin-left:auto}
-.search svg{position:absolute;left:.75rem;width:.95rem;height:.95rem;color:var(--faint);pointer-events:none}
-.search input{width:100%;height:2.1rem;padding:0 .9rem 0 2.2rem;border:0;border-radius:10px;outline:0;background:var(--row)}
-.search input:focus{box-shadow:0 0 0 2px var(--soft)}
+    // Top chrome: logo, search, account. Section navigation lives in navigation.rs.
+    r#".topbar{position:fixed;z-index:20;display:flex;border:1px solid rgba(255,255,255,.1);background:linear-gradient(115deg,rgba(42,25,34,.88),rgba(20,14,18,.94));box-shadow:0 8px 32px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.03);backdrop-filter:blur(24px) saturate(150%);inset:.7rem .7rem auto;align-items:center;gap:1rem;height:3.7rem;padding:0 .65rem;border-radius:20px}
+.brand{display:grid;place-items:center;flex:none;width:2.55rem;height:2.55rem;border:1px solid rgba(255,125,146,.13);border-radius:14px;background:linear-gradient(145deg,rgba(255,125,146,.12),rgba(255,255,255,.02));box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+.rust-mark{width:1.85rem;height:1.85rem;color:var(--accent)}
+.search{position:relative;display:flex;align-items:center;flex:1;min-width:4rem;max-width:42rem;margin-inline:auto}
+.search svg{position:absolute;left:.95rem;width:1rem;height:1rem;color:var(--dim);pointer-events:none}
+.search input{width:100%;height:2.55rem;padding:0 1rem 0 2.6rem;border:1px solid rgba(255,255,255,.05);border-radius:13px;outline:0;background:rgba(255,255,255,.035);transition:border-color .2s,background .2s,box-shadow .2s}
+.search input:hover{background:rgba(255,255,255,.055)}
+.search input:focus{border-color:rgba(255,125,146,.35);background:rgba(255,125,146,.035);box-shadow:0 0 0 3px rgba(255,125,146,.06)}
 .search input::placeholder{color:var(--faint)}
-.rail{display:flex;flex:none;gap:.25rem;padding:.25rem;border:1px solid var(--hair);border-radius:13px;background:rgba(255,255,255,.025)}
-.rail button{display:flex;align-items:center;justify-content:center;gap:.5rem;height:2.45rem;padding:0 .85rem;border-radius:9px;color:var(--dim);white-space:nowrap;transition:background .18s,color .18s}
-.rail button:hover{background:var(--row);color:var(--text)}
-.rail button.on{background:var(--soft);color:var(--accent);box-shadow:inset 0 0 0 1px rgba(255,125,146,.12)}
-.rail svg{width:1.15rem;height:1.15rem}
-.rail span{font-size:.82rem;font-weight:600}
 .topbar.detail-mode{inset:.65rem .7rem auto auto;width:auto;height:2.8rem;padding:.25rem;border-radius:999px;background:rgba(22,16,20,.82)}
 .topbar.detail-mode .grow{display:none}
 .topbar.detail-mode .who{background:transparent}
@@ -136,7 +133,7 @@ svg{width:1.1rem;height:1.1rem}
 .menu button:hover{background:var(--soft)}
 "#,
     // Workspace: category sidebar, headers, scrolling lists
-    r#".workspace{position:fixed;inset:5rem 0 0;display:grid;grid-template-columns:15rem minmax(0,1fr);gap:.7rem;padding:0 .7rem .7rem}
+    r#".workspace{position:fixed;inset:5.1rem 0 0 5.1rem;display:grid;grid-template-columns:14rem minmax(0,1fr);gap:.7rem;padding:0 .7rem .7rem}
 .sidebar{min-height:0;padding:.75rem .6rem 1rem;overflow:auto;border-radius:16px;background:var(--panel);scrollbar-width:thin}
 .filter{width:100%;margin:0 0 .5rem;padding:.55rem .8rem;border:0;border-radius:10px;outline:0;background:var(--row);font-size:.85rem}
 .filter:focus{box-shadow:0 0 0 2px var(--soft)}
@@ -270,8 +267,11 @@ svg{width:1.1rem;height:1.1rem}
 .stage-empty{display:grid;flex:1;place-content:center;justify-items:center;gap:.8rem;color:var(--dim)}
 .stage-empty svg{width:3.4rem;height:3.4rem;opacity:.55}
 .live-stage{display:flex;flex-direction:column;height:100%;min-height:0}
-.live-stage>.player{flex:1}
-.live-stage>.guide{flex:none}
+.live-stage>.player{flex:1;margin-bottom:.7rem}
+.live-stage:has(>.guide)>.player{max-height:calc(100cqw * .5625);margin-bottom:0}
+.live-stage:has(>.guide){container-type:inline-size}
+.live-stage>.guide{flex:1;min-height:clamp(11rem,25vh,20rem);max-height:50%}
+.live-stage>.guide.guide-note{flex:none;min-height:0;max-height:none}
 .player{position:relative;min-height:0;margin:.7rem .7rem 0;overflow:hidden;border-radius:16px;background:#000;outline:0}
 .player:fullscreen,.player.fill{margin:0;border-radius:0}
 .player.fill{position:fixed;z-index:60;inset:0}
@@ -331,12 +331,15 @@ svg{width:1.1rem;height:1.1rem}
 .player:not(.paused) .live-pill::before{animation:pulse 1.8s ease-in-out infinite}
 .player.paused .live-pill{background:rgba(255,255,255,.16)}
 @media(prefers-reduced-motion:reduce){.loader svg,.loader-logo,.loader-dot,.eq i,.live-pill::before{animation:none!important}}
-.guide{min-width:0;padding:1rem 1rem .9rem;border-top:1px solid var(--hair);background:var(--panel);animation:fade .3s var(--ease)}
+.guide{display:flex;flex-direction:column;gap:.8rem;min-width:0;padding:1rem;border-top:1px solid var(--hair);background:var(--panel);animation:fade .3s var(--ease)}
+.guide-heading{display:flex;align-items:center;justify-content:space-between;gap:.75rem}
+.guide-heading strong{font-size:.8rem;font-weight:600}
+.guide-heading small{color:var(--faint);font-size:.68rem}
 .tl-skeleton{display:flex;gap:.4rem;height:6.4rem;padding-top:1.5rem}
 .tl-skeleton i{flex:1;border-radius:10px;background:var(--row);animation:pulse 1.4s ease-in-out infinite}
 .tl-skeleton i:first-child{flex:.6}
-.timeline{overflow-x:auto;padding-bottom:.4rem;scrollbar-width:thin}
-.tl{position:relative;height:6.4rem}
+.timeline{flex:1;min-height:0;overflow-x:auto;padding-bottom:.4rem;scrollbar-width:thin}
+.tl{position:relative;height:100%;min-height:6.4rem}
 .tick{position:absolute;top:0;height:100%;padding-left:.4rem;border-left:1px solid var(--hair);color:var(--faint);font-size:.7rem}
 .block{position:absolute;top:1.5rem;bottom:0;padding:.5rem .7rem;border-right:3px solid var(--panel);border-radius:10px;background:var(--row)}
 .block.now{background:var(--soft);outline:1px solid rgba(255,125,146,.45);outline-offset:-1px}
@@ -344,7 +347,7 @@ svg{width:1.1rem;height:1.1rem}
 .block.compact{padding:.5rem .35rem}.block.compact time,.block.compact p{display:none}.block.compact strong{font-size:.72rem}
 .block time{display:block;color:var(--dim);font-size:.7rem}
 .block strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.block p{display:-webkit-box;margin:.25rem 0 0;overflow:hidden;color:var(--dim);font-size:.75rem;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+.block p{display:-webkit-box;margin:.5rem 0 0;overflow:hidden;color:var(--dim);font-size:.8rem;line-height:1.55;-webkit-box-orient:vertical;-webkit-line-clamp:5}
 .prog{position:absolute;bottom:0;left:0;height:3px;background:var(--accent)}
 .now-line{position:absolute;z-index:2;top:0;bottom:0;width:2px;background:var(--fill)}
 .now-line span{position:absolute;top:0;left:-1.3rem;padding:.02rem .35rem;border-radius:5px;background:var(--fill);color:#fff;font-size:.65rem;font-weight:600}
@@ -481,6 +484,7 @@ const BACK: &str = "M15 5l-7 7 7 7";
 const NEXT_PAGE: &str = "M9 5l7 7-7 7";
 const USER: &str = "M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z";
 const PIP: &str = "M4 5h16a1 1 0 011 1v7M3 6v11a1 1 0 001 1h6M13 14h7a1 1 0 011 1v3a1 1 0 01-1 1h-7a1 1 0 01-1-1v-3a1 1 0 011-1z";
+const PIN: &str = "M9 3h6M10 3v6l-4 4v2h12v-2l-4-4V3M12 15v6";
 const SORT: &str = "M3 6h11M3 12h7M3 18h4M17 6v12m0 0l-3-3m3 3l3-3";
 const CHECK: &str = "M5 12l5 5 9-10";
 const INFO: &str = "M12 3a9 9 0 100 18 9 9 0 000-18zM12 8h.01M11 12h1v5h1";
@@ -811,6 +815,7 @@ fn App() -> Element {
         // No `document::Title`: Dioxus web sets it via eval(), which the app's CSP forbids.
         // The title comes from Dioxus.toml instead.
         style { "{CSS}" }
+        style { "{navigation::CSS}{categories::CSS}" }
         if session.read().is_some() { Browse {} } else { Login {} }
     }
 }
@@ -835,6 +840,8 @@ fn RustMark() -> Element {
     rsx! {
         svg {
             class: "rust-mark",
+            role: "img",
+            "aria-label": "Rust logo",
             view_box: "0 0 64 64",
             fill: "none",
             stroke: "currentColor",
@@ -1187,6 +1194,7 @@ fn Browse() -> Element {
     let mut category = use_signal(|| remembered.categories[0]);
     let mut search = use_signal(String::new);
     let mut category_search = use_signal(String::new);
+    let mut pinned_categories = use_signal(|| remembered.pinned_categories.clone());
     let mut playing = use_signal(|| None::<Play>);
     let mut queue = use_signal(Vec::<Play>::new); // the episodes after the one playing
     let mut live = use_signal(|| None::<(u64, String, String, Option<String>)>); // (id, title, playlist url, logo)
@@ -1330,31 +1338,18 @@ fn Browse() -> Element {
                     .as_ref()
                     .and_then(|r| r.as_ref().ok())
                     .filter(|l| l.kind == kind());
-                let total = lib.map_or(0, |l| l.len());
-                let q = category_search().to_lowercase();
                 rsx! {
-                    input {
-                        class: "filter",
-                        aria_label: "Filter categories",
-                        placeholder: "Filter categories",
-                        value: "{category_search}",
-                        oninput: move |e| category_search.set(e.value())
-                    }
-                    button {
-                        class: if category().is_none() { "cat on" } else { "cat" },
-                        onclick: move |_| select(None),
-                        span { "All" } small { "{thousands(total)}" }
-                    }
-                    for c in list.iter().filter(|c| q.is_empty() || xtream::contains_lowercase(&c.category_name, &q)) {
-                        button {
-                            key: "{c.category_id}",
-                            class: if category() == Some(c.category_id) { "cat on" } else { "cat" },
-                            onclick: {
-                                let id = c.category_id;
-                                move |_| select(Some(id))
-                            },
-                            span { "{c.category_name}" }
-                            small { "{thousands(lib.map_or(0, |l| l.counts.get(&c.category_id).copied().unwrap_or(0)))}" }
+                    categories::CategoryList {
+                        list: list.clone(), library: lib.cloned(), selected: category(),
+                        pins: pinned_categories()[kind() as usize].clone(), query: category_search,
+                        onselect: move |id| select(id),
+                        onpin: move |id| {
+                            preferences::update(|p| {
+                                let pins = &mut p.pinned_categories[kind() as usize];
+                                if pins.contains(&id) { pins.retain(|pin| *pin != id); }
+                                else if pins.len() < 100 { pins.push(id); }
+                            });
+                            pinned_categories.set(preferences::load().pinned_categories);
                         }
                     }
                 }
@@ -1541,7 +1536,6 @@ fn Browse() -> Element {
         }
     });
 
-    let tab = |k: Kind| if kind() == k { "on" } else { "" };
     let page_name = match kind() {
         Kind::Live => "Live TV",
         Kind::Movies => "Movies",
@@ -1595,19 +1589,12 @@ fn Browse() -> Element {
     rsx! {
         header { class: if open().is_some() { "topbar detail-mode" } else { "topbar" },
             if open().is_none() {
-                span { class: "brand", "RIPTV" }
-                nav { class: "rail", aria_label: "Library",
-                    button { class: tab(Kind::Live), aria_current: if kind() == Kind::Live { "page" } else { "false" }, onclick: move |_| pick_kind(Kind::Live), Icon { d: LIVE_TV } span { "Live TV" } }
-                    if !client.is_playlist() {
-                        button { class: tab(Kind::Movies), aria_current: if kind() == Kind::Movies { "page" } else { "false" }, onclick: move |_| pick_kind(Kind::Movies), Icon { d: MOVIE } span { "Movies" } }
-                        button { class: tab(Kind::Series), aria_current: if kind() == Kind::Series { "page" } else { "false" }, onclick: move |_| pick_kind(Kind::Series), Icon { d: SERIES } span { "TV Shows" } }
-                    }
-                }
+                span { class: "brand", title: "Rust", RustMark {} }
                 label { class: "search",
                     Icon { d: SEARCH }
                     input {
                         aria_label: "Search this section",
-                        placeholder: "Search {page_name}",
+                        placeholder: "Search",
                         value: "{search}",
                         oninput: move |e| { search.set(e.value()); page.set(0); }
                     }
@@ -1659,6 +1646,9 @@ fn Browse() -> Element {
                     }
                 }
             }
+        }
+        if open().is_none() {
+            navigation::LibraryNav { kind: kind(), playlist: client.is_playlist(), onpick: move |k| pick_kind(k) }
         }
         main { class: if open().is_some() { "workspace detail-open" } else { "workspace" },
             aside { class: "sidebar", {cat_list()} }

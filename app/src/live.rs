@@ -970,7 +970,7 @@ fn Guide(id: u64, playing: bool) -> Element {
                         && slot.listing.title.to_ascii_uppercase().contains("OFFLINE")
                 })
             {
-                return rsx! { section { class: "guide", p { "This stream is playing, but the provider's guide lists it as offline." } } };
+                return rsx! { section { class: "guide guide-note", p { "This stream is playing, but the provider's guide lists it as offline." } } };
             }
             if slots.is_empty() {
                 return rsx! {};
@@ -1027,6 +1027,9 @@ fn Guide(id: u64, playing: bool) -> Element {
     };
 
     rsx! {
-        section { class: "guide", {body} }
+        section { class: "guide",
+            div { class: "guide-heading", strong { "Programme guide" } small { "Local time · {clock(now)}" } }
+            {body}
+        }
     }
 }

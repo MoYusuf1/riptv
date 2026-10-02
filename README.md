@@ -18,6 +18,7 @@ Rust and a separate FFmpeg installation are **not required** for these downloads
 ## Good to know
 
 - Hover over a live channel to see what its provider's guide says is on now.
+- Pin favourite categories with the pin button beside their names.
 - RIPTV is a player, not a TV subscription. Some channels may be offline,
   restricted to your region, or slow at the provider.
 - Profiles and passwords are saved in your browser. Use a trusted computer.
