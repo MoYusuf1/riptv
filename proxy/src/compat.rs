@@ -233,6 +233,14 @@ fn ffmpeg_args(
     if start > 0 {
         // Before `-i`: jump there without reading everything before it. Timestamps then begin at
         // zero, so the page adds `start` back when it shows the position.
+        if video == "copy" {
+            // A copied picture can only begin at a keyframe, which may be seconds before `start`.
+            // Begin the sound there too: trimmed to `start` exactly, it would run ahead of the
+            // picture by that much (10 s on films with sparse keyframes) for the whole film.
+            // ponytail: playback begins up to one keyframe interval early; the position shown is
+            // off by that much. Look up the keyframe first if that ever matters.
+            a.push("-noaccurate_seek".into());
+        }
         a.extend(["-ss".to_string(), start.to_string()]);
     }
     a.extend(["-i", url].map(String::from));
@@ -326,7 +334,10 @@ pub(crate) fn encode_args(
                 "-ac",
                 "2",
                 "-af",
-                "aresample=async=1:first_pts=0",
+                // Keeps the sound on the picture's clock across small timestamp gaps. Not
+                // `first_pts=0`: that writes one frame lasting until the sound really starts,
+                // which browsers play straight through, putting the sound ahead of the picture.
+                "aresample=async=1",
             ]
             .map(String::from),
         );
@@ -856,6 +867,15 @@ mod tests {
         let seek = ffmpeg_args("http://h/x.mp4", "UA", "copy", false, 0, 1080, 754);
         let at = |flag: &str| seek.iter().position(|a| a == flag).unwrap();
         assert!(at("-ss") < at("-i") && seek[at("-ss") + 1] == "754");
+        // A copied picture starts at a keyframe: the sound must start there too, never trimmed
+        // to the exact second (it would run ahead), and never stretched by `first_pts`.
+        assert!(at("-noaccurate_seek") < at("-ss"));
+        assert!(!seek.iter().any(|a| a.contains("first_pts")));
+        let exact = ffmpeg_args("http://h/x.mp4", "UA", "transcode", false, 0, 1080, 754);
+        assert!(
+            !exact.iter().any(|a| a == "-noaccurate_seek"),
+            "a re-encode cuts exactly"
+        );
 
         let gpu = ffmpeg_args("http://h/x.ts", "UA", "transcode", true, 2160, 1080, 0);
         assert!(has(&gpu, ["-c:v", "h264_nvenc"]) && has(&gpu, ["-hwaccel", "auto"]));
