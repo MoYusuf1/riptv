@@ -77,7 +77,7 @@ pub(crate) fn CategoryList(
                 CategoryItem { key: "pinned-{c.category_id}", category: c.clone(), count: count(c.category_id),
                     selected: selected == Some(c.category_id), pinned: true, onselect, onpin }
             }
-            h2 { class: "category-label", "Categories" }
+            if !others.is_empty() { h2 { class: "category-label", "Categories" } }
         }
         for c in others {
             CategoryItem { key: "category-{c.category_id}", category: c.clone(), count: count(c.category_id),

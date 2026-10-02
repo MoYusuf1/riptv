@@ -16,6 +16,8 @@ jobs:
   web-and-sources:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -23,6 +25,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Release version
+        id: version
+        env:
+          RELEASE_REF: ${{ github.ref_name }}
+          RELEASE_TYPE: ${{ github.ref_type }}
+        run: |
+          version=$(python -c 'import tomllib; print(tomllib.load(open("proxy/Cargo.toml", "rb"))["package"]["version"])')
+          if [ "$RELEASE_TYPE" = tag ]; then test "$RELEASE_REF" = "v$version"; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Rust and web tooling
         run: |
           rustup update stable --no-self-update
@@ -88,6 +99,7 @@ jobs:
     timeout-minutes: 45
     env:
       RUSTFLAGS: ${{ matrix.rustflags }}
+      PACKAGE_VERSION: ${{ needs.web-and-sources.outputs.version }}
     defaults:
       run:
         shell: bash
@@ -125,14 +137,14 @@ jobs:
       - name: Download dependency notices
         run: cargo fetch --locked
       - name: Package with verified bundled media tools
-        run: python scripts/package.py --platform ${{ matrix.platform }} --version 0.2.0 --target ${{ matrix.target }} --server target/${{ matrix.target }}/release/${{ matrix.executable }}
+        run: python scripts/package.py --platform ${{ matrix.platform }} --version "$PACKAGE_VERSION" --target ${{ matrix.target }} --server target/${{ matrix.target }}/release/${{ matrix.executable }}
       - name: Test extracted application and bundled conversion
-        run: python scripts/smoke_package.py target/packages/riptv-0.2.0-${{ matrix.platform }}.*
+        run: python scripts/smoke_package.py target/packages/riptv-${PACKAGE_VERSION}-${{ matrix.platform }}.*
       - name: Unit and integration tests with bundled FFmpeg
         run: |
           mkdir -p target/test-tools
           python -c 'import glob, pathlib, tarfile, zipfile; p=glob.glob("target/packages/*")[0]; d=pathlib.Path("target/test-tools"); zipfile.ZipFile(p).extractall(d) if p.endswith(".zip") else tarfile.open(p).extractall(d, filter="data")'
-          export PATH="$PWD/target/test-tools/riptv-0.2.0-${{ matrix.platform }}/bin:$PATH"
+          export PATH="$PWD/target/test-tools/riptv-${PACKAGE_VERSION}-${{ matrix.platform }}/bin:$PATH"
           cargo test --locked -p xtream -p riptv --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
@@ -142,7 +154,7 @@ jobs:
 
   publish:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: native
+    needs: [native, web-and-sources]
     runs-on: ubuntu-22.04
     permissions:
       contents: write
@@ -163,11 +175,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ needs.web-and-sources.outputs.version }}
         run: |
-          test "$RELEASE_TAG" = v0.2.0
+          test "$RELEASE_TAG" = "v$RELEASE_VERSION"
           cp ffmpeg-sources/ffmpeg-sources-*.tar.gz release-assets/
           cd release-assets
           sha256sum *.zip *.tar.gz > SHA256SUMS.txt
-          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "RIPTV 0.2.0" --notes-file ../docs/release-notes.md
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "RIPTV $RELEASE_VERSION" --notes-file ../docs/release-notes.md
           gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" ./*
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest

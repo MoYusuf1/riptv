@@ -268,13 +268,13 @@ svg{width:1.1rem;height:1.1rem}
 .stage-empty svg{width:3.4rem;height:3.4rem;opacity:.55}
 .live-stage{display:flex;flex-direction:column;height:100%;min-height:0}
 .live-stage>.player{flex:1;margin-bottom:.7rem}
-.live-stage:has(>.guide)>.player{max-height:calc(100cqw * .5625);margin-bottom:0}
-.live-stage:has(>.guide){container-type:inline-size}
-.live-stage>.guide{flex:1;min-height:clamp(11rem,25vh,20rem);max-height:50%}
+.live-stage:has(>.guide)>.player{flex:0 1 auto;aspect-ratio:16/9;margin-bottom:0}
+.live-stage>.guide{flex:1;min-height:clamp(11rem,25vh,20rem)}
 .live-stage>.guide.guide-note{flex:none;min-height:0;max-height:none}
 .player{position:relative;min-height:0;margin:.7rem .7rem 0;overflow:hidden;border-radius:16px;background:#000;outline:0}
 .player:fullscreen,.player.fill{margin:0;border-radius:0}
 .player.fill{position:fixed;z-index:60;inset:0}
+.live-stage:has(>.guide)>.player:fullscreen,.live-stage:has(>.guide)>.player.fill{aspect-ratio:auto;margin:0}
 .player:not(.active):not(.paused){cursor:none}
 .player video{width:100%;height:100%;object-fit:contain;opacity:0;transition:opacity .45s var(--ease)}
 .player.showing video{opacity:1}

@@ -41,7 +41,8 @@ def smoke(archive):
             digest, relative = line.split("  ", 1)
             assert hashlib.sha256((bundle / relative).read_bytes()).hexdigest() == digest, relative
         executable = bundle / ("riptv.exe" if os.name == "nt" else "riptv")
-        assert "RIPTV 0.2.0" in subprocess.check_output([str(executable), "--version"], text=True)
+        version = subprocess.check_output([str(executable), "--version"], text=True).strip().removeprefix("RIPTV ")
+        assert archive.name.startswith(f"riptv-{version}-")
         with socket.socket() as port_socket:
             port_socket.bind(("127.0.0.1", 0))
             port = port_socket.getsockname()[1]

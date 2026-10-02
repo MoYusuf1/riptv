@@ -56,6 +56,8 @@ def package(platform, version, server, web, output, target):
     suffix = ".exe" if platform.startswith("windows") else ""
     if not server.is_file() or not (web / "index.html").is_file():
         raise RuntimeError("Build the native server and web app before packaging")
+    if subprocess.check_output([str(server), "--version"], text=True).strip() != f"RIPTV {version}":
+        raise RuntimeError("Package version does not match the executable")
     output.mkdir(parents=True, exist_ok=True)
     stem = f"riptv-{version}-{platform}"
     with tempfile.TemporaryDirectory(prefix="riptv-package-") as temporary:
@@ -107,7 +109,9 @@ def package(platform, version, server, web, output, target):
         (bundle / "SHA256SUMS.txt").write_text("\n".join(hashes) + "\n")
         if suffix:
             archive = output / (stem + ".zip")
-            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
+            # Build tools can timestamp deterministic assets at the Unix epoch.
+            # ZIP starts at 1980; clamp metadata without changing file contents.
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, strict_timestamps=False) as z:
                 for path in sorted(bundle.rglob("*")):
                     if path.is_file():
                         z.write(path, path.relative_to(bundle.parent))

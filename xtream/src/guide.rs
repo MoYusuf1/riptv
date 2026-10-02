@@ -11,10 +11,13 @@ pub struct Slot<'a> {
 
 /// Reject a stale or far-future full table so the caller can try the provider's short EPG.
 pub fn has_nearby(entries: &[EpgListing], now: u64) -> bool {
-    entries.iter().any(|entry| {
-        matches!((entry.start_ts, entry.end_ts), (Some(start), Some(end))
+    entries
+        .iter()
+        .filter(|entry| !placeholder(&entry.title))
+        .any(|entry| {
+            matches!((entry.start_ts, entry.end_ts), (Some(start), Some(end))
             if end > now.saturating_sub(2 * 3600) && start < now + 6 * 3600)
-    })
+        })
 }
 
 pub fn normalize(entries: &[EpgListing]) -> Vec<Slot<'_>> {
@@ -137,6 +140,7 @@ mod tests {
     fn filler_does_not_reserve_guide_space() {
         let mut row = listing(100, 300);
         row.title = "No guide needed".into();
+        assert!(!has_nearby(std::slice::from_ref(&row), 150));
         assert!(normalize(&[row]).is_empty());
         assert!(!placeholder("NFL: Steelers vs Browns"));
     }

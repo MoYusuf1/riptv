@@ -276,6 +276,15 @@ fn schedule(stream_id: u64) -> Vec<Value> {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
+    // Exercise both absent guide data and providers that send filler instead of a programme.
+    if stream_id == 4 {
+        return vec![];
+    }
+    if stream_id == 5 {
+        return vec![json!({"title": b64("No guide needed"), "description": "",
+            "start_timestamp": now.saturating_sub(60).to_string(),
+            "stop_timestamp": (now + 3600).to_string(), "start": "", "end": ""})];
+    }
     let (kinds, lengths) = (
         ["News", "Match", "Documentary", "Film", "Magazine"],
         [30, 60, 45, 90, 60],
