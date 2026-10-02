@@ -952,3 +952,115 @@ async fn only_the_app_can_quit_the_server() {
         .await
         .expect("quit is signalled");
 }
+
+/// Resuming a converted title mid-film keeps the sound on the picture. Films often have keyframes
+/// seconds apart; the copied picture starts at the one before the resume point, and the sound used
+/// to start exactly at it, playing ahead by the difference for the rest of the film.
+#[tokio::test]
+async fn a_resumed_conversion_keeps_sound_and_picture_together() {
+    if std::process::Command::new("ffmpeg")
+        .arg("-version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+    // A minute of video with a keyframe every 5 s, and AC-3 sound (so it's converted).
+    let film = std::env::temp_dir().join(format!("riptv-gop-{}.mkv", std::process::id()));
+    let made = std::process::Command::new("ffmpeg")
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+        ])
+        .arg("testsrc2=size=320x180:rate=25:duration=60")
+        .args(["-f", "lavfi", "-i", "sine=frequency=440:duration=60"])
+        .args([
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+        ])
+        .args([
+            "-g",
+            "125",
+            "-keyint_min",
+            "125",
+            "-sc_threshold",
+            "0",
+            "-c:a",
+            "ac3",
+        ])
+        .arg(&film)
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let upstream = serve(Router::new().route_service("/film.mkv", ServeFile::new(&film))).await;
+    let proxy = serve(router(AppState::new())).await;
+    assert_eq!(sign_in(proxy, "127.0.0.1").await, 204);
+    let url = Url::parse_with_params(
+        &format!("http://127.0.0.1:{proxy}/compat"),
+        [
+            (
+                "url",
+                format!("http://127.0.0.1:{upstream}/film.mkv").as_str(),
+            ),
+            ("video", "copy"),
+            ("start", "12"),
+        ],
+    )
+    .unwrap();
+    let body = reqwest::get(url).await.unwrap().bytes().await.unwrap();
+    let out = std::env::temp_dir().join(format!("riptv-resumed-{}.mp4", std::process::id()));
+    std::fs::write(&out, &body).unwrap();
+    // (start, end) of a track's packets.
+    let span = |stream: &str| {
+        let text = std::process::Command::new("ffprobe")
+            .args(["-v", "error", "-select_streams", stream])
+            .args([
+                "-show_entries",
+                "packet=pts_time,duration_time",
+                "-of",
+                "csv=p=0",
+            ])
+            .arg(&out)
+            .output()
+            .unwrap()
+            .stdout;
+        let rows: Vec<(f64, f64)> = String::from_utf8_lossy(&text)
+            .lines()
+            .filter_map(|l| {
+                let (p, d) = l.split_once(',')?;
+                Some((p.parse().ok()?, d.trim_end_matches(',').parse().ok()?))
+            })
+            .collect();
+        let first = rows.first().copied().unwrap();
+        let last = rows.last().copied().unwrap();
+        (first, last.0 + last.1)
+    };
+    let ((video_start, _), video_end) = span("v:0");
+    let ((audio_start, first_length), audio_end) = span("a:0");
+    std::fs::remove_file(&film).ok();
+    std::fs::remove_file(&out).ok();
+    assert!(video_start.abs() < 0.05 && audio_start.abs() < 0.05);
+    // No single sound frame stretched over the gap to where the sound "really" starts.
+    assert!(
+        first_length < 0.1,
+        "first sound frame lasts {first_length}s"
+    );
+    // Both tracks cover the same stretch of the film: from the keyframe at 10 s to the end.
+    assert!(
+        (video_end - audio_end).abs() < 0.1,
+        "{video_end} vs {audio_end}"
+    );
+    assert!(
+        (video_end - 50.0).abs() < 0.2,
+        "starts at the keyframe before 12 s"
+    );
+}
