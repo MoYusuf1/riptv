@@ -25,6 +25,7 @@ mod media_session;
 mod navigation;
 mod preferences;
 mod profiles;
+mod quit;
 mod shelves;
 mod standard;
 mod timeline;
@@ -804,6 +805,7 @@ fn storage() -> Option<web_sys::Storage> {
 #[component]
 fn App() -> Element {
     let session = use_context_provider(|| Signal::new(None::<Client>));
+    let quit = quit::use_quit_state();
     updates::use_updates();
     use_context_provider(|| Signal::new(String::new())); // the account name, if any
     // The browser/ffmpeg path is the stable default; Rust playback is opt-in.
@@ -819,8 +821,8 @@ fn App() -> Element {
         // No `document::Title`: Dioxus web sets it via eval(), which the app's CSP forbids.
         // The title comes from Dioxus.toml instead.
         style { "{CSS}" }
-        style { "{navigation::CSS}{categories::CSS}{updates::CSS}" }
-        if session.read().is_some() { Browse {} } else { Login {} }
+        style { "{navigation::CSS}{categories::CSS}{updates::CSS}{quit::CSS}" }
+        if quit() { quit::Closed {} } else if session.read().is_some() { Browse {} } else { Login {} }
         updates::Notice {}
     }
 }
@@ -1234,7 +1236,7 @@ fn Browse() -> Element {
     // Live TV shows a tile grid until a category (or a channel) is picked, then list + player.
     let three_pane = kind() == Kind::Live && (category().is_some() || live().is_some());
 
-    let mut pick_kind = move |k: Kind| {
+    let pick_kind = move |k: Kind| {
         let prefs = preferences::load();
         kind.set(k);
         sort.set(Sort::restored(k, prefs.sorts[k as usize]));
@@ -1246,7 +1248,7 @@ fn Browse() -> Element {
         live.set(None);
         page.set(0);
     };
-    let mut select = move |cat: Option<u64>| {
+    let select = move |cat: Option<u64>| {
         category.set(cat);
         preferences::update(|p| p.categories[kind() as usize] = cat);
         search.set(String::new());
@@ -1304,7 +1306,7 @@ fn Browse() -> Element {
                     categories::CategoryList {
                         data: categories::CategoryData { list: list.clone(), library: lib.cloned() }, selected: category(),
                         pins: pinned_categories()[kind() as usize].clone(), query: category_search,
-                        onselect: move |id| select(id),
+                        onselect: select,
                         onpin: move |id| {
                             let mut pins = pinned_categories();
                             preferences::toggle_pin(&mut pins[kind() as usize], id);
@@ -1599,12 +1601,13 @@ fn Browse() -> Element {
                         }
                         button { onclick: move |_| session.set(None), "Switch profile" }
                         updates::Check {}
+                        quit::Quit {}
                     }
                 }
             }
         }
         if open().is_none() {
-            navigation::LibraryNav { kind: kind(), playlist: client.is_playlist(), onpick: move |k| pick_kind(k) }
+            navigation::LibraryNav { kind: kind(), playlist: client.is_playlist(), onpick: pick_kind }
         }
         main { class: if open().is_some() { "workspace detail-open" } else { "workspace" },
             aside { class: "sidebar", {cat_list()} }

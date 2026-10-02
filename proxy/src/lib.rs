@@ -92,6 +92,8 @@ pub struct AppState {
     diagnostics: diagnostics::Sessions,
     logs: Option<PathBuf>,
     updates: updates::Checker,
+    /// Signalled by the app's Quit: the server stops as if Ctrl+C had been pressed.
+    quit: Arc<tokio::sync::Notify>,
 }
 
 impl Default for AppState {
@@ -133,7 +135,13 @@ impl AppState {
             diagnostics: diagnostics::Sessions::default(),
             logs: None,
             updates: updates::Checker::default(),
+            quit: Arc::default(),
         }
+    }
+
+    /// Resolves when the app asks the server to quit (see `/quit`).
+    pub fn quit_requested(&self) -> Arc<tokio::sync::Notify> {
+        self.quit.clone()
     }
 
     /// Also serve the compiled web app in `dir` (a single-page app) at `/`.
@@ -275,6 +283,7 @@ pub fn router(state: AppState) -> Router {
     let r = Router::new()
         .route("/proxy", get(proxy))
         .route("/allow", post(allow))
+        .route("/quit", post(quit))
         .route("/compat/check", get(compat::check))
         .route("/compat", get(compat::stream))
         .route("/live", get(live::stream));
@@ -337,6 +346,15 @@ async fn cache_hashed_asset(req: axum::extract::Request, next: Next) -> Response
 #[derive(Deserialize)]
 struct AllowQuery {
     host: String,
+}
+
+/// `POST /quit`: the app's Quit. Only the app may ask; the server then shuts down.
+async fn quit(State(s): State<AppState>, headers: HeaderMap) -> Response {
+    if !from_app(&headers) {
+        return refusal(StatusCode::FORBIDDEN, "only the app may quit the server");
+    }
+    s.quit.notify_one();
+    StatusCode::ACCEPTED.into_response()
 }
 
 /// Sign-in calls this with the provider's host, so a provider on a private network works.

@@ -147,7 +147,9 @@ async fn main() {
         }
     };
     println!("RIPTV is running: http://127.0.0.1:{port}");
-    println!("Keep this window open while watching. Press Ctrl+C to stop.");
+    println!(
+        "Keep this window open while watching. To stop, choose Quit in the app's menu or press Ctrl+C."
+    );
     let checker = state.update_checker();
     tokio::spawn(async move {
         let mut announced = None;
@@ -167,10 +169,23 @@ async fn main() {
     if !args.iter().any(|a| a == "--no-open") && (packaged || args.iter().any(|a| a == "--open")) {
         open_browser(&format!("http://127.0.0.1:{port}"));
     }
-    axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown())
-        .await
-        .expect("serve");
+    // Ctrl+C, the system asking, or the app's Quit. Open streams get a moment to finish, then
+    // the server stops regardless: a live stream never finishes on its own.
+    let quit = state.quit_requested();
+    let stopping = std::sync::Arc::new(tokio::sync::Notify::new());
+    let stop = stopping.clone();
+    let server = axum::serve(listener, router(state)).with_graceful_shutdown(async move {
+        tokio::select! { _ = shutdown() => {}, _ = quit.notified() => {} }
+        println!("Stopping RIPTV.");
+        stop.notify_one();
+    });
+    tokio::select! {
+        result = server => result.expect("serve"),
+        _ = async {
+            stopping.notified().await;
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        } => {}
+    }
 }
 
 #[cfg(test)]

@@ -91,7 +91,7 @@ runs the PowerShell script with a process-only execution-policy setting; it does
 not change your system's policy. Paths containing spaces are supported.
 
 Open **http://127.0.0.1:3000**. Keep the terminal running while you watch.
-Press **Ctrl+C** to stop. The first build can take several minutes; later builds
+Choose **Quit** in the account menu, or press **Ctrl+C**, to stop. The first build can take several minutes; later builds
 reuse what is already compiled.
 
 ## Useful commands

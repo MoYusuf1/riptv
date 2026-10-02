@@ -926,3 +926,29 @@ async fn leaving_a_live_channel_stops_reading_it() {
     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
     assert_eq!(asked.load(Ordering::SeqCst), after_leaving);
 }
+
+/// The app's Quit stops the server; nothing else (another site, say) may.
+#[tokio::test]
+async fn only_the_app_can_quit_the_server() {
+    let state = AppState::new();
+    let quit = state.quit_requested();
+    let proxy = serve(router(state)).await;
+    let http = reqwest::Client::new();
+    let foreign = http
+        .post(format!("http://127.0.0.1:{proxy}/quit"))
+        .header("origin", "https://example.com")
+        .header("sec-fetch-site", "cross-site")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(foreign.status(), 403);
+    let asked = http
+        .post(format!("http://127.0.0.1:{proxy}/quit"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(asked.status(), 202);
+    tokio::time::timeout(std::time::Duration::from_secs(1), quit.notified())
+        .await
+        .expect("quit is signalled");
+}

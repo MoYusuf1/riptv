@@ -19,7 +19,7 @@ Linux needs Ubuntu 22.04 or newer (glibc 2.35+); Mac needs macOS 15+.
 
 The app tells you when an update is ready. Close the old app and open the new download.
 Use the same browser to keep your profiles.
-On Windows/Linux, keep the app's terminal open while watching; Ctrl+C stops it.
+On Windows/Linux, keep the app's terminal open while watching. To stop RIPTV, choose **Quit** in the account menu (under **Check for updates**), or press Ctrl+C in that terminal.
 On Mac, Activity Monitor can stop RIPTV if needed.
 
 [Bundled software](third-party.md) · [Source setup](setup.md)
