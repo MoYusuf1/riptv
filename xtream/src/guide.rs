@@ -20,6 +20,7 @@ pub fn has_nearby(entries: &[EpgListing], now: u64) -> bool {
 pub fn normalize(entries: &[EpgListing]) -> Vec<Slot<'_>> {
     let mut slots: Vec<_> = entries
         .iter()
+        .filter(|listing| !placeholder(&listing.title))
         .filter_map(|listing| {
             let (start, end) = (listing.start_ts?, listing.end_ts?);
             (end > start).then_some(Slot {
@@ -37,6 +38,30 @@ pub fn normalize(entries: &[EpgListing]) -> Vec<Slot<'_>> {
     }
     slots.retain(|slot| slot.end > slot.start);
     slots
+}
+
+/// Provider filler is not a programme and should not reserve a guide panel.
+pub fn placeholder(title: &str) -> bool {
+    let title = title.trim().to_ascii_uppercase();
+    title.is_empty()
+        || [
+            "NO GUIDE",
+            "NO EPG",
+            "EPG NOT NEEDED",
+            "GUIDE NOT NEEDED",
+            "NO PROGRAM INFORMATION",
+            "NO PROGRAMME INFORMATION",
+        ]
+        .iter()
+        .any(|filler| title.contains(filler))
+}
+
+/// The programme at the requested instant, never a past or upcoming listing.
+/// Use the same overlap rules as the full timeline.
+pub fn current(entries: &[EpgListing], now: u64) -> Option<Slot<'_>> {
+    normalize(entries)
+        .into_iter()
+        .find(|slot| slot.start <= now && now < slot.end)
 }
 
 /// Short programmes need a closer zoom, while long programmes can use a wider time window.
@@ -96,5 +121,23 @@ mod tests {
     fn stale_table_needs_short_epg() {
         assert!(!has_nearby(&[listing(100, 200)], 10_000));
         assert!(has_nearby(&[listing(9_000, 10_500)], 10_000));
+    }
+
+    #[test]
+    fn current_respects_boundaries_gaps_and_overlaps() {
+        let rows = [listing(100, 300), listing(200, 250), listing(400, 500)];
+        assert!(current(&rows, 99).is_none());
+        assert_eq!(current(&rows, 100).unwrap().listing.title, "100");
+        assert_eq!(current(&rows, 200).unwrap().listing.title, "200");
+        assert!(current(&rows, 250).is_none());
+        assert!(current(&rows, 500).is_none());
+    }
+
+    #[test]
+    fn filler_does_not_reserve_guide_space() {
+        let mut row = listing(100, 300);
+        row.title = "No guide needed".into();
+        assert!(normalize(&[row]).is_empty());
+        assert!(!placeholder("NFL: Steelers vs Browns"));
     }
 }

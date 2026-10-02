@@ -1,0 +1,173 @@
+name: Release downloads
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  web-and-sources:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Rust and web tooling
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+          curl -fL --retry 3 -o /tmp/dx-x86_64-unknown-linux-gnu.zip https://github.com/DioxusLabs/dioxus/releases/download/v0.7.10/dx-x86_64-unknown-linux-gnu.zip
+          curl -fL --retry 3 -o /tmp/dioxus.sha256 https://github.com/DioxusLabs/dioxus/releases/download/v0.7.10/dx-x86_64-unknown-linux-gnu.sha256
+          cd /tmp
+          grep ' dx-x86_64-unknown-linux-gnu.zip$' dioxus.sha256 | sha256sum -c -
+          unzip dx-x86_64-unknown-linux-gnu.zip -d dioxus
+          chmod +x dioxus/dx
+          echo /tmp/dioxus >> "$GITHUB_PATH"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/wasm32-unknown-unknown
+            target/release
+          key: release-web-${{ hashFiles('Cargo.lock') }}
+      - name: Build web app
+        run: dx build --web --release --locked -p app
+      - name: Collect FFmpeg corresponding source and licenses
+        run: python scripts/release_sources.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: target/dx/app/release/web/public
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-sources
+          path: target/release-sources
+          if-no-files-found: error
+
+  native:
+    needs: web-and-sources
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            executable: riptv
+            rustflags: ''
+          - platform: windows-x64
+            runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            executable: riptv.exe
+            rustflags: '-C target-feature=+crt-static'
+          - platform: macos-arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            executable: riptv
+            rustflags: ''
+          - platform: macos-x64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            executable: riptv
+            rustflags: ''
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Rust toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/${{ matrix.target }}
+          key: release-static-crt-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: web
+          path: target/dx/app/release/web/public
+      - uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg-sources
+          path: target/release-sources
+      - name: Build native executable
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '15.0'
+        run: cargo build --release --locked -p riptv --target ${{ matrix.target }}
+      - name: Download dependency notices
+        run: cargo fetch --locked
+      - name: Package with verified bundled media tools
+        run: python scripts/package.py --platform ${{ matrix.platform }} --version 0.2.0 --target ${{ matrix.target }} --server target/${{ matrix.target }}/release/${{ matrix.executable }}
+      - name: Test extracted application and bundled conversion
+        run: python scripts/smoke_package.py target/packages/riptv-0.2.0-${{ matrix.platform }}.*
+      - name: Unit and integration tests with bundled FFmpeg
+        run: |
+          mkdir -p target/test-tools
+          python -c 'import glob, pathlib, tarfile, zipfile; p=glob.glob("target/packages/*")[0]; d=pathlib.Path("target/test-tools"); zipfile.ZipFile(p).extractall(d) if p.endswith(".zip") else tarfile.open(p).extractall(d, filter="data")'
+          export PATH="$PWD/target/test-tools/riptv-0.2.0-${{ matrix.platform }}/bin:$PATH"
+          cargo test --locked -p xtream -p riptv --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: download-${{ matrix.platform }}
+          path: target/packages/*
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: native
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: download-*
+          path: release-assets
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg-sources
+          path: ffmpeg-sources
+      - name: Checksums and publish only after all native tests pass
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          test "$RELEASE_TAG" = v0.2.0
+          cp ffmpeg-sources/ffmpeg-sources-*.tar.gz release-assets/
+          cd release-assets
+          sha256sum *.zip *.tar.gz > SHA256SUMS.txt
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "RIPTV 0.2.0" --notes-file ../docs/release-notes.md
+          gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" ./*
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest

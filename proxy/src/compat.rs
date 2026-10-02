@@ -35,8 +35,24 @@ use tokio_util::io::ReaderStream;
 
 use crate::{AppState, FALLBACK_UA, diagnostics, from_app, refusal, url_ok};
 
-pub(crate) const MISSING: &str =
-    "ffmpeg isn't installed, and this stream needs it (Arch: sudo pacman -S ffmpeg)";
+pub(crate) const MISSING: &str = "ffmpeg isn't installed, and this stream needs it. Extract the complete RIPTV download, or install FFmpeg (see the setup guide).";
+
+/// Prefer the release's bundled tools without changing PATH or the working directory.
+pub(crate) fn media_tool(name: &str) -> std::path::PathBuf {
+    let filename = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_owned()
+    };
+    if let Some(path) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.join("bin").join(filename)))
+        .filter(|p| p.is_file())
+    {
+        return path;
+    }
+    name.into()
+}
 const VIDEO_HEADER: HeaderName = HeaderName::from_static("x-riptv-video");
 const HAS_VIDEO_HEADER: HeaderName = HeaderName::from_static("x-riptv-has-video");
 const DURATION_HEADER: HeaderName = HeaderName::from_static("x-riptv-duration");
@@ -107,7 +123,7 @@ fn not_found(e: &io::Error) -> bool {
 }
 
 async fn probe(url: &str, ua: &str) -> Result<Option<Probe>, Failure> {
-    let run = Command::new("ffprobe")
+    let run = Command::new(media_tool("ffprobe"))
         .args([
             "-v",
             "error",
@@ -151,7 +167,7 @@ pub(crate) async fn nvenc_works() -> bool {
     static WORKS: OnceCell<bool> = OnceCell::const_new();
     *WORKS
         .get_or_init(|| async {
-            let test = Command::new("ffmpeg")
+            let test = Command::new(media_tool("ffmpeg"))
                 .args([
                     "-v",
                     "error",
@@ -483,7 +499,7 @@ pub async fn stream(
         );
     }
 
-    let mut child = match Command::new("ffmpeg")
+    let mut child = match Command::new(media_tool("ffmpeg"))
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

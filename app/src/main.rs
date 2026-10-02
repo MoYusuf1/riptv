@@ -14,6 +14,7 @@ use std::{
     time::Duration,
 };
 
+mod channel_preview;
 mod controls;
 mod diag;
 mod fetch;
@@ -44,6 +45,13 @@ const CSS: &str = concat!(
     // Palette and page basics
     r#":root{color-scheme:dark;--bg:#0b0709;--panel:#130d10;--row:#1c1418;--hair:rgba(255,255,255,.08);--text:#f5eef1;--dim:#a0919a;--faint:#6f6068;--accent:#ff7d92;--fill:#e11d48;--soft:rgba(255,125,146,.14);--glass:rgba(24,16,20,.72);--ease:cubic-bezier(.2,.8,.2,1)}
 *{box-sizing:border-box}
+*{scrollbar-width:thin;scrollbar-color:#59414c transparent}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{border:2px solid var(--panel);border-radius:999px;background:#59414c}
+::-webkit-scrollbar-thumb:hover{background:#946373}
+::-webkit-scrollbar-corner{background:transparent}
+button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 body{margin:0;min-width:320px;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 button,input{font:inherit;color:inherit}
 button{padding:0;border:0;background:none;text-align:inherit;cursor:pointer}
@@ -96,21 +104,21 @@ svg{width:1.1rem;height:1.1rem}
 .profile-form .note{text-align:center;color:var(--faint);font-size:.72rem}
 @media(max-width:520px){.profiles{gap:1.4rem 1rem}.profile{width:6.2rem}.avatar{width:5.5rem;font-size:2.1rem}}
 "#,
-    // Floating chrome: top bar, section rail, account menu
-    r#".topbar,.rail{position:fixed;z-index:20;display:flex;border:1px solid var(--hair);background:var(--glass);box-shadow:0 10px 30px rgba(0,0,0,.35);backdrop-filter:blur(24px) saturate(180%)}
-.topbar{inset:.6rem .6rem auto;align-items:center;gap:.9rem;height:3rem;padding:0 .6rem 0 .9rem;border-radius:16px}
+    // One labelled navigation bar, with search and the account menu.
+    r#".topbar{position:fixed;z-index:20;display:flex;border:1px solid var(--hair);background:var(--glass);box-shadow:0 10px 30px rgba(0,0,0,.25);backdrop-filter:blur(24px) saturate(180%);inset:.7rem .7rem auto;align-items:center;gap:1.2rem;height:3.6rem;padding:0 .7rem 0 1rem;border-radius:18px}
 .brand{display:inline-flex;align-items:center;gap:.5rem;font-size:.85rem;font-weight:700;letter-spacing:.06em}
 .rust-mark{width:1.6rem;height:1.6rem;color:var(--accent)}
-.search{position:relative;display:flex;align-items:center;flex:1;max-width:24rem}
+.search{position:relative;display:flex;align-items:center;flex:1;min-width:6rem;max-width:28rem;margin-left:auto}
 .search svg{position:absolute;left:.75rem;width:.95rem;height:.95rem;color:var(--faint);pointer-events:none}
 .search input{width:100%;height:2.1rem;padding:0 .9rem 0 2.2rem;border:0;border-radius:10px;outline:0;background:var(--row)}
 .search input:focus{box-shadow:0 0 0 2px var(--soft)}
 .search input::placeholder{color:var(--faint)}
-.rail{z-index:25;top:50%;left:.6rem;flex-direction:column;gap:.25rem;padding:.35rem;border-radius:18px;transform:translateY(-50%)}
-.rail button{display:grid;place-items:center;align-content:center;width:2.7rem;height:2.7rem;border-radius:13px;color:var(--dim);text-align:center}
-.rail button.on{background:var(--soft);color:var(--accent)}
-.rail svg{width:1.3rem;height:1.3rem}
-.rail span{display:none;font-size:.62rem;font-weight:500}
+.rail{display:flex;flex:none;gap:.25rem;padding:.25rem;border:1px solid var(--hair);border-radius:13px;background:rgba(255,255,255,.025)}
+.rail button{display:flex;align-items:center;justify-content:center;gap:.5rem;height:2.45rem;padding:0 .85rem;border-radius:9px;color:var(--dim);white-space:nowrap;transition:background .18s,color .18s}
+.rail button:hover{background:var(--row);color:var(--text)}
+.rail button.on{background:var(--soft);color:var(--accent);box-shadow:inset 0 0 0 1px rgba(255,125,146,.12)}
+.rail svg{width:1.15rem;height:1.15rem}
+.rail span{font-size:.82rem;font-weight:600}
 .topbar.detail-mode{inset:.65rem .7rem auto auto;width:auto;height:2.8rem;padding:.25rem;border-radius:999px;background:rgba(22,16,20,.82)}
 .topbar.detail-mode .grow{display:none}
 .topbar.detail-mode .who{background:transparent}
@@ -128,7 +136,7 @@ svg{width:1.1rem;height:1.1rem}
 .menu button:hover{background:var(--soft)}
 "#,
     // Workspace: category sidebar, headers, scrolling lists
-    r#".workspace{position:fixed;inset:4.2rem 0 0 4.4rem;display:grid;grid-template-columns:15rem minmax(0,1fr);gap:.7rem;padding:0 .7rem .7rem 0}
+    r#".workspace{position:fixed;inset:5rem 0 0;display:grid;grid-template-columns:15rem minmax(0,1fr);gap:.7rem;padding:0 .7rem .7rem}
 .sidebar{min-height:0;padding:.75rem .6rem 1rem;overflow:auto;border-radius:16px;background:var(--panel);scrollbar-width:thin}
 .filter{width:100%;margin:0 0 .5rem;padding:.55rem .8rem;border:0;border-radius:10px;outline:0;background:var(--row);font-size:.85rem}
 .filter:focus{box-shadow:0 0 0 2px var(--soft)}
@@ -253,10 +261,17 @@ svg{width:1.1rem;height:1.1rem}
 .row strong{font-weight:500}
 .row .eq{flex:none;height:12px;margin:0 .35rem 0 auto;gap:2px}
 .row .eq i{width:2.5px;background:var(--accent)}
+.channel-preview{position:fixed;z-index:45;display:flex;flex-direction:column;gap:.5rem;width:min(320px,calc(100vw - 24px));padding:1rem 1.1rem;border:1px solid rgba(255,125,146,.22);border-radius:16px;background:#22171e;box-shadow:0 16px 48px rgba(0,0,0,.5);text-align:left;pointer-events:none;animation:fade .16s var(--ease)}
+.channel-preview .preview-label{color:var(--accent);font-size:.61rem;font-weight:700;letter-spacing:.09em}
+.channel-preview strong{font-size:.98rem;line-height:1.35;white-space:normal}
+.channel-preview time{font-size:.75rem;color:var(--dim);font-variant-numeric:tabular-nums}
+.channel-preview .preview-description{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:4;font-size:.8rem;color:var(--dim);line-height:1.5}
 .stage{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
 .stage-empty{display:grid;flex:1;place-content:center;justify-items:center;gap:.8rem;color:var(--dim)}
 .stage-empty svg{width:3.4rem;height:3.4rem;opacity:.55}
-.live-stage{display:grid;grid-template:minmax(0,1fr) auto/minmax(0,1fr);height:100%}
+.live-stage{display:flex;flex-direction:column;height:100%;min-height:0}
+.live-stage>.player{flex:1}
+.live-stage>.guide{flex:none}
 .player{position:relative;min-height:0;margin:.7rem .7rem 0;overflow:hidden;border-radius:16px;background:#000;outline:0}
 .player:fullscreen,.player.fill{margin:0;border-radius:0}
 .player.fill{position:fixed;z-index:60;inset:0}
@@ -433,7 +448,9 @@ img[data-failed]{display:none}
 .card small{display:block;margin-top:.1rem;color:var(--faint);font-size:.68rem}
 "#,
     // Narrow screens: the rail becomes a floating tab bar, categories a button
-    r#"@media(max-width:820px){.brand span,.who b{display:none}.topbar{gap:.5rem}.rail{top:auto;bottom:.8rem;left:50%;flex-direction:row;transform:translateX(-50%)}.rail button{width:auto;min-width:4.4rem;height:3rem;padding:0 .8rem}.rail span{display:block}.workspace{inset:4.2rem 0 0;grid-template-columns:1fr;padding:0 .6rem .6rem}.sidebar{display:none}.cats-btn{display:inline-flex}.scroll,.episodes{padding-bottom:5.5rem}.d-hero{min-height:auto;padding:7rem 1rem 1.6rem}.d-facts{position:relative;inset:auto;width:auto;margin-top:1.4rem}.d-sec{padding:1rem 1rem .8rem}.w-top{padding:.8rem .8rem 2.5rem}.w-bottom{padding:3rem .8rem .6rem}.w-row .vol,.w-row .volume{display:none}.w-menu{right:.8rem;bottom:5.2rem}}
+    r#"@media(max-width:1080px){.topbar{gap:.7rem}.who b{display:none}.rail button{padding:0 .65rem}}
+@media(max-width:820px){.brand{display:none}.who b{display:none}.topbar{gap:.5rem;height:3rem;inset:.6rem .6rem auto}.rail{position:fixed;z-index:25;top:auto;bottom:.8rem;left:50%;flex-direction:row;transform:translateX(-50%);background:rgba(24,16,20,.94);backdrop-filter:blur(24px);box-shadow:0 10px 30px rgba(0,0,0,.4);border-radius:18px}.rail button{flex-direction:column;gap:.15rem;width:auto;min-width:4.4rem;height:3rem;padding:0 .8rem}.rail span{font-size:.65rem}.workspace{inset:4.2rem 0 0;grid-template-columns:1fr;padding:0 .6rem .6rem}.sidebar{display:none}.cats-btn{display:inline-flex}.scroll,.episodes{padding-bottom:5.5rem}.d-hero{min-height:auto;padding:7rem 1rem 1.6rem}.d-facts{position:relative;inset:auto;width:auto;margin-top:1.4rem}.d-sec{padding:1rem 1rem .8rem}.w-top{padding:.8rem .8rem 2.5rem}.w-bottom{padding:3rem .8rem .6rem}.w-row .vol,.w-row .volume{display:none}.w-menu{right:.8rem;bottom:5.2rem}}
+@media(max-width:820px){.topbar{backdrop-filter:none;background:#181014}}
 /* Live TV on a phone: keep the picture above the channels, without squeezing in the guide. */
 @media(max-width:820px){.live{display:flex;flex-direction:column;margin:0 -.6rem;border:0;border-radius:0}.stage{order:-1;flex:none}.stage.idle{display:none}.live-stage{display:block;height:auto}.player{margin:0;border-radius:0;aspect-ratio:16/9}.player.fill{aspect-ratio:auto}.controls{padding:2.2rem .5rem .3rem}.ctl{width:2.8rem;height:2.8rem}.vol{display:none}.bigplay{width:4.2rem;height:4.2rem}.sound-note{bottom:3.9rem}.guide{min-height:0;padding:.7rem .9rem .8rem;border-top:0;background:var(--bg)}.tl{height:5.6rem}.channels{flex:1;border:0;background:none}.channels .head{padding:.8rem 1rem .4rem}.channels .scroll{padding-bottom:5.5rem}}
 @media(max-width:820px){.live.watching .stage{display:block;width:100%;background:#000}.live.watching .live-stage{display:block;width:100%}.live.watching .player{width:100%;min-height:0;aspect-ratio:16/9}.live.watching .player video{display:block}.live.watching .guide{display:none}.live.watching .channels{min-height:0;overflow:hidden}.live.watching .channels .scroll{min-height:0;overflow-y:auto}.live.watching .controls{gap:.1rem}.live.watching .controls .ctl{width:2.5rem;height:2.5rem}.live.watching .sound-note{font-size:.7rem}}
@@ -452,7 +469,7 @@ img[data-failed]{display:none}
 // Icons: 24x24 outlines, drawn as one path each.
 const LIVE_TV: &str = "M5 5h14a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2zM8 21h8M12 18v3M10 9l5 3-5 3V9z";
 const MOVIE: &str = "M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2zM7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4";
-const SERIES: &str = "M5.5 4h13A1.5 1.5 0 0120 5.5v3a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 8.5v-3A1.5 1.5 0 015.5 4zM5.5 11h13a1.5 1.5 0 011.5 1.5v6a1.5 1.5 0 01-1.5 1.5h-13A1.5 1.5 0 014 18.5v-6A1.5 1.5 0 015.5 11zM8 15h8";
+const SERIES: &str = "M7 3h10M5 6h14M5 9h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2v-8a2 2 0 012-2zM10 12l5 3-5 3v-6z";
 const SEARCH: &str = "m21 21-4.35-4.35M19 11a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z";
 const PLAY: &str = "M7 4l13 8-13 8V4z";
 const PAUSE: &str = "M8 5v14M16 5v14";
@@ -1578,6 +1595,14 @@ fn Browse() -> Element {
     rsx! {
         header { class: if open().is_some() { "topbar detail-mode" } else { "topbar" },
             if open().is_none() {
+                span { class: "brand", "RIPTV" }
+                nav { class: "rail", aria_label: "Library",
+                    button { class: tab(Kind::Live), aria_current: if kind() == Kind::Live { "page" } else { "false" }, onclick: move |_| pick_kind(Kind::Live), Icon { d: LIVE_TV } span { "Live TV" } }
+                    if !client.is_playlist() {
+                        button { class: tab(Kind::Movies), aria_current: if kind() == Kind::Movies { "page" } else { "false" }, onclick: move |_| pick_kind(Kind::Movies), Icon { d: MOVIE } span { "Movies" } }
+                        button { class: tab(Kind::Series), aria_current: if kind() == Kind::Series { "page" } else { "false" }, onclick: move |_| pick_kind(Kind::Series), Icon { d: SERIES } span { "TV Shows" } }
+                    }
+                }
                 label { class: "search",
                     Icon { d: SEARCH }
                     input {
@@ -1588,7 +1613,6 @@ fn Browse() -> Element {
                     }
                 }
             }
-            span { class: "grow" }
             div { class: "account",
                 button {
                     class: if initial.is_some() { "who" } else { "who solo" },
@@ -1634,13 +1658,6 @@ fn Browse() -> Element {
                         button { onclick: move |_| session.set(None), "Switch profile" }
                     }
                 }
-            }
-        }
-        nav { class: "rail", aria_label: "Library",
-            button { class: tab(Kind::Live), title: "Live TV", onclick: move |_| pick_kind(Kind::Live), Icon { d: LIVE_TV } span { "Live TV" } }
-            if !client.is_playlist() {
-                button { class: tab(Kind::Movies), title: "Movies", onclick: move |_| pick_kind(Kind::Movies), Icon { d: MOVIE } span { "Movies" } }
-                button { class: tab(Kind::Series), title: "Series", onclick: move |_| pick_kind(Kind::Series), Icon { d: SERIES } span { "Series" } }
             }
         }
         main { class: if open().is_some() { "workspace detail-open" } else { "workspace" },
@@ -1779,10 +1796,23 @@ fn Download(title: String, url: String) -> Element {
 #[component]
 fn ChannelRow(row: Row, active: bool, onpick: EventHandler<Row>) -> Element {
     let r = row.clone();
+    let anchor = format!("channel-{}", row.key);
+    let channel_preview::Preview {
+        mut pointer,
+        mut focused,
+        mut escaped,
+        content,
+    } = channel_preview::use_preview(Some(row.key), anchor.clone());
     rsx! {
         button {
+            id: "{anchor}",
             class: if active { "row on" } else { "row" },
-            title: "{row.title}",
+            aria_describedby: if (pointer() || focused()) && !escaped() { Some(format!("{anchor}-guide")) } else { None },
+            onmouseenter: move |_| { escaped.set(false); pointer.set(true); },
+            onmouseleave: move |_| pointer.set(false),
+            onfocus: move |_| { escaped.set(false); focused.set(true); },
+            onblur: move |_| focused.set(false),
+            onkeydown: move |e| { if e.key() == Key::Escape { escaped.set(true); } },
             onclick: move |_| onpick.call(r.clone()),
             span { class: "logo",
                 span { class: "ph", "TV" }
@@ -1793,6 +1823,7 @@ fn ChannelRow(row: Row, active: bool, onpick: EventHandler<Row>) -> Element {
             strong { "{row.title}" }
             if active { span { class: "eq", i {} i {} i {} } }
         }
+        {content}
     }
 }
 
@@ -1800,6 +1831,17 @@ fn ChannelRow(row: Row, active: bool, onpick: EventHandler<Row>) -> Element {
 #[component]
 fn Card(row: Row, onpick: EventHandler<Row>) -> Element {
     let r = row.clone();
+    let id = match row.target {
+        Target::Live { id, .. } => Some(id),
+        _ => None,
+    };
+    let anchor = format!("tile-{}", row.key);
+    let channel_preview::Preview {
+        mut pointer,
+        mut focused,
+        mut escaped,
+        content,
+    } = channel_preview::use_preview(id, anchor.clone());
     let fallback = match &row.target {
         Target::Series(_) => "S",
         Target::Live { .. } => "TV",
@@ -1812,8 +1854,15 @@ fn Card(row: Row, onpick: EventHandler<Row>) -> Element {
     };
     rsx! {
         button {
+            id: "{anchor}",
             class: "card",
-            title: "{row.title}",
+            title: if id.is_none() { Some(row.title.clone()) } else { None },
+            aria_describedby: if id.is_some() && (pointer() || focused()) && !escaped() { Some(format!("{anchor}-guide")) } else { None },
+            onmouseenter: move |_| { escaped.set(false); pointer.set(true); },
+            onmouseleave: move |_| pointer.set(false),
+            onfocus: move |_| { escaped.set(false); focused.set(true); },
+            onblur: move |_| focused.set(false),
+            onkeydown: move |e| { if e.key() == Key::Escape { escaped.set(true); } },
             onclick: move |_| onpick.call(r.clone()),
             span { class: "art",
                 span { class: "ph", "{fallback}" }
@@ -1825,6 +1874,7 @@ fn Card(row: Row, onpick: EventHandler<Row>) -> Element {
             }
             strong { "{row.title}" }
         }
+        {content}
     }
 }
 

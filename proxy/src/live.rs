@@ -258,7 +258,7 @@ pub async fn stream(
         max_height(),
         audio,
     ));
-    let mut child = match Command::new("ffmpeg")
+    let mut child = match Command::new(crate::compat::media_tool("ffmpeg"))
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

@@ -1,68 +1,28 @@
 # RIPTV
 
-A lightweight IPTV player for your browser. Watch live TV, movies, and series using
-an Xtream account or an M3U/M3U8 playlist.
+Watch live TV, movies, and TV shows in your browser using your IPTV account or
+an M3U playlist. RIPTV runs on your computer; no hosting or GitHub account needed.
 
-RIPTV runs on your computer. No hosting account or GitHub login is needed.
+## Start watching
 
-## Get started
+1. [Download RIPTV for your computer](https://github.com/MoYusuf1/riptv/releases/latest).
+   Choose **Windows x64**, **Linux x64**, or **macOS** (Apple Silicon or Intel).
+2. Extract the **entire folder**. On Windows, open `riptv.exe`; on Mac, open
+   `RIPTV.command`; on Linux, run `./riptv` in that folder.
+3. Your browser opens automatically. Choose **Public TV** to try free channels,
+   or **Add** to connect your account or playlist.
 
-1. Install **Rust, Git, and FFmpeg** using the [setup guide](docs/setup.md).
-2. Run:
+Keep the terminal window open while watching. Press **Ctrl+C** to stop.
+Rust and a separate FFmpeg installation are **not required** for these downloads.
 
-   ```sh
-   git clone https://github.com/MoYusuf1/riptv.git
-   cd riptv
-   ```
+## Good to know
 
-3. Start setup for your system:
+- Hover over a live channel to see what its provider's guide says is on now.
+- RIPTV is a player, not a TV subscription. Some channels may be offline,
+  restricted to your region, or slow at the provider.
+- Profiles and passwords are saved in your browser. Use a trusted computer.
+- To update, stop RIPTV and download the new release. Your browser keeps your profiles.
+- Builds are unsigned; Windows or macOS may show a security warning.
 
-   | System | Command |
-   | --- | --- |
-   | Windows (PowerShell or Command Prompt) | `.\scripts\setup.cmd` |
-   | Linux / macOS | `./scripts/setup.sh` |
-
-4. Open **http://127.0.0.1:3000**. Choose **Public TV** to try free channels,
-   or **Add** to connect your own account or playlist.
-
-The script installs the WebAssembly target and Dioxus build tool if needed, then
-builds and starts RIPTV. The first build can take several minutes.
-Keep the terminal open while watching; press **Ctrl+C** to stop.
-
-Native Windows setup supports Windows 10/11 x64. WSL also works with the Linux instructions.
-
-## Start again
-
-From the `riptv` folder:
-
-```sh
-cargo riptv
-```
-
-## Update
-
-Stop RIPTV, then run:
-
-```sh
-git pull --ff-only
-```
-
-Then run the setup command for your system again.
-
-## Troubleshooting
-
-- **A channel won't play?** Confirm FFmpeg is installed; some public channels
-  may be offline or unavailable in your region.
-- **Port 3000 is busy?** Run `IPTV_PORT=3001 cargo riptv` and open
-  `http://127.0.0.1:3001`. In Windows PowerShell, use
-  `$env:IPTV_PORT=3001; cargo riptv`.
-- **Need logs?** Run `cargo riptv --logs`. The terminal prints the log location.
-  See [diagnostics](docs/reference.md#diagnostics-why-a-channel-wont-play-or-keeps-buffering)
-  for testing and log details.
-
-Profiles, including passwords, are stored in this browser on your computer.
-Use RIPTV on a trusted device. The server is local to this computer; phone access
-and public hosting require a separate secure deployment.
-
-[Setup help](docs/setup.md) · [Features and development](docs/reference.md) ·
-[Live playback internals](docs/live-playback.md)
+[Download help](docs/downloads.md) · [Build from source](docs/setup.md) ·
+[Features and troubleshooting](docs/reference.md)
