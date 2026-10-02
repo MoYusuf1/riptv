@@ -10,4 +10,5 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"
-strip = true
+# Keep wasm-bindgen custom sections until the web bundler has processed them.
+strip = "debuginfo"

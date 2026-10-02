@@ -57,6 +57,32 @@ const SNIFF_MAX: usize = 4 * 1024 * 1024;
 const QUEUE: usize = 32;
 /// A playlist this large is not a playlist.
 const PLAYLIST_MAX: usize = 1024 * 1024;
+const READ_IDLE: Duration = Duration::from_secs(10);
+const REQUEST_WAIT: Duration = Duration::from_secs(10);
+
+#[derive(Debug)]
+enum FetchError {
+    Request(String),
+    Status(u16),
+}
+
+impl FetchError {
+    fn retryable(&self) -> bool {
+        matches!(
+            self,
+            Self::Request(_) | Self::Status(408 | 429 | 500 | 502 | 503 | 504)
+        )
+    }
+}
+
+impl std::fmt::Display for FetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Request(why) => f.write_str(why),
+            Self::Status(code) => write!(f, "Server returned {code}"),
+        }
+    }
+}
 
 pub async fn stream(
     State(s): State<AppState>,
@@ -299,6 +325,16 @@ pub async fn stream(
     let body = futures_prepend(first, rest, [follower, feeder]);
     Response::builder()
         .header(header::CONTENT_TYPE, "video/mp4")
+        .header(
+            "x-riptv-video",
+            if sniffed.video.is_none() {
+                "none"
+            } else if video == "copy" && sniffed.video == Some("hevc") {
+                "hevc"
+            } else {
+                "h264"
+            },
+        )
         .header(header::CACHE_CONTROL, "no-store")
         .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
         .header(header::CONTENT_SECURITY_POLICY, "sandbox")
@@ -379,12 +415,13 @@ impl Source {
         let mut current = url.clone();
         for _ in 0..2 {
             let asked = Instant::now();
-            let mut response = get(s, &current, ua).await?;
+            let mut response = get_retry(s, &current, ua, "", "opening stream").await?;
             let redirected = response.url() != &current;
             let base = response.url().clone();
-            let first = response
-                .chunk()
+            let first = response.chunk();
+            let first = timeout(READ_IDLE, first)
                 .await
+                .map_err(|_| "the provider stopped sending data".to_string())?
                 .map_err(|_| "the connection broke".to_string())?
                 .unwrap_or_default();
             if !first.starts_with(b"#EXTM3U") {
@@ -421,7 +458,7 @@ impl Source {
                 if tx.send(first).await.is_err() {
                     return;
                 }
-                while let Ok(Some(chunk)) = response.chunk().await {
+                while let Ok(Ok(Some(chunk))) = timeout(READ_IDLE, response.chunk()).await {
                     if tx.send(chunk).await.is_err() {
                         return;
                     }
@@ -437,26 +474,63 @@ impl Source {
                 let mut refreshed = Instant::now();
                 loop {
                     let from = next;
-                    for (seq, segment, _) in media.segments.iter().filter(|(seq, ..)| *seq >= from)
+                    for (seq, segment, length) in
+                        media.segments.iter().filter(|(seq, ..)| *seq >= from)
                     {
                         let started = Instant::now();
-                        let Ok(mut response) = get(&s, segment, &ua).await else {
-                            diagnostics::note(&s, &format!("{tag}live segment {seq} failed"));
-                            next = seq + 1;
-                            continue;
+                        let mut response = match get_retry(&s, segment, &ua, &tag, "segment").await
+                        {
+                            Ok(response) => response,
+                            Err(why) => {
+                                diagnostics::note(
+                                    &s,
+                                    &format!(
+                                        "{tag}live segment {seq} failed: {why}; reopening stream"
+                                    ),
+                                );
+                                return;
+                            }
                         };
-                        while let Ok(Some(chunk)) = response.chunk().await {
+                        let mut bytes = 0_u64;
+                        let mut blocked = Duration::ZERO;
+                        loop {
+                            let chunk = match timeout(READ_IDLE, response.chunk()).await {
+                                Ok(Ok(Some(chunk))) => chunk,
+                                Ok(Ok(None)) => break,
+                                _ => {
+                                    // Never retry a partially forwarded segment: that would repeat
+                                    // transport timestamps and corrupt the browser's decoder.
+                                    diagnostics::note(
+                                        &s,
+                                        &format!(
+                                            "{tag}live segment {seq} interrupted after {bytes} bytes; reopening stream"
+                                        ),
+                                    );
+                                    return;
+                                }
+                            };
+                            bytes += chunk.len() as u64;
+                            let sending = Instant::now();
                             if tx.send(chunk).await.is_err() {
                                 return; // the viewer left
                             }
+                            blocked += sending.elapsed();
                         }
                         let took = started.elapsed().as_secs_f64();
-                        if took > media.target {
+                        let duration = if *length > 0.0 { *length } else { media.target };
+                        let network = (started.elapsed().saturating_sub(blocked)).as_secs_f64();
+                        diagnostics::note(
+                            &s,
+                            &format!(
+                                "{tag}live segment {seq} delivery bytes={bytes} video_s={duration:.1} elapsed_s={took:.2} downstream_wait_s={:.2} upstream_s={network:.2}",
+                                blocked.as_secs_f64()
+                            ),
+                        );
+                        if network > duration {
                             diagnostics::note(
                                 &s,
                                 &format!(
-                                    "{tag}live segment {seq} took {took:.1}s for {:.0}s of video: the provider can't keep up",
-                                    media.target
+                                    "{tag}live segment {seq} took {network:.1}s for {duration:.1}s of video upstream"
                                 ),
                             );
                         }
@@ -466,7 +540,8 @@ impl Source {
                     if media.ended {
                         return;
                     }
-                    if quiet_since.elapsed().as_secs_f64() > media.target * 6.0 {
+                    if quiet_since.elapsed().as_secs_f64() > (media.target * 2.0).clamp(10.0, 20.0)
+                    {
                         diagnostics::note(&s, &format!("{tag}live playlist stopped advancing"));
                         return;
                     }
@@ -479,14 +554,23 @@ impl Source {
                         return;
                     }
                     refreshed = Instant::now();
-                    match get(&s, &playlist, &ua).await {
-                        Ok(response) => {
-                            if let Ok(text) = read_rest(response, Bytes::new()).await {
-                                media = Media::parse(&text, &playlist);
+                    match get_retry(&s, &playlist, &ua, &tag, "playlist refresh").await {
+                        Ok(response) => match read_rest(response, Bytes::new()).await {
+                            Ok(text) => media = Media::parse(&text, &playlist),
+                            Err(why) => {
+                                diagnostics::note(
+                                    &s,
+                                    &format!("{tag}live playlist refresh: {why}; reopening stream"),
+                                );
+                                return;
                             }
-                        }
+                        },
                         Err(why) => {
-                            diagnostics::note(&s, &format!("{tag}live playlist refresh: {why}"))
+                            diagnostics::note(
+                                &s,
+                                &format!("{tag}live playlist refresh: {why}; reopening stream"),
+                            );
+                            return;
                         }
                     }
                 }
@@ -495,38 +579,61 @@ impl Source {
     }
 }
 
-async fn get(s: &AppState, url: &Url, ua: &str) -> Result<reqwest::Response, String> {
-    let response = s
+async fn get(s: &AppState, url: &Url, ua: &str) -> Result<reqwest::Response, FetchError> {
+    let request = s
         .http
         .get(url.clone())
         .header(header::USER_AGENT, ua)
-        .send()
+        .send();
+    let response = timeout(REQUEST_WAIT, request)
         .await
+        .map_err(|_| FetchError::Request("the provider didn't answer".into()))?
         .map_err(|e| {
-            if e.is_timeout() {
+            FetchError::Request(if e.is_timeout() {
                 "the provider didn't answer".to_string()
             } else {
                 "could not connect to the provider".to_string()
-            }
+            })
         })?;
     let status = response.status();
     if !status.is_success() {
-        return Err(format!(
-            "Server returned {} {}",
-            status.as_u16(),
-            status.canonical_reason().unwrap_or("")
-        ));
+        return Err(FetchError::Status(status.as_u16()));
     }
     Ok(response)
+}
+
+/// Retry only before any body bytes have been forwarded, serially and with backoff.
+/// Refusals such as 509 require reopening the original URL, not hammering its stale redirect.
+async fn get_retry(
+    s: &AppState,
+    url: &Url,
+    ua: &str,
+    tag: &str,
+    what: &str,
+) -> Result<reqwest::Response, String> {
+    for attempt in 0..3 {
+        match get(s, url, ua).await {
+            Ok(response) => return Ok(response),
+            Err(error) if error.retryable() && attempt < 2 => {
+                diagnostics::note(
+                    s,
+                    &format!("{tag}live {what}: {error}; retry {}", attempt + 1),
+                );
+                sleep(Duration::from_millis(500 * (attempt + 1))).await;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    unreachable!()
 }
 
 async fn read_rest(mut response: reqwest::Response, first: Bytes) -> Result<String, String> {
     let mut body = first.to_vec();
     while body.len() < PLAYLIST_MAX {
-        match response.chunk().await {
-            Ok(Some(chunk)) => body.extend_from_slice(&chunk),
-            Ok(None) => break,
-            Err(_) => return Err("the connection broke".into()),
+        match timeout(READ_IDLE, response.chunk()).await {
+            Ok(Ok(Some(chunk))) => body.extend_from_slice(&chunk),
+            Ok(Ok(None)) => break,
+            _ => return Err("the connection broke or stopped sending data".into()),
         }
     }
     Ok(String::from_utf8_lossy(&body).into_owned())
@@ -535,7 +642,7 @@ async fn read_rest(mut response: reqwest::Response, first: Bytes) -> Result<Stri
 /// Seconds of video, already on the server, to start from: all of it arrives at once, so ffmpeg
 /// sets up and the browser buffers without waiting on real time (1-second segments otherwise
 /// trickle in), with a cushion against the next segment coming late.
-const START_SECONDS: f64 = 6.0;
+const START_SECONDS: f64 = 18.0;
 
 /// A media playlist: its segments with their sequence numbers.
 struct Media {
@@ -601,6 +708,169 @@ impl Media {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::{Router, routing::get as route_get};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    async fn provider(router: Router) -> (Url, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        (base, task)
+    }
+
+    #[tokio::test]
+    async fn temporary_segment_refusal_is_retried_without_skipping_or_duplicating() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        let (base, task) = provider(Router::new().route(
+            "/segment",
+            route_get(move || {
+                let count = count.clone();
+                async move {
+                    if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                        (StatusCode::SERVICE_UNAVAILABLE, "")
+                    } else {
+                        (StatusCode::OK, "complete segment")
+                    }
+                }
+            }),
+        ))
+        .await;
+        let s = AppState {
+            http: reqwest::Client::new(),
+            ..AppState::new()
+        };
+        let media = Media::parse("#EXTM3U\n#EXTINF:1,\nsegment\n#EXT-X-ENDLIST\n", &base);
+        let (tx, mut rx) = mpsc::channel(32);
+        Source::Hls {
+            playlist: base,
+            media,
+            next: 0,
+        }
+        .run(s, String::new(), String::new(), tx)
+        .await;
+        let mut data = Vec::new();
+        while let Some(chunk) = rx.recv().await {
+            data.extend_from_slice(&chunk);
+        }
+        assert_eq!(data, b"complete segment");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn refused_playlist_ends_promptly_instead_of_polling_for_a_minute() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        let (base, task) = provider(Router::new().route(
+            "/",
+            route_get(move || {
+                let count = count.clone();
+                async move {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::from_u16(509).unwrap()
+                }
+            }),
+        ))
+        .await;
+        let s = AppState {
+            http: reqwest::Client::new(),
+            ..AppState::new()
+        };
+        let media = Media::parse("#EXTM3U\n#EXT-X-TARGETDURATION:1\n", &base);
+        let (tx, _rx) = mpsc::channel(32);
+        timeout(
+            Duration::from_secs(3),
+            Source::Hls {
+                playlist: base,
+                media,
+                next: 0,
+            }
+            .run(s, String::new(), String::new(), tx),
+        )
+        .await
+        .expect("509 should immediately close the source");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn broken_partial_segment_is_not_replayed_into_the_decoder() {
+        struct BrokenSegment {
+            sent: bool,
+            delay: std::pin::Pin<Box<tokio::time::Sleep>>,
+        }
+        impl futures_core::Stream for BrokenSegment {
+            type Item = std::io::Result<Bytes>;
+            fn poll_next(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Option<Self::Item>> {
+                if !self.sent {
+                    self.sent = true;
+                    return std::task::Poll::Ready(Some(Ok(Bytes::from_static(b"prefix"))));
+                }
+                if std::future::Future::poll(self.delay.as_mut(), cx).is_pending() {
+                    return std::task::Poll::Pending;
+                }
+                std::task::Poll::Ready(Some(Err(std::io::Error::other("connection broke"))))
+            }
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        let (base, task) = provider(Router::new().route(
+            "/segment",
+            route_get(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    Body::from_stream(BrokenSegment {
+                        sent: false,
+                        delay: Box::pin(sleep(Duration::from_millis(200))),
+                    })
+                }
+            }),
+        ))
+        .await;
+        let s = AppState {
+            http: reqwest::Client::new(),
+            ..AppState::new()
+        };
+        let media = Media::parse("#EXTM3U\n#EXTINF:1,\nsegment\n#EXT-X-ENDLIST\n", &base);
+        let (tx, mut rx) = mpsc::channel(32);
+        Source::Hls {
+            playlist: base,
+            media,
+            next: 0,
+        }
+        .run(s, String::new(), String::new(), tx)
+        .await;
+        let mut data = Vec::new();
+        while let Some(chunk) = rx.recv().await {
+            data.extend_from_slice(&chunk);
+        }
+        assert_eq!(data, b"prefix");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "partial segments must not be restarted in the same timeline"
+        );
+        task.abort();
+    }
+
+    #[test]
+    fn retries_do_not_hammer_account_or_permanent_refusals() {
+        for code in [401, 403, 404, 509] {
+            assert!(!FetchError::Status(code).retryable());
+        }
+        for code in [408, 429, 500, 502, 503, 504] {
+            assert!(FetchError::Status(code).retryable());
+        }
+    }
 
     #[test]
     fn segments_are_numbered_from_the_media_sequence() {
@@ -628,11 +898,11 @@ mod tests {
         let base = Url::parse("https://h.tv/1.m3u8").unwrap();
         let mut text =
             String::from("#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXT-X-MEDIA-SEQUENCE:100\n");
-        for i in 0..10 {
+        for i in 0..30 {
             text += &format!("#EXTINF:1.0,\n{i}.ts\n");
         }
-        // Six 1-second segments back from the newest (109): 104.
-        assert_eq!(Media::parse(&text, &base).start(), 104);
+        // Eighteen seconds of available history, without waiting on the live edge.
+        assert_eq!(Media::parse(&text, &base).start(), 112);
         // Fewer than that listed: all of them.
         let few = "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:7\n#EXTINF:1,\na.ts\n#EXTINF:1,\nb.ts\n";
         assert_eq!(Media::parse(few, &base).start(), 7);

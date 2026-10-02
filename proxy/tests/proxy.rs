@@ -790,6 +790,10 @@ async fn live_streams_copy_what_plays_and_convert_the_rest() {
                 get(|| async { ([("content-type", "video/mp2t")], INTERLACED) }),
             )
             .route(
+                "/live/u/p/refused.m3u8",
+                get(|| async { axum::http::StatusCode::from_u16(509).unwrap() }),
+            )
+            .route(
                 "/seg.ts",
                 get(|| async { ([("content-type", "video/mp2t")], H264_AC3) }),
             ),
@@ -843,6 +847,15 @@ async fn live_streams_copy_what_plays_and_convert_the_rest() {
             .to_str()
             .unwrap()
             .contains("404")
+    );
+    // The browser sees the gateway's 502, while diagnostics retain the actual upstream 509.
+    let res = live("/live/u/p/refused.m3u8", "").await;
+    assert_eq!(res.status(), 502);
+    assert!(
+        res.headers()["x-riptv-error"]
+            .to_str()
+            .unwrap()
+            .contains("509")
     );
 }
 

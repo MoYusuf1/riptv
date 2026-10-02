@@ -63,6 +63,55 @@ encoding costs about 1% of a core.
 - A 4K stream needed more than ffmpeg's half-second probe before its first sound.
 - ffmpeg's `nobuffer` flag dropped every frame of an interlaced stream.
 
+## Live buffering and recovery
+
+The standard live player now starts from up to 18 seconds of available HLS history and
+feeds converted fragments into an explicit MediaSource buffer, retaining up to 30 seconds
+ahead and trimming old playback data. It waits for six seconds of browser buffer before
+starting or resuming after an underrun.
+Browsers that stop preloading sooner may resume with a smaller reserve after 15 seconds.
+This trades some live delay for fewer interruptions; it cannot make sustained slow delivery
+keep up with playback.
+
+Temporary request failures are retried twice, serially, with backoff. A 509 refusal closes
+the stale source so the player can reopen the original URL instead of polling the same
+redirect for a minute. Partially delivered segments are never replayed into the decoder.
+Idle reads are bounded, and non-advancing playlists use a 10–20 second inactivity threshold.
+The player replenishes its reconnect budget after a minute of healthy playback.
+
+With `--logs`, each segment records bytes, video duration, total elapsed time,
+`downstream_wait_s` (waiting on the player/conversion pipeline), and `upstream_s` (the
+remaining request/delivery time). Slow delivery with negligible downstream wait points
+to the upstream/network path rather than local decoding. An HTTP 502 returned by RIPTV
+is a gateway wrapper; inspect the recorded upstream status before attributing the cause.
+
+The guide refreshes every five minutes. When active playback contradicts an "offline"
+provider listing, the UI identifies the inconsistency instead of displaying it as an outage.
+
+### Validation on 2026-10-01
+
+NFL 02 (Steelers–Browns) reproduced 17 stalls totaling 129.3 seconds of waiting in a
+roughly 5-minute-22-second baseline session, including a 70-second freeze during upstream
+509 refusals. Video was copied and conversion CPU use was low, with negligible dropped
+frames: expensive video encoding did not explain that failure.
+
+The explicit-buffer player then completed a 15-minute session with no recorded stalls,
+including a deliberate pause/resume check. Its reserve was about 21 seconds before the
+pause and around 30 seconds afterward. Upstream delivery was much faster during this
+second run, so this is functional validation, not a controlled claim that buffering cured
+the provider's refusals. The measurements cannot distinguish provider congestion from
+the network route without testing an alternate connection.
+
+A fresh NFL 02 session on the final build subsequently slowed again: a 10-second segment
+took 17.1 seconds upstream with effectively zero downstream wait. The reserve depleted,
+and the player paused to rebuild six seconds before resuming. This confirms that sustained
+delivery shortfalls still cause buffering; the clean 15-minute run is not a guarantee of
+provider stability.
+
+Local regression tests cover serial recovery from a temporary 503, prompt closure on 509,
+and preserving a partial segment without replaying its bytes. A gateway test verifies
+that the browser-facing 502 preserves an upstream 509 in the error details.
+
 ## Open
 
 Tracked as GitHub issues #1–#5: provider-side start-up waits, long-watch stability, movies and

@@ -11,5 +11,5 @@ futures-core = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wasm-bindgen-futures = "0.4.78"
-web-sys = { version = "0.3.105", features = ["Window", "Location", "Document", "Element", "EventTarget", "Headers", "Request", "RequestInit", "Response", "ReadableStream", "ReadableStreamDefaultReader", "HtmlVideoElement", "HtmlMediaElement", "KeyboardEvent", "Node", "Storage", "TimeRanges", "VideoPlaybackQuality", "console"] }
+web-sys = { version = "0.3.105", features = ["Window", "Location", "Document", "Element", "EventTarget", "Headers", "Request", "RequestInit", "Response", "ReadableStream", "ReadableStreamDefaultReader", "HtmlVideoElement", "HtmlMediaElement", "KeyboardEvent", "Node", "Storage", "TimeRanges", "VideoPlaybackQuality", "console", "MediaSource", "MediaSourceReadyState", "SourceBuffer", "Url", "AbortController", "AbortSignal"] }
 xtream = { version = "0.1.0", path = "../xtream" }

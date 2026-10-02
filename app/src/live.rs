@@ -52,6 +52,8 @@ pub(crate) fn LivePlayer(
     icon: Option<String>,
     onchannel: EventHandler<ChannelAction>,
 ) -> Element {
+    let mut paused = use_signal(|| false);
+    let mut holding = use_signal(|| false);
     let session = use_context::<Signal<Option<Client>>>();
     let rust_sound = use_context::<Signal<bool>>();
     let client = use_hook(|| session.read().clone().expect("logged in"));
@@ -70,6 +72,8 @@ pub(crate) fn LivePlayer(
                     }
                 }
                 media_session::Action::Pause | media_session::Action::Stop => {
+                    holding.set(false);
+                    paused.set(true);
                     if let Some(v) = video_el() {
                         let _ = v.pause();
                     }
@@ -93,10 +97,21 @@ pub(crate) fn LivePlayer(
     // How far the current start has got, for the progress ring (see `LoadRing`).
     let mut load_stage = use_signal(|| 0_u8);
     let mut audio_only = use_signal(|| false);
-    let mut paused = use_signal(|| false);
     let mut muted = use_signal(move || saved_volume == 0);
     let mut volume = use_signal(move || saved_volume);
     let mut buffering = use_signal(|| false);
+    // A user pause cancels automatic buffer recovery; controls must always win.
+    let mut toggle_play = move || {
+        if *holding.peek() {
+            holding.set(false);
+            paused.set(true);
+            if let Some(video) = video_el() {
+                let _ = video.pause();
+            }
+        } else {
+            crate::toggle_play();
+        }
+    };
     let mut expanded = use_signal(|| false);
     // Why there is no sound, when the player knows: its own note, or what the browser reports.
     let mut note = use_signal(|| None::<String>);
@@ -105,6 +120,13 @@ pub(crate) fn LivePlayer(
     let active = use_signal(|| true);
     let idle = use_hook(|| IdleHide::new(active, 2500.0));
     let handle = use_hook(|| Rc::new(RefCell::new(None::<rstreamkit::mse::Player>)));
+    let live_stream = use_hook(|| Rc::new(RefCell::new(None::<standard::Stream>)));
+    {
+        let live_stream = live_stream.clone();
+        use_drop(move || {
+            live_stream.borrow_mut().take();
+        });
+    }
     // With `riptv --logs`: what this channel's player does, for the proxy's diagnostics log.
     let trace = use_hook(|| {
         let upstream = xtream::Url::parse(&url)
@@ -150,6 +172,66 @@ pub(crate) fn LivePlayer(
         let base = src.split("&again=").next().unwrap_or(&src).to_owned();
         feed.set(Feed::Converted(format!("{base}&again={tries}")));
     };
+    {
+        let trace = trace.clone();
+        use_future(move || {
+            let trace = trace.clone();
+            async move {
+                let mut held_since = None::<f64>;
+                let mut healthy_since = None::<f64>;
+                let mut source = String::new();
+                loop {
+                    rstreamkit::mse::sleep(Duration::from_millis(250)).await;
+                    let Feed::Converted(current) = feed.peek().clone() else {
+                        continue;
+                    };
+                    if current != source {
+                        source = current;
+                        held_since = None;
+                        healthy_since = None;
+                    }
+                    let Some(video) = video_el() else {
+                        continue;
+                    };
+                    let now = js_sys::Date::now();
+                    let ahead = buffer_ahead(&video);
+                    if *holding.peek() && !*paused.peek() {
+                        healthy_since = None;
+                        let since = *held_since.get_or_insert(now);
+                        if !video.paused() {
+                            let _ = video.pause();
+                        }
+                        // Accumulate a reserve before starting or resuming. A finite wait also
+                        // accommodates browsers that stop preloading before six seconds.
+                        if ahead >= 6.0 || (now - since >= 15_000.0 && ahead >= 1.0) {
+                            holding.set(false);
+                            buffering.set(false);
+                            held_since = None;
+                            trace.event(
+                                "buffer_resume",
+                                serde_json::json!({"ahead_s": ahead, "wait_ms": now - since}),
+                            );
+                            let _ = video.play();
+                        } else if now - since >= 20_000.0 {
+                            holding.set(false);
+                            held_since = None;
+                            reconnect();
+                        }
+                    } else {
+                        held_since = None;
+                        if !*paused.peek() && ahead >= 2.0 && video.ready_state() >= 3 {
+                            let since = *healthy_since.get_or_insert(now);
+                            if now - since >= 60_000.0 && *reconnects.peek() != 0 {
+                                reconnects.set(0);
+                            }
+                        } else {
+                            healthy_since = None;
+                        }
+                    }
+                }
+            }
+        });
+    }
     // Only where neither of those applies (an iPhone whose own player failed): the proxy checks
     // the stream and converts it.
     {
@@ -309,6 +391,7 @@ pub(crate) fn LivePlayer(
         trace_for_player.follow(&video);
         video.set_volume(f64::from(*volume.peek()) / 100.0);
         video.set_muted(*muted.peek());
+        live_stream.borrow_mut().take();
         let partial = match feed() {
             Feed::Pending => return,
             Feed::Direct(src) => {
@@ -321,8 +404,32 @@ pub(crate) fn LivePlayer(
                 // Stop the Rust player and let the plain `<video>` play the converted stream.
                 handle.borrow_mut().take();
                 note.set(None);
-                video.set_src(&src);
-                let _ = video.play();
+                paused.set(false);
+                holding.set(true);
+                buffering.set(true);
+                let fallback_client = client.clone();
+                let fallback_url = url.clone();
+                let stream = standard::start(video, src, move |why| {
+                    if why.starts_with("browser:") {
+                        let already_transcoding = matches!(&*feed.peek(), Feed::Converted(src) if src.contains("video=transcode"));
+                        if !already_transcoding
+                            && let Some(src) = standard::live(&fallback_client, &fallback_url, true)
+                        {
+                            status.set("Re-encoding the video…".into());
+                            feed.set(Feed::Converted(src));
+                        } else {
+                            holding.set(false);
+                            paused.set(true);
+                            status.set(why);
+                        }
+                    } else {
+                        reconnect();
+                    }
+                });
+                match stream {
+                    Ok(stream) => *live_stream.borrow_mut() = Some(stream),
+                    Err(why) => status.set(why),
+                }
                 return;
             }
             Feed::Partial => true,
@@ -587,17 +694,24 @@ pub(crate) fn LivePlayer(
                 onmousemove: move |_| idle.wake(),
                 video {
                     id: "live-video",
-                    autoplay: true,
+                    autoplay: !matches!(*feed.peek(), Feed::Converted(_)),
                     playsinline: true,
                     onplay: move |_| {
                         paused.set(false);
                         if let Some(s) = media_on_play.borrow().as_ref() { s.playing(true); }
                     },
                     onpause: move |_| {
-                        paused.set(true);
-                        if let Some(s) = media_on_pause.borrow().as_ref() { s.playing(false); }
+                        if !*holding.peek() {
+                            paused.set(true);
+                            if let Some(s) = media_on_pause.borrow().as_ref() { s.playing(false); }
+                        }
                     },
-                    onwaiting: move |_| buffering.set(true),
+                    onwaiting: move |_| {
+                        buffering.set(true);
+                        if matches!(*feed.peek(), Feed::Converted(_)) && !*paused.peek() {
+                            holding.set(true);
+                        }
+                    },
                     // A live channel never ends: the connection did. Open it again.
                     onended: move |_| reconnect(),
                     onloadstart: move |_| if *load_stage.peek() < 1 { load_stage.set(1) },
@@ -618,7 +732,7 @@ pub(crate) fn LivePlayer(
                     onloadeddata: move |_| if *load_stage.peek() < 3 { load_stage.set(3) },
                     onplaying: move |_| {
                         load_stage.set(4);
-                        buffering.set(false);
+                        if !*holding.peek() { buffering.set(false); }
                         paused.set(false);
                         if matches!(feed(), Feed::Direct(_) | Feed::Converted(_)) {
                             status.set(if audio_only() { "Audio only" } else if picture_ready() { "Live" } else { "Waiting for picture…" }.into());
@@ -777,15 +891,26 @@ pub(crate) fn LivePlayer(
                     button { class: "ctl", aria_label: "Fullscreen", title: "Fullscreen (F)", onclick: move |_| toggle_fullscreen("live-player", expanded), Icon { d: FULLSCREEN } }
                 }
             }
-            Guide { id }
+            Guide { id, playing: picture_ready() && !failed }
         }
     }
 }
 
 /// The channel's schedule on a timeline: hour ticks, one block per programme, a marker for now.
+fn buffer_ahead(video: &web_sys::HtmlVideoElement) -> f64 {
+    let ranges = video.buffered();
+    let at = video.current_time();
+    (0..ranges.length())
+        .find_map(|i| {
+            let (start, end) = (ranges.start(i).ok()?, ranges.end(i).ok()?);
+            (start <= at + 0.1 && end > at).then_some(end - at)
+        })
+        .unwrap_or(0.0)
+}
+
 /// It scrolls to now on load and moves the marker every 30 seconds.
 #[component]
-fn Guide(id: u64) -> Element {
+fn Guide(id: u64, playing: bool) -> Element {
     let session = use_context::<Signal<Option<Client>>>();
     let client = use_hook(|| session.read().clone().expect("logged in"));
     let mut tick = use_signal(|| 0_u32);
@@ -795,7 +920,9 @@ fn Guide(id: u64) -> Element {
             tick += 1;
         }
     });
+    let refresh = use_memo(move || tick() / 10);
     let table = use_resource(move || {
+        let _ = refresh();
         let c = client.clone();
         async move {
             let now = now_secs();
@@ -836,6 +963,15 @@ fn Guide(id: u64) -> Element {
         Some(Err(_)) => return rsx! {},
         Some(Ok(t)) => {
             let slots = xtream::guide::normalize(t);
+            if playing
+                && slots.iter().any(|slot| {
+                    slot.start <= now
+                        && now < slot.end
+                        && slot.listing.title.to_ascii_uppercase().contains("OFFLINE")
+                })
+            {
+                return rsx! { section { class: "guide", p { "This stream is playing, but the provider's guide lists it as offline." } } };
+            }
             if slots.is_empty() {
                 return rsx! {};
             } else {
