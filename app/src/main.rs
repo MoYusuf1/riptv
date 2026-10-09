@@ -23,6 +23,7 @@ mod frame_stats;
 mod live;
 mod media_session;
 mod navigation;
+mod playback;
 mod preferences;
 mod profiles;
 mod quit;
@@ -33,8 +34,9 @@ mod updates;
 
 use controls::{IdleHide, LoadRing, Skip};
 use fetch::Proxied;
+use playback::{Engine, choose, switch_to_convert};
 use profiles::Login;
-use rstreamkit::{Unsupported, vod::Verdict};
+use rstreamkit::Unsupported;
 use web_sys::{
     js_sys,
     wasm_bindgen::{JsCast, JsValue, closure::Closure},
@@ -1906,70 +1908,6 @@ const WATCH_MEDIA_ACTIONS_NEXT: &[(&str, media_session::Action)] = &[
     ("stop", media_session::Action::Stop),
 ];
 
-/// What plays a movie or episode. It is settled before anything plays (see [`choose`]), so sound
-/// is never "fixed" while the viewer waits.
-#[derive(Clone)]
-enum Engine {
-    /// The browser plays the file itself.
-    Native,
-    /// rstreamkit reads the file and decodes its sound in Rust.
-    Rust(Rc<rstreamkit::vod::Movie>, xtream::Url),
-    /// The proxy's ffmpeg converts it; the text says what needed that.
-    Converted(xtream::Converted, String),
-    Failed(String),
-}
-
-async fn choose(c: &Client, url: &str, experimental: bool) -> Engine {
-    let Ok(media) = xtream::Url::parse(url) else {
-        return Engine::Failed("that address is not valid".into());
-    };
-    let media = c.upstream(&media);
-    // A file we can't read is left to the browser, which will say if it can't play it either.
-    let Ok(movie) = rstreamkit::mse::probe(&Proxied(c.clone()), media.as_str()).await else {
-        return Engine::Native;
-    };
-    match movie.verdict(&rstreamkit::mse::can_play) {
-        Verdict::Native => Engine::Native,
-        Verdict::Rust if experimental => Engine::Rust(movie, media),
-        Verdict::Rust => convert(c, &media, "a format requiring conversion".into()).await,
-        Verdict::Unsupported(why) => convert(c, &media, why.to_string()).await,
-        _ => Engine::Failed("unsupported movie format".into()),
-    }
-}
-
-async fn convert(c: &Client, media: &xtream::Url, why: String) -> Engine {
-    match c.convert(media).await {
-        Ok(converted) => Engine::Converted(converted, why),
-        Err(e) => Engine::Failed(format!(
-            "This has {why}, which your browser can't play, and it could not be converted: {e}"
-        )),
-    }
-}
-
-/// Hands a title over to the proxy's ffmpeg from `at` seconds in (a last resort after the browser
-/// or the Rust player turned out not to cope).
-fn switch_to_convert(
-    c: Client,
-    url: String,
-    why: String,
-    at: f64,
-    mut engine: Signal<Option<Engine>>,
-    mut start: Signal<u64>,
-) {
-    // Not Dioxus's `spawn`: callers run outside its runtime (player callbacks).
-    wasm_bindgen_futures::spawn_local(async move {
-        let Ok(media) = xtream::Url::parse(&url) else {
-            return;
-        };
-        let converted = convert(&c, &media, why).await;
-        // The viewer may have left while the proxy was looking at the file.
-        if engine.try_peek().is_ok() {
-            start.set(at as u64);
-            engine.set(Some(converted));
-        }
-    });
-}
-
 fn watch_video() -> Option<web_sys::HtmlVideoElement> {
     web_sys::window()?
         .document()?
@@ -2138,6 +2076,8 @@ fn Watch(
     let mut pos = use_signal(move || resume);
     let duration_hint = play.duration;
     let mut total = use_signal(move || duration_hint.unwrap_or(0) as f64);
+    let mut fallback_duration = use_signal(|| None::<f64>);
+    let mut duration_checked = use_signal(|| false);
     let mut ahead = use_signal(|| 0.0_f64);
     let mut paused = use_signal(|| false);
     let mut waiting = use_signal(|| true);
@@ -2147,6 +2087,10 @@ fn Watch(
     let mut volume = use_signal(move || saved_volume);
     let mut rate = use_signal(move || saved_speed);
     let mut scrubbing = use_signal(|| false);
+    // Whether the pointer is over the controls (they stay up while it is).
+    let mut over_controls = use_signal(|| false);
+    // Where the current drag on the seek bar began (see `let_go`).
+    let mut scrub_from = use_signal(|| 0.0_f64);
     let mut menu = use_signal(|| false);
     let mut resumed = use_signal(move || (resume > 0.0).then_some(resume as u64));
     let mut up_next = use_signal(|| None::<u32>);
@@ -2177,7 +2121,7 @@ fn Watch(
         use_effect(move || {
             match engine() {
                 None => return,
-                Some(Engine::Native) => trace.event("engine", serde_json::json!({ "engine": "native" })),
+                Some(Engine::Native(duration)) => trace.event("engine", serde_json::json!({ "engine": "native", "duration_s": duration })),
                 Some(Engine::Rust(..)) => trace.event("engine", serde_json::json!({ "engine": "rust" })),
                 Some(Engine::Converted(c, why)) => trace.event(
                     "engine",
@@ -2207,6 +2151,37 @@ fn Watch(
     use_future(move || {
         let (c, url) = (c.clone(), url.clone());
         async move { engine.set(Some(choose(&c, &url, *experimental.peek()).await)) }
+    });
+    // Browser metadata can omit the length even when playback works. Try the server's
+    // independent file probe once, in the background; don't convert or restart playback.
+    let (duration_client, duration_url) = (client.clone(), play.url.clone());
+    use_effect(move || {
+        let selected = engine();
+        let Some(selected_engine) = selected.as_ref() else {
+            return;
+        };
+        let converted = matches!(selected_engine, Engine::Converted(..));
+        let known = selected_engine.duration();
+        let length = timeline::duration(converted, known, duration_hint, f64::NAN);
+        if length > 0.0 {
+            // Don't wait for the browser's metadata event to enable the full timeline.
+            total.set(length);
+            return;
+        }
+        if total() > 0.0
+            || !matches!(selected.as_ref(), Some(Engine::Native(..)))
+            || duration_checked()
+        {
+            return;
+        }
+        duration_checked.set(true);
+        let (c, url) = (duration_client.clone(), duration_url.clone());
+        spawn(async move {
+            if let Some(seconds) = playback::probe_duration(&c, &url).await {
+                fallback_duration.set(Some(seconds));
+                total.set(seconds);
+            }
+        });
     });
     // The hint about resuming fades on its own.
     use_future(move || async move {
@@ -2249,16 +2224,19 @@ fn Watch(
     // What the `<video>` reports, as seconds of the movie.
     let mut sync = move || {
         let Some(v) = watch_video() else { return };
-        let (offset, known) = match engine.peek().as_ref() {
-            Some(Engine::Converted(c, _)) => (*start.peek() as f64, c.duration.map(|d| d as f64)),
-            Some(Engine::Rust(m, _)) => (0.0, Some(m.duration)),
-            _ => (0.0, None),
-        };
+        let known = engine.peek().as_ref().and_then(Engine::duration);
+        let converted = matches!(engine.peek().as_ref(), Some(Engine::Converted(..)));
+        let offset = if converted { *start.peek() as f64 } else { 0.0 };
         if !*scrubbing.peek() {
             pos.set(offset + v.current_time());
         }
-        let converted = matches!(engine.peek().as_ref(), Some(Engine::Converted(..)));
-        let length = timeline::duration(converted, known, duration_hint, v.duration());
+        let known = known
+            .filter(|d| d.is_finite() && *d > 0.0)
+            .or(*fallback_duration.peek());
+        let length = timeline::retain(
+            *total.peek(),
+            timeline::duration(converted, known, duration_hint, v.duration()),
+        );
         if length != *total.peek() {
             total.set(length);
         }
@@ -2277,6 +2255,17 @@ fn Watch(
             waiting.set(true);
         } else if let Some(v) = watch_video() {
             v.set_current_time(t);
+        }
+    };
+    // A drag that ends where it began: the browser fires no `change` (the value didn't move), so
+    // without this the bar would stay frozen while the film plays on. Release, a cancelled touch
+    // or losing focus unfreeze it, but only when the bar is back where the drag began: a release
+    // can arrive before the slider's last value, so it never seeks. A real move always ends in
+    // `change`, which does.
+    let mut let_go = move || {
+        let (at, from) = (*pos.peek(), *scrub_from.peek());
+        if *scrubbing.peek() && (at - from).abs() < 1.0 {
+            scrubbing.set(false);
         }
     };
     let mut set_level = move |level: u32| {
@@ -2417,13 +2406,13 @@ fn Watch(
     });
 
     let (engine_now, kind, src) = match engine() {
-        Some(Engine::Native) => (true, "native", Some(play.url.clone())),
+        Some(Engine::Native(..)) => (true, "native", Some(play.url.clone())),
         Some(Engine::Rust(..)) => (true, "rust", None),
         Some(Engine::Converted(c, _)) => (true, "converted", Some(c.at(start()).to_string())),
         _ => (false, "", None),
     };
     let about = match engine() {
-        Some(Engine::Native) => "Played by your browser.".to_string(),
+        Some(Engine::Native(..)) => "Played by your browser.".to_string(),
         Some(Engine::Rust(m, _)) => format!(
             "Played in Rust{}: nothing is converted, so nothing waits.",
             m.audio
@@ -2450,7 +2439,7 @@ fn Watch(
     let class = format!(
         "watch{}{}",
         if paused() { " paused" } else { "" },
-        if active() || scrubbing() {
+        if active() || scrubbing() || over_controls() {
             " active"
         } else {
             ""
@@ -2512,7 +2501,7 @@ fn Watch(
                             v.set_playback_rate(rate());
                         }
                         // A plain file starts where the viewer left off; the other engines were told.
-                        let native = matches!(engine.peek().as_ref(), Some(Engine::Native));
+                        let native = matches!(engine.peek().as_ref(), Some(Engine::Native(..)));
                         if resume > 0.0
                             && native
                             && let Some(v) = watch_video()
@@ -2546,7 +2535,7 @@ fn Watch(
                             }
                             // Some of the file's sound the browser can't decode after all: go
                             // round through the converter rather than leave the film silent.
-                            let native = matches!(engine.peek().as_ref(), Some(Engine::Native));
+                            let native = matches!(engine.peek().as_ref(), Some(Engine::Native(..)));
                             if native
                                 && let Some(v) = watch_video()
                                 && no_audio_decoded(&v, 4.0)
@@ -2562,7 +2551,7 @@ fn Watch(
                     onerror: {
                         let (c, url) = (c.clone(), url.clone());
                         move |_| {
-                            let native = matches!(engine.peek().as_ref(), Some(Engine::Native));
+                            let native = matches!(engine.peek().as_ref(), Some(Engine::Native(..)));
                             let converted = matches!(engine.peek().as_ref(), Some(Engine::Converted(..)));
                             if native {
                                 switch_to_convert(c.clone(), url.clone(), "a format the browser can't play".into(), *pos.peek(), engine, start);
@@ -2649,6 +2638,10 @@ fn Watch(
                     }
                 }
                 div { class: "w-bottom",
+                    // A resting pointer must not let the bar fade from under it: the next press
+                    // would land on the picture (pausing it) instead of seeking.
+                    onmouseenter: move |_| over_controls.set(true),
+                    onmouseleave: move |_| over_controls.set(false),
                     input {
                         class: "w-seek",
                         r#type: "range",
@@ -2659,14 +2652,34 @@ fn Watch(
                         style: "--p:{p}%;--b:{b}%",
                         disabled: total() <= 0.0,
                         aria_label: "Seek",
+                        title: if total() > 0.0 { "Seek" } else { "Total length unavailable from this stream" },
                         oninput: move |e| {
-                            scrubbing.set(true);
+                            if !*scrubbing.peek() {
+                                let from = *pos.peek();
+                                scrub_from.set(from);
+                                scrubbing.set(true);
+                            }
                             pos.set(e.value().parse().unwrap_or(0.0));
                         },
                         onchange: move |e| {
                             scrubbing.set(false);
                             seek_to(e.value().parse().unwrap_or(0.0));
+                            // Give the focus back (arrow keys never move this bar: the player's
+                            // own keys take them), or the controls would stay up for the rest of
+                            // the film: they show while anything in them has focus.
+                            if let Some(bar) = web_sys::window()
+                                .and_then(|w| w.document())
+                                .and_then(|d| d.active_element())
+                                .filter(|el| el.class_name() == "w-seek")
+                                && let Ok(blur) = js_sys::Reflect::get(&bar, &"blur".into())
+                                && let Some(blur) = blur.dyn_ref::<js_sys::Function>()
+                            {
+                                let _ = blur.call0(&bar);
+                            }
                         },
+                        onpointerup: move |_| let_go(),
+                        onpointercancel: move |_| let_go(),
+                        onblur: move |_| let_go(),
                     }
                     div { class: "w-row",
                         button { class: "ctl", aria_label: "Play or pause", title: "Play or pause (Space)", onclick: move |_| toggle_watch(),
@@ -2697,6 +2710,7 @@ fn Watch(
                         span { class: "w-time",
                             "{hms(pos() as u64)}"
                             if total() > 0.0 { span { " / {hms(total().round() as u64)}" } }
+                            else { span { title: "Total length unavailable from this stream", " / —" } }
                         }
                         span { class: "grow" }
                         if has_next {

@@ -13,6 +13,14 @@ pub fn duration(converted: bool, known: Option<f64>, hint: Option<u64>, browser:
     }
 }
 
+/// Changing engines or reloading a converted segment cannot erase a known whole-title length.
+pub fn retain(previous: f64, reported: f64) -> f64 {
+    [reported, previous]
+        .into_iter()
+        .find(|d| d.is_finite() && *d > 0.0)
+        .unwrap_or(0.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -29,5 +37,21 @@ mod tests {
         assert_eq!(duration(false, Some(7200.0), Some(7000), 7.0), 7200.0);
         assert_eq!(duration(false, None, Some(7000), 7200.0), 7200.0);
         assert_eq!(duration(false, None, Some(7000), f64::NAN), 7000.0);
+    }
+    #[test]
+    fn native_probe_survives_missing_or_fragment_browser_metadata() {
+        for browser in [f64::NAN, f64::INFINITY, 0.0, 7.0] {
+            assert_eq!(duration(false, Some(7200.0), None, browser), 7200.0);
+        }
+        assert_eq!(duration(false, Some(0.0), Some(7200), f64::NAN), 7200.0);
+        assert_eq!(duration(false, Some(f64::NAN), None, 7200.0), 7200.0);
+    }
+    #[test]
+    fn changing_engines_does_not_erase_a_known_length() {
+        for missing in [0.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(retain(7200.0, missing), 7200.0);
+        }
+        assert_eq!(retain(0.0, 7200.0), 7200.0);
+        assert_eq!(retain(f64::NAN, 0.0), 0.0);
     }
 }
