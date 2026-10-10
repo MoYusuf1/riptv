@@ -18,6 +18,7 @@ mod categories;
 mod channel_preview;
 mod controls;
 mod diag;
+mod experimental;
 mod fetch;
 mod frame_stats;
 mod live;
@@ -36,7 +37,6 @@ use controls::{IdleHide, LoadRing, Skip};
 use fetch::Proxied;
 use playback::{Engine, choose, switch_to_convert};
 use profiles::Login;
-use rstreamkit::Unsupported;
 use web_sys::{
     js_sys,
     wasm_bindgen::{JsCast, JsValue, closure::Closure},
@@ -2096,7 +2096,7 @@ fn Watch(
     let mut up_next = use_signal(|| None::<u32>);
     let active = use_signal(|| true);
     let idle = use_hook(|| IdleHide::new(active, 2800.0));
-    let handle = use_hook(|| Rc::new(RefCell::new(None::<rstreamkit::mse::Player>)));
+    let handle = use_hook(|| Rc::new(RefCell::new(None::<experimental::Player>)));
     let saved = use_hook(|| Rc::new(Cell::new(resume)));
 
     let watch_element = use_hook(|| Rc::new(RefCell::new(None::<web_sys::HtmlVideoElement>)));
@@ -2198,25 +2198,19 @@ fn Watch(
         };
         let Some(video) = watch_video() else { return };
         let (c, url) = (c.clone(), url.clone());
-        *handle.borrow_mut() = Some(rstreamkit::mse::play_movie(
+        *handle.borrow_mut() = Some(experimental::movie(
             video,
             movie,
             media.to_string(),
-            Proxied(c.clone()),
+            c.clone(),
             *pos.peek(),
-            move |s| match s {
-                rstreamkit::mse::Status::Playing => waiting.set(false),
-                rstreamkit::mse::Status::Unsupported(why) => switch_to_convert(
-                    c.clone(),
-                    url.clone(),
-                    why.to_string(),
-                    *pos.peek(),
-                    engine,
-                    start,
-                ),
-                rstreamkit::mse::Status::Failed(e) => engine.set(Some(Engine::Failed(e))),
-                rstreamkit::mse::Status::Note(_) | rstreamkit::mse::Status::Ended => {}
-                _ => {}
+            move |e| match e {
+                experimental::Event::Playing => waiting.set(false),
+                experimental::Event::Unsupported(why) | experimental::Event::NoSound(why) => {
+                    switch_to_convert(c.clone(), url.clone(), why, *pos.peek(), engine, start)
+                }
+                experimental::Event::Failed(e) => engine.set(Some(Engine::Failed(e))),
+                experimental::Event::Note(_) | experimental::Event::Ended => {}
             },
         ));
     });

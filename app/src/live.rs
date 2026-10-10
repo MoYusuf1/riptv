@@ -119,7 +119,7 @@ pub(crate) fn LivePlayer(
     // The controls fade out after a moment of no mouse movement while playing.
     let active = use_signal(|| true);
     let idle = use_hook(|| IdleHide::new(active, 2500.0));
-    let handle = use_hook(|| Rc::new(RefCell::new(None::<rstreamkit::mse::Player>)));
+    let handle = use_hook(|| Rc::new(RefCell::new(None::<experimental::Player>)));
     let live_stream = use_hook(|| Rc::new(RefCell::new(None::<standard::Stream>)));
     {
         let live_stream = live_stream.clone();
@@ -452,15 +452,15 @@ pub(crate) fn LivePlayer(
         let c = client.clone();
         let upstream = client.upstream(&playlist);
         let unsupported_trace = trace_for_player.clone();
-        *handle.borrow_mut() = Some(rstreamkit::mse::start(
+        *handle.borrow_mut() = Some(experimental::live(
             video,
             upstream.to_string(),
-            Proxied(c),
+            c,
             partial,
             // `peek`: changing the setting must not restart a channel that is playing.
             *rust_sound.peek(),
-            move |s| match s {
-                rstreamkit::mse::Status::Playing => {
+            move |e| match e {
+                experimental::Event::Playing => {
                     status.set(
                         if *picture_ready.peek() {
                             "Live"
@@ -470,24 +470,20 @@ pub(crate) fn LivePlayer(
                         .into(),
                     );
                 }
-                rstreamkit::mse::Status::Note(n) => note.set(Some(n)),
-                rstreamkit::mse::Status::Unsupported(reason) => {
-                    unsupported_trace.event(
-                        "unsupported",
-                        serde_json::json!({ "reason": reason.to_string() }),
-                    );
-                    // The experimental player stays experimental: it says what it can't do
-                    // rather than quietly handing over to the standard player.
-                    if matches!(reason, Unsupported::Sound(_)) {
-                        note.set(Some(reason.to_string()));
-                        feed.set(Feed::Partial);
-                    } else {
-                        status.set("Not supported by the experimental player".into());
-                    }
+                experimental::Event::Note(n) => note.set(Some(n)),
+                // The experimental player stays experimental: it says what it can't do rather
+                // than quietly handing over to the standard player.
+                experimental::Event::NoSound(reason) => {
+                    unsupported_trace.event("unsupported", serde_json::json!({ "reason": reason }));
+                    note.set(Some(reason));
+                    feed.set(Feed::Partial);
                 }
-                rstreamkit::mse::Status::Ended => status.set("Stream ended".into()),
-                rstreamkit::mse::Status::Failed(_) => status.set("Playback failed".into()),
-                _ => {}
+                experimental::Event::Unsupported(reason) => {
+                    unsupported_trace.event("unsupported", serde_json::json!({ "reason": reason }));
+                    status.set("Not supported by the experimental player".into());
+                }
+                experimental::Event::Ended => status.set("Stream ended".into()),
+                experimental::Event::Failed(_) => status.set("Playback failed".into()),
             },
         ));
     });
