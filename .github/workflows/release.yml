@@ -140,6 +140,11 @@ jobs:
         run: python scripts/package.py --platform ${{ matrix.platform }} --version "$PACKAGE_VERSION" --target ${{ matrix.target }} --server target/${{ matrix.target }}/release/${{ matrix.executable }}
       - name: Test extracted application and bundled conversion
         run: python scripts/smoke_package.py target/packages/*
+      - name: Playback in Chrome through the packaged app (end to end)
+        if: matrix.platform == 'linux-x64'
+        run: |
+          cd e2e && npm ci
+          RIPTV_BIN="$(cd .. && pwd)/target/packages/RIPTV-Linux" npm test
       - name: Unit and integration tests with bundled FFmpeg
         run: |
           export PATH="$PWD/target/test-tools/${{ matrix.platform }}/bin:$PATH"
