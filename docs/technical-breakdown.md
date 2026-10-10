@@ -60,7 +60,10 @@ proxy/              binary `riptv`: Axum server, /proxy relay, /live, /compat, d
   tests/proxy.rs    end-to-end tests through a real proxy, with real ffmpeg
   examples/mock_provider  fake Xtream provider for offline testing
 app/                Dioxus UI (wasm)
-  src/main.rs       screens and state (large; keep new logic OUT of it, use modules)
+  src/main.rs       app shell, browsing and lists (keep new logic OUT of it, use modules)
+  src/watch.rs      full-page movie/episode player
+  src/detail.rs     movie/series page
+  src/experimental.rs  the only code that starts rstreamkit playback
   src/standard.rs   stable live player: MSE pump fed by /live
   src/playback.rs   engine choice for titles: Native vs Convert
   src/live.rs       live TV screen
