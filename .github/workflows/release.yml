@@ -33,6 +33,10 @@ jobs:
         run: |
           version=$(python -c 'import tomllib; print(tomllib.load(open("proxy/Cargo.toml", "rb"))["package"]["version"])')
           if [ "$RELEASE_TYPE" = tag ]; then test "$RELEASE_REF" = "v$version"; fi
+          # Every release states what it improved, in numbers (docs/changes.md keeps the record).
+          grep -q '^## What improved' docs/release-notes.md && grep -q '^| ' docs/release-notes.md \
+            || { echo "docs/release-notes.md needs a 'What improved' table"; exit 1; }
+          grep -q "^## $version\$" docs/changes.md || { echo "docs/changes.md needs a section for $version"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
       - name: Rust and web tooling
         run: |
@@ -184,6 +188,10 @@ jobs:
           cp ffmpeg-sources/ffmpeg-sources-*.tar.gz release-assets/
           cd release-assets
           sha256sum RIPTV-* ffmpeg-sources-* > SHA256SUMS.txt
-          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "RIPTV $RELEASE_VERSION" --notes-file ../docs/release-notes.md
+          # The notes, then this release's measured download sizes.
+          cp ../docs/release-notes.md ../notes.md
+          printf '\n## Download sizes\n\n| Download | Size |\n|---|---|\n' >> ../notes.md
+          for f in RIPTV-*; do echo "| \`$f\` | $(awk -v b="$(wc -c < "$f")" 'BEGIN { printf "%.1f MB", b / 1e6 }') |" >> ../notes.md; done
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "RIPTV $RELEASE_VERSION" --notes-file ../notes.md
           gh release upload "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" ./*
           gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
