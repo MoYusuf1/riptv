@@ -51,6 +51,20 @@ async function plays(page, what, seconds = 3) {
   console.log(`PASS ${what}: at ${result.at.toFixed(1)} s, ${result.frames} frames, ${result.sound} audio bytes`);
 }
 
+// Milliseconds from `t0` until the video shows moving picture (from a new source, if `after` is
+// the old one: a converted title restarts its stream to seek).
+async function firstPicture(page, t0, after = null) {
+  await page.waitForFunction(
+    (after) => {
+      const v = document.querySelector("video");
+      return v && v.currentSrc && v.currentSrc !== after && v.currentTime > 0 && !v.paused && v.readyState >= 3;
+    },
+    after,
+    { timeout: 45_000, polling: 50 },
+  );
+  return Date.now() - t0;
+}
+
 const failures = [];
 async function step(what, run, page) {
   try {
@@ -84,28 +98,42 @@ try {
     await page.getByText("HEVC video + AC-3 sound (needs conversion)", { exact: true }).first().click();
     await plays(page, "live channel, HEVC + AC-3 (transcoded)");
   }, page);
-  await step("movie, MKV with AC-3", async () => {
-    await page.getByRole("button", { name: "Movies" }).click();
-    await page.getByText("AC-3 sound in an MKV", { exact: true }).first().click();
-    await page.getByRole("button", { name: /^(Play|Resume)$/ }).first().click();
-    await plays(page, "movie, MKV with AC-3", 2);
-  }, page);
-  await step("movie, seek", async () => {
-    // What a drag on the seek bar ends with: the range input's value and a change event.
-    const seek = page.locator("input.w-seek");
-    const target = await seek.evaluate((el) => {
-      el.value = String(Math.floor(Number(el.max) / 2));
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-      return Number(el.value);
-    });
-    await page.evaluate(() => { delete document.querySelector("video").dataset.from; });
-    await plays(page, "movie, seek", 2);
-    // A converted title restarts the video's own clock at the seek; the bar shows the film's time.
-    const at = Number(await seek.inputValue());
-    if (at < target) throw new Error(`seek bar at ${at} s after seeking to ${target} s and playing`);
-    console.log(`PASS movie, seek bar: sought to ${target} s, now at ${at.toFixed(1)} s`);
-  }, page);
+  await page.getByRole("button", { name: "Movies" }).click();
+  for (const [what, title] of [
+    ["movie, MKV with AC-3", "AC-3 sound in an MKV"],
+    ...(process.env.MOCK_MOVIE ? [["movie, your own file", "Your own file (MOCK_MOVIE)"]] : []),
+  ]) {
+    await step(what, async () => {
+      await page.getByText(title, { exact: true }).first().click();
+      // Timed from the press: Playwright's click first waits for the page's fade-in to settle.
+      await page.getByRole("button", { name: /^(Play|Resume)$/ }).first().click();
+      const t0 = Date.now();
+      console.log(`TIME ${what}: first picture ${await firstPicture(page, t0)} ms after Play`);
+      await plays(page, what, 2);
+    }, page);
+    await step(`${what}, seek`, async () => {
+      // What a drag on the seek bar ends with: the range input's value and a change event.
+      const seek = page.locator("input.w-seek");
+      const src = await page.evaluate(() => document.querySelector("video").currentSrc);
+      const t0 = Date.now();
+      const target = await seek.evaluate((el) => {
+        el.value = String(Math.floor(Number(el.max) / 2));
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        return Number(el.value);
+      });
+      console.log(`TIME ${what}, seek: picture again ${await firstPicture(page, t0, src)} ms after seeking`);
+      await page.evaluate(() => { delete document.querySelector("video").dataset.from; });
+      await plays(page, `${what}, seek`, 2);
+      // A converted title restarts the video's own clock at the seek; the bar shows the film's time.
+      const at = Number(await seek.inputValue());
+      if (at < target) throw new Error(`seek bar at ${at} s after seeking to ${target} s and playing`);
+      console.log(`PASS ${what}, seek bar: sought to ${target} s, now at ${at.toFixed(1)} s`);
+    }, page);
+    // Out of the player, then off the title's page, back to the list.
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Back", exact: true }).first().click();
+  }
 } finally {
   await browser.close();
   for (const c of children) c.kill();

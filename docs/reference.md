@@ -132,7 +132,7 @@ with byte ranges, like a real provider, and played by rstreamkit), one with DTS 
 two-season series whose episodes are the same two files, an HLS channel, a simulated live channel with
 a sliding playlist window, an anamorphic PAL channel (720x576 with 64:45 pixels) that must come out
 16:9, and, for trying `--logs`, an offline channel (404) and one whose provider can't keep up. Every channel has a generated day-long guide. `MOCK_MOVIE=/path/film.mkv cargo run -p riptv
---example mock_provider` adds your own file as a sixth movie, which is the best way to try seeking. `MOCK_TITLES=30000` adds that many
+--example mock_provider` adds your own file as a sixth movie, which is the best way to try seeking. `MOCK_LATENCY_MS=150` delays every answer like a real provider's round trip. `MOCK_TITLES=30000` adds that many
 channels, movies and series (and `MOCK_PORT` moves it off 8081): a big provider's catalogue, for trying how the app copes.
 
 ## Profiles

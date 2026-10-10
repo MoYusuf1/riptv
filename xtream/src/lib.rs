@@ -799,6 +799,27 @@ impl Client {
         self.convert_inner(media, false).await
     }
 
+    /// The conversion of a movie or episode whose video the page has already read from the file's
+    /// index: no check in front, so it starts a round trip and an ffmpeg run sooner. `copy_video`
+    /// is for 8-bit progressive H.264, which every browser plays.
+    pub fn convert_known(
+        &self,
+        media: &Url,
+        copy_video: bool,
+        duration: Option<u64>,
+    ) -> Result<Converted> {
+        let Some(proxy) = &self.proxy else {
+            return Err(Error::Proxy("there is no proxy to convert it".into()));
+        };
+        let mut url = proxy.clone();
+        url.set_path("/compat");
+        url.set_query(None);
+        url.query_pairs_mut()
+            .append_pair("url", self.upstream(media).as_str())
+            .append_pair("video", if copy_video { "copy" } else { "transcode" });
+        Ok(Converted { url, duration })
+    }
+
     /// Fallback when playback produced audio but no video frames. Unlike [`Self::convert`],
     /// require a real video track and re-encode it even if the codec looks browser-compatible.
     pub async fn convert_video(&self, media: &Url) -> Result<Converted> {

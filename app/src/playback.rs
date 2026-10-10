@@ -36,9 +36,24 @@ pub(crate) async fn choose(c: &Client, url: &str, experimental: bool) -> Engine 
     match movie.verdict(&rstreamkit::mse::can_play) {
         Verdict::Native => Engine::Native(Some(movie.duration)),
         Verdict::Rust if experimental => Engine::Rust(movie, media),
-        Verdict::Rust => convert(c, &media, "a format requiring conversion".into()).await,
-        Verdict::Unsupported(why) => convert(c, &media, why.to_string()).await,
+        Verdict::Rust => known(c, &media, &movie, "a format requiring conversion".into()),
+        Verdict::Unsupported(why) => known(c, &media, &movie, why.to_string()),
         _ => Engine::Failed("unsupported movie format".into()),
+    }
+}
+
+/// Convert what the index already describes: copy 8-bit progressive H.264 (avcC profile 66, 77,
+/// 88 or 100), encode anything else.
+fn known(c: &Client, media: &xtream::Url, movie: &rstreamkit::vod::Movie, why: String) -> Engine {
+    let video = &movie.video;
+    let copy = !video.interlaced && matches!(video.avcc.get(1), Some(66 | 77 | 88 | 100));
+    let duration =
+        (movie.duration.is_finite() && movie.duration > 0.0).then_some(movie.duration as u64);
+    match c.convert_known(media, copy, duration) {
+        Ok(converted) => Engine::Converted(converted, why),
+        Err(e) => Engine::Failed(format!(
+            "This has {why}, which your browser can't play: {e}"
+        )),
     }
 }
 

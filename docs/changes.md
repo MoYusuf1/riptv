@@ -18,6 +18,19 @@ Measured on a test build of the release pipeline (all checks passed, including p
 | Programs bundled | ffmpeg + ffprobe | ffmpeg only |
 | License | none stated | MIT |
 
+Movie and episode start, timed from pressing Play to moving picture (`e2e/play.mjs`, mock provider
+with `MOCK_LATENCY_MS` per request, your-own-file = 1080p 10-bit HEVC converted on NVENC):
+
+| What | Provider delay | 0.2.6 | Next |
+|---|---|---|---|
+| Requests before a converted film starts | any | 6 | 3 |
+| H.264 MKV with AC-3 (copied), first picture | 150 ms | 1.06 s | 0.60 s |
+| HEVC film (converted), first picture | 150 ms | 1.56 s | 1.05 s |
+| HEVC film, after a seek | 150 ms | 0.91 s | 0.76 s |
+| H.264 MKV with AC-3, first picture | 500 ms | 3.16 s | 1.66 s |
+| HEVC film, first picture | 500 ms | 3.66 s | 2.11 s |
+| HEVC film, after a seek | 500 ms | 2.07 s | 1.51 s |
+
 ## 0.2.6
 
 | What | Before | After |

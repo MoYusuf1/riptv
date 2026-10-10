@@ -596,6 +596,14 @@ pub async fn stream(
 /// first output for a 5-variant master, 3 s for one variant). The highest-bandwidth variant no
 /// taller than `RIPTV_MAX_HEIGHT` is chosen. Anything else, or any failure, is `url` unchanged.
 async fn one_variant(s: &AppState, url: &Url, ua: &str) -> Url {
+    // A movie or episode file is never a playlist: asking would cost a round trip per start and seek.
+    const FILES: [&str; 10] = [
+        ".mp4", ".mkv", ".avi", ".mov", ".m4v", ".webm", ".flv", ".wmv", ".mpg", ".mpeg",
+    ];
+    let path = url.path().to_ascii_lowercase();
+    if FILES.iter().any(|ext| path.ends_with(ext)) {
+        return url.clone();
+    }
     let fetch = async {
         let mut response = s
             .http

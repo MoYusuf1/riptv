@@ -445,6 +445,22 @@ async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
     })
 }
 
+/// `MOCK_LATENCY_MS=150` delays every answer that long, like a real provider's round trip, so
+/// start-up costs that grow with the number of requests show up locally.
+async fn latency(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    static MS: OnceLock<u64> = OnceLock::new();
+    let ms = *MS.get_or_init(|| {
+        std::env::var("MOCK_LATENCY_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    });
+    if ms > 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+    }
+    next.run(req).await
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let app = Router::new()
@@ -503,6 +519,7 @@ async fn main() {
         ([(header::CONTENT_TYPE, "image/svg+xml")],
          r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 3"><rect width="2" height="3" fill="#3a2a33"/></svg>"##)
     }));
+    let app = app.layer(axum::middleware::from_fn(latency));
     let port = port();
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
         .await
