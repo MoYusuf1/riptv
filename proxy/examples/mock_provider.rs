@@ -131,6 +131,8 @@ fn own() -> Option<(&'static [u8], &'static str)> {
 
 /// Anamorphic PAL (720x576, 64:45 pixels): must display as 16:9, not stretched to 5:4.
 const PAL: &[u8] = include_bytes!("../fixtures/pal_anamorphic.ts");
+/// Interlaced H.264 (576i, top field first), like UK regional channels: deinterlaced and re-encoded.
+const INTERLACED: &[u8] = include_bytes!("../fixtures/interlaced_576i.ts");
 
 /// Streams like the ones providers really send, which Chrome on Linux can't play as they are: HEVC
 /// video with AC-3 sound, and H.264 with AC-3 sound. The proxy's ffmpeg mode has to fix both.
@@ -172,6 +174,14 @@ async fn live(Path((_user, _pass, file)): Path<(String, String, String)>) -> Res
         let body = format!(
             "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n\
              #EXTINF:1.000,\nhttp://127.0.0.1:{}/pal.ts\n#EXT-X-ENDLIST\n",
+            port()
+        );
+        return (PLAYLIST, body).into_response();
+    }
+    if file.starts_with("8.") {
+        let body = format!(
+            "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:0\n\
+             #EXTINF:2.000,\nhttp://127.0.0.1:{}/interlaced.ts\n#EXT-X-ENDLIST\n",
             port()
         );
         return (PLAYLIST, body).into_response();
@@ -362,6 +372,7 @@ async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
                 json!({"stream_id": 5, "name": "H.264 video + AC-3 sound", "category_id": "1"}),
                 json!({"stream_id": 6, "name": "Offline channel (gives 404)", "category_id": "1"}),
                 json!({"stream_id": 7, "name": "Slow provider (stalls)", "category_id": "1"}),
+                json!({"stream_id": 8, "name": "Interlaced 576i (deinterlaced)", "category_id": "1"}),
             ];
             all.extend(synthetic_list("live", &poster_url()));
             Value::Array(all)
@@ -484,6 +495,10 @@ async fn main() {
                 tokio::time::sleep(std::time::Duration::from_secs(9)).await;
                 ([(header::CONTENT_TYPE, "video/mp2t")], H264_AC3)
             }),
+        )
+        .route(
+            "/interlaced.ts",
+            get(|| async { ([(header::CONTENT_TYPE, "video/mp2t")], INTERLACED) }),
         )
         .route(
             "/pal.ts",

@@ -5,6 +5,14 @@ release's notes (`docs/release-notes.md`), and the published release also lists 
 How each number was measured is in brackets; live-channel start times are in
 [live-playback.md](live-playback.md).
 
+## Unreleased
+
+| What | 0.2.8 | Next |
+|---|---|---|
+| Live channel with no sound track, converted (mock 576i interlaced) | never played; 8 provider requests in 2 s, then gave up | first picture in 0.77 s, 1 request |
+| Same, 150 ms provider delay | never played | 1.02 s |
+| Interlaced channel with sound (576i, deinterlaced on NVENC) | 1.03 s | 1.03 s (unchanged; the deinterlace and encode add about 0.5 s) |
+
 ## 0.2.8
 
 Mac numbers are from the release pipeline's Apple Silicon machine (Chrome decodes HEVC there);

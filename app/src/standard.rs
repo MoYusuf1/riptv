@@ -124,7 +124,13 @@ fn mime(init: &[u8], video: &str) -> String {
             .map(|avc| format!("avc1.{:02X}{:02X}{:02X}", avc[0], avc[1], avc[2]))
             .unwrap_or_else(|| "avc1.640028".into())
     };
-    format!("video/mp4; codecs=\"{codec},mp4a.40.2\"")
+    // Sound only if the stream has some: a video-only channel's header has no `mp4a` track, and
+    // declaring one makes the browser reject the header and the player start over and over.
+    if init.windows(4).any(|bytes| bytes == b"mp4a") {
+        format!("video/mp4; codecs=\"{codec},mp4a.40.2\"")
+    } else {
+        format!("video/mp4; codecs=\"{codec}\"")
+    }
 }
 
 fn init_complete(bytes: &[u8]) -> bool {

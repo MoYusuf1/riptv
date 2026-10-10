@@ -109,6 +109,12 @@ try {
         await page.getByText("This channel is offline").first().waitFor({ timeout: 5000 });
         console.log("PASS offline channel says so");
       }, page);
+      await step("live channel, interlaced, no sound (deinterlaced)", async () => {
+        const before = await page.evaluate(() => document.querySelector("video")?.currentSrc ?? null);
+        await page.getByText("Interlaced 576i (deinterlaced)", { exact: true }).first().click();
+        console.log(`TIME live channel, interlaced: first picture ${await firstPicture(page, Date.now(), before)} ms after choosing it`);
+        console.log("PASS live channel, interlaced, no sound (deinterlaced)");
+      }, page);
       await step("live channel, HEVC + AC-3", async () => {
         const before = await page.evaluate(() => document.querySelector("video").currentSrc);
         await page.getByText("HEVC video + AC-3 sound (needs conversion)", { exact: true }).first().click();
