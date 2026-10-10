@@ -26,7 +26,7 @@ It ships as one native executable (`riptv`), which does three things:
 - it serves the web UI (Rust compiled to WebAssembly) at `http://127.0.0.1:3000` and opens the browser;
 - it relays requests to the provider, because browsers can't reach IPTV servers directly (CORS,
   mixed content and odd headers);
-- it runs **ffmpeg/ffprobe** as subprocesses to convert streams that the browser can't play natively.
+- it runs **ffmpeg** as a subprocess to convert streams that the browser can't play natively.
 
 Release downloads bundle a minimal ffmpeg 8.1.3 built by `scripts/build_ffmpeg.sh` (published as a pre-release; pinned in `scripts/ffmpeg.json`), so users need nothing else installed.
 
@@ -44,7 +44,7 @@ Release downloads bundle a minimal ffmpeg 8.1.3 built by `scripts/build_ffmpeg.s
 | Server | **Axum 0.8** + **Tokio** | Minimal features (`http1`, `query`, `json`). Uses `tower-http` for static files and headers. |
 | HTTP client | **reqwest 0.13** with rustls | Streams responses. No OpenSSL in the server. |
 | Data | `serde` / `serde_json` | The `raw_value` feature lets `xtream` decode records one at a time instead of building a whole tree. |
-| Media conversion | **ffmpeg / ffprobe** subprocesses | Pinned in `scripts/ffmpeg.json` with SHA-256 hashes. |
+| Media conversion | **ffmpeg** subprocess | Pinned in `scripts/ffmpeg.json` with SHA-256 hashes. ffmpeg also probes sources (`ffmpeg -i`); ffprobe is a test-only tool. |
 | Experimental media engine | **rstreamkit**, a separate repo pulled over git | Pure-Rust HLS/TS/MP4/MKV → fMP4 and AC-3/E-AC-3/MP2 decoding. **Owned by another agent: never edit it.** |
 
 ### Workspace layout
@@ -55,7 +55,7 @@ Cargo.toml          workspace; default-members = xtream, proxy (app is wasm-only
 xtream/             Xtream API + M3U client (native AND wasm), stream sniffing (sniff.rs)
 proxy/              binary `riptv`: Axum server, /proxy relay, /live, /compat, diagnostics, updates, /quit
   src/live.rs       live pipeline: follows HLS itself → ffmpeg (stdin) → fMP4
-  src/compat.rs     movie/episode conversion (/compat), ffprobe, NVENC check, ffmpeg args
+  src/compat.rs     movie/episode conversion (/compat), probing via `ffmpeg -i`, NVENC check, ffmpeg args
   src/diagnostics.rs  --logs tracing and the probe endpoint
   tests/proxy.rs    end-to-end tests through a real proxy, with real ffmpeg
   examples/mock_provider  fake Xtream provider for offline testing
@@ -68,7 +68,7 @@ app/                Dioxus UI (wasm)
   src/timeline.rs, shelves.rs, categories.rs, controls.rs, media_session.rs, quit.rs, updates.rs …
 scripts/            setup.sh / setup.ps1 / setup.cmd, package.py, smoke_package.py, release_sources.py
 .github/workflows/  release.yml ("Release downloads"), windows.yml ("Windows setup")
-docs/               reference.md (architecture), live-playback.md (measurements), setup.md, release-notes.md
+docs/               reference.md (architecture), live-playback.md (measurements), changes.md (numbers per release), setup.md, release-notes.md
 ```
 
 **Where each change belongs:**
@@ -121,7 +121,10 @@ cargo run -p riptv --example mock_provider   # fake provider on :8081, login dem
 ### Releasing
 
 1. Bump `version` in `proxy/Cargo.toml` and refresh `Cargo.lock`.
-2. Write the user-facing text in `docs/release-notes.md`.
+2. Write the user-facing text in `docs/release-notes.md`, including a **What improved** table of
+   measured before/after numbers. Add the same numbers as a new `## X.Y.Z` section at the top of
+   `docs/changes.md`, the running record. The release workflow refuses to publish without both,
+   and appends the measured download sizes to the published notes itself.
 3. Commit, tag `vX.Y.Z` and push the tag.
 
 The tag starts two workflows:
@@ -188,7 +191,7 @@ A partially delivered segment is never replayed into the decoder.
 `playback.rs` chooses the engine:
 
 - `Native` when the browser can play the file (MP4 with H.264 and AAC);
-- otherwise `Convert` through `/compat`, using ffprobe and then ffmpeg into fragmented MP4.
+- otherwise `Convert` through `/compat`: ffmpeg describes the source (`ffmpeg -i`), then converts it into fragmented MP4.
 
 Resume and seek re-request `/compat?start=N`. **Read lesson 5.1 before you touch the seek arguments.**
 

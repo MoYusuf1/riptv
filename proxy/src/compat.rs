@@ -74,7 +74,7 @@ pub struct CompatQuery {
     start: Option<u32>,
 }
 
-/// What the first video stream is, from ffprobe.
+/// What the first video stream is, from ffmpeg's description of its input.
 #[derive(Debug, PartialEq)]
 struct Probe {
     codec: String,
@@ -93,25 +93,62 @@ impl Probe {
             && matches!(self.field_order.as_str(), "progressive" | "unknown" | "")
     }
 
-    /// ffprobe's `key=value` lines. `None` if there is no video stream (radio); anything about
-    /// it that's missing counts against copying.
+    /// The input description `ffmpeg -i` prints, e.g.
+    /// `Duration: 00:00:16.00, …` and
+    /// `Stream #0:0: Video: h264 (High), yuv420p(tv, top first), 1920x1080 [SAR 1:1 DAR 16:9], …`.
+    /// `None` if there is no video stream (radio); anything missing counts against copying.
     fn parse(text: &str) -> Option<Probe> {
-        let get = |key: &str| {
-            text.lines()
-                .find_map(|l| l.trim().strip_prefix(key)?.strip_prefix('='))
-                .unwrap_or("")
-                .to_owned()
+        let duration = text
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("Duration: "))
+            .and_then(|d| d.split(',').next())
+            .and_then(|hms| {
+                let mut secs = 0.0;
+                for part in hms.split(':') {
+                    secs = secs * 60.0 + part.trim().parse::<f64>().ok()?;
+                }
+                Some(secs)
+            })
+            .filter(|d| d.is_finite() && *d > 0.0);
+        let video = text
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("Stream #")?.split_once(": Video: "))?
+            .1;
+        // Fields are comma-separated, but details in brackets have commas of their own.
+        let (mut fields, mut depth, mut from) = (Vec::new(), 0, 0);
+        for (i, c) in video.char_indices() {
+            match c {
+                '(' | '[' => depth += 1,
+                ')' | ']' => depth -= 1,
+                ',' if depth == 0 => {
+                    fields.push(video[from..i].trim());
+                    from = i + 1;
+                }
+                _ => {}
+            }
+        }
+        fields.push(video[from..].trim());
+        let codec = fields[0].split([' ', ',']).next().unwrap_or("").to_owned();
+        let picture = fields.get(1).copied().unwrap_or("");
+        let (pix_fmt, details) = picture.split_once('(').unwrap_or((picture, ""));
+        let field_order = if details.contains("progressive") {
+            "progressive"
+        } else if details.contains(" first") || details.starts_with("first") {
+            "interlaced"
+        } else {
+            ""
         };
-        let codec = get("codec_name");
+        let height = fields
+            .get(2)
+            .and_then(|size| size.split_whitespace().next()?.split_once('x'))
+            .and_then(|(_, h)| h.parse().ok())
+            .unwrap_or(0);
         (!codec.is_empty()).then(|| Probe {
             codec,
-            pix_fmt: get("pix_fmt"),
-            field_order: get("field_order"),
-            height: get("height").parse().unwrap_or(0),
-            duration: get("duration")
-                .parse::<f64>()
-                .ok()
-                .filter(|d| d.is_finite() && *d > 0.0),
+            pix_fmt: pix_fmt.trim().to_owned(),
+            field_order: field_order.into(),
+            height,
+            duration,
         })
     }
 }
@@ -125,11 +162,13 @@ fn not_found(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::NotFound
 }
 
+/// What the source is, from ffmpeg itself (no ffprobe to bundle): with no output named, it
+/// describes its input on stderr and exits.
 async fn probe(url: &str, ua: &str) -> Result<Option<Probe>, Failure> {
-    let run = Command::new(media_tool("ffprobe"))
+    let run = Command::new(media_tool("ffmpeg"))
         .args([
-            "-v",
-            "error",
+            "-hide_banner",
+            "-nostdin",
             "-user_agent",
             ua,
             "-protocol_whitelist",
@@ -143,9 +182,7 @@ async fn probe(url: &str, ua: &str) -> Result<Option<Probe>, Failure> {
             "-probesize",
             "5000000",
         ])
-        .args(["-select_streams", "v:0", "-show_entries"])
-        .arg("stream=codec_name,pix_fmt,field_order,height:format=duration")
-        .args(["-of", "default=noprint_wrappers=1", url])
+        .args(["-i", url])
         .stdin(Stdio::null())
         .kill_on_drop(true)
         .output();
@@ -155,14 +192,15 @@ async fn probe(url: &str, ua: &str) -> Result<Option<Probe>, Failure> {
         Ok(Err(e)) => return Err(Failure::Failed(e.to_string())),
         Ok(Ok(out)) => out,
     };
-    if !out.status.success() {
-        // ffprobe's own message, last line only; it names no credentials of ours.
-        let err = String::from_utf8_lossy(&out.stderr);
+    // It always exits with an error, having no output; it read the source if it described it.
+    let err = String::from_utf8_lossy(&out.stderr);
+    if !err.lines().any(|l| l.starts_with("Input #0")) {
+        // ffmpeg's own message, last line only; it names no credentials of ours.
         let why = err.lines().last().unwrap_or("could not read the stream");
         return Err(Failure::Failed(why.replace(url, "the stream")));
     }
     // No video line at all means an audio-only stream (radio).
-    Ok(Probe::parse(&String::from_utf8_lossy(&out.stdout)))
+    Ok(Probe::parse(&err))
 }
 
 /// NVENC, when this machine really has it: listed by ffmpeg is not the same as working.
@@ -388,7 +426,7 @@ fn failure(s: &AppState, url: &Url, f: Failure) -> Response {
         diagnostics::note(
             s,
             &format!(
-                "{}ffprobe could not read the {}: {}",
+                "{}ffmpeg could not read the {}: {}",
                 diagnostics::tag(s, url),
                 diagnostics::kind_of(url),
                 diagnostics::redact(why, Some(url), 200)
@@ -553,7 +591,7 @@ pub async fn stream(
         .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
 }
 
-/// The media playlist to convert, when `url` is an HLS master playlist: ffmpeg and ffprobe
+/// The media playlist to convert, when `url` is an HLS master playlist: ffmpeg
 /// otherwise open every variant to probe it, which costs seconds at start (measured: 11.6 s to the
 /// first output for a 5-variant master, 3 s for one variant). The highest-bandwidth variant no
 /// taller than `RIPTV_MAX_HEIGHT` is chosen. Anything else, or any failure, is `url` unchanged.
@@ -773,32 +811,53 @@ mod tests {
     fn only_plain_progressive_h264_is_copied() {
         let p = |codec: &str, pix: &str, field: &str| {
             Probe::parse(&format!(
-                "codec_name={codec}\npix_fmt={pix}\nfield_order={field}\nheight=1080\n"
+                "  Stream #0:0: Video: {codec} (High), {pix}({field}), 1920x1080 [SAR 1:1 DAR 16:9], 25 fps\n"
             ))
             .unwrap()
         };
         assert!(p("h264", "yuv420p", "progressive").can_copy());
-        assert!(p("h264", "yuv420p", "unknown").can_copy());
+        assert!(
+            p("h264", "yuv420p", "tv, bt709").can_copy(),
+            "field order not stated"
+        );
         assert!(!p("hevc", "yuv420p", "progressive").can_copy(), "HEVC");
         assert!(
             !p("h264", "yuv420p10le", "progressive").can_copy(),
             "10-bit"
         );
-        assert!(!p("h264", "yuv420p", "tt").can_copy(), "interlaced");
-        assert!(!p("mpeg2video", "yuv420p", "tt").can_copy());
-        // Whatever order ffprobe prints them in, and anything it leaves out counts against copying.
-        let shuffled = Probe::parse(
-            "height=2160\ncodec_name=hevc\nfield_order=progressive\npix_fmt=yuv420p10le",
+        assert!(!p("h264", "yuv420p", "top first").can_copy(), "interlaced");
+        assert!(!p("h264", "yuv420p", "tv, bottom coded first (swapped)").can_copy());
+        assert!(!p("mpeg2video", "yuv420p", "tv, top first").can_copy());
+        // Real ffmpeg output: an MPEG-TS stream with details, and commas inside brackets.
+        let hevc = Probe::parse(
+            "Input #0, mpegts, from 'x.ts':\n  Duration: 00:00:04.01, start: 1.474667, bitrate: 139 kb/s\n  \
+             Stream #0:0[0x100]: Video: hevc (Main 10) (HEVC / 0x43564548), yuv420p10le(tv, bt2020nc/bt2020/smpte2084), 3840x2160 [SAR 1:1 DAR 16:9], 50 fps\n  \
+             Stream #0:1[0x101]: Audio: eac3, 48000 Hz, 5.1(side), fltp, 640 kb/s\n",
         )
         .unwrap();
-        assert_eq!((shuffled.codec.as_str(), shuffled.height), ("hevc", 2160));
-        assert!(!Probe::parse("codec_name=h264\n").unwrap().can_copy());
-        assert_eq!(Probe::parse(""), None, "no video stream: radio");
+        assert_eq!(
+            (hevc.codec.as_str(), hevc.pix_fmt.as_str(), hevc.height),
+            ("hevc", "yuv420p10le", 2160)
+        );
+        assert_eq!(hevc.duration, Some(4.01));
+        assert!(
+            !Probe::parse("  Stream #0:0: Video: h264\n")
+                .unwrap()
+                .can_copy()
+        );
+        assert_eq!(
+            Probe::parse("  Stream #0:0: Audio: aac (LC), 48000 Hz, stereo\n"),
+            None,
+            "no video stream: radio"
+        );
         // A movie has a length; a live stream says N/A.
-        let long = Probe::parse("codec_name=h264\nduration=7200.5\n").unwrap();
+        let long = Probe::parse(
+            "  Duration: 02:00:00.50, start: 0\n  Stream #0:0: Video: h264, yuv420p\n",
+        )
+        .unwrap();
         assert_eq!(long.duration, Some(7200.5));
         assert_eq!(
-            Probe::parse("codec_name=h264\nduration=N/A\n")
+            Probe::parse("  Duration: N/A, start: 0\n  Stream #0:0: Video: h264, yuv420p\n")
                 .unwrap()
                 .duration,
             None

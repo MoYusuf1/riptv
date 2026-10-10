@@ -77,9 +77,12 @@ def package(platform, version, server, web, output, target):
                 if path.name not in keep:
                     path.unlink()
         (bundle / "bin").mkdir()
+        # Keep native test tools outside the published downloads; the app needs only ffmpeg.
+        tools = ROOT / "target/test-tools" / platform / "bin"
+        tools.mkdir(parents=True, exist_ok=True)
         for asset, digest in MANIFEST["assets"][platform].items():
             name = "ffprobe" if asset.startswith("ffprobe") else "ffmpeg"
-            path = bundle / "bin" / (name + suffix)
+            path = (tools if name == "ffprobe" else bundle / "bin") / (name + suffix)
             url = f'https://github.com/{MANIFEST["repository"]}/releases/download/{MANIFEST["tag"]}/{asset}'
             download(url, path, digest)
             path.chmod(0o755)
@@ -91,15 +94,13 @@ def package(platform, version, server, web, output, target):
         shutil.copy2(ROOT / "docs/third-party.md", bundle / "licenses/FFmpeg-NOTICE.md")
         shutil.copy2(ROOT / "scripts/ffmpeg.json", bundle / "licenses/ffmpeg-downloads.json")
         shutil.copy2(ROOT / "target/release-sources/COPYING.GPLv3", bundle / "licenses/COPYING.GPLv3")
+        shutil.copy2(ROOT / "LICENSE", bundle / "licenses/RIPTV-LICENSE")
         shutil.copytree(bundle / "licenses", bundle / "web/licenses")
         hashes = []
         for path in sorted(bundle.rglob("*")):
             if path.is_file():
                 hashes.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(bundle).as_posix()}")
         (bundle / "SHA256SUMS.txt").write_text("\n".join(hashes) + "\n")
-        # Keep native test tools outside the published downloads.
-        tools = ROOT / "target/test-tools" / platform / "bin"
-        tools.mkdir(parents=True, exist_ok=True)
         for path in (bundle / "bin").iterdir():
             shutil.copy2(path, tools / path.name)
         env = os.environ.copy()

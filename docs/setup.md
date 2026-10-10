@@ -6,7 +6,7 @@ instructions in an Ubuntu WSL terminal.
 
 ## 1. Install prerequisites
 
-Choose the commands for your system. FFmpeg also supplies `ffprobe`.
+Choose the commands for your system. FFmpeg also supplies `ffprobe`, which only the tests use.
 
 ### Windows 10 / 11 (x64)
 
