@@ -5,45 +5,32 @@ release's notes (`docs/release-notes.md`), and the published release also lists 
 How each number was measured is in brackets; live-channel start times are in
 [live-playback.md](live-playback.md).
 
-## Unreleased
+## 0.2.7
 
-Measured on a test build of the release pipeline (all checks passed, including playback in Chrome).
+Sizes from a CI build of every platform (all checks passed, including playback in Chrome).
+Start times from `e2e/play.mjs`, pressing Play to moving picture, against the mock provider with
+`MOCK_LATENCY_MS` added to every request; "HEVC film" is a 1080p 10-bit HEVC file converted on NVENC.
 
-| What | 0.2.6 | Next |
+| What | 0.2.6 | 0.2.7 |
 |---|---|---|
-| Windows download | 28.4 MB | 17.1 MB |
-| Linux download | 27.0 MB | 17.3 MB |
-| Mac download (Apple Silicon) | 10.3 MB | 6.4 MB |
-| Mac download (Intel) | 11.4 MB | 7.0 MB |
+| Windows download | 28.4 MB | 7.5 MB |
+| Linux download | 27.0 MB | 8.1 MB |
+| Mac download (Apple Silicon) | 10.3 MB | 5.5 MB |
+| Mac download (Intel) | 11.4 MB | 6.1 MB |
+| …of which: dropping ffprobe (Windows / Linux) | 28.4 / 27.0 MB | 17.1 / 17.3 MB |
+| …then: compressed resources, stripped server (Windows / Linux) | 17.1 / 17.3 MB | 7.5 / 8.1 MB |
+| Launch to ready, Linux [unpacking included] | 37 ms | 148 ms |
+| Page ready in Chrome | — | 75 ms (1.8 MB wasm loads in 5 ms; 3 MB JS heap) |
 | Programs bundled | ffmpeg + ffprobe | ffmpeg only |
+| Requests before a converted film starts | 6 | 3 |
+| H.264 MKV with AC-3 (copied), first picture, 150 ms delay | 1.06 s | 0.60 s |
+| HEVC film, first picture, 150 ms delay | 1.56 s | 1.05 s |
+| HEVC film, after a seek, 150 ms delay | 0.91 s | 0.76 s |
+| H.264 MKV with AC-3, first picture, 500 ms delay | 3.16 s | 1.66 s |
+| HEVC film, first picture, 500 ms delay | 3.66 s | 2.11 s |
+| HEVC film, after a seek, 500 ms delay | 2.07 s | 1.51 s |
+| Live channel that ends early (mock 4 s clip), first picture | 15.3 s | 0.5 s (H.264), 1.0 s (HEVC converted) |
 | License | none stated | MIT |
-
-Movie and episode start, timed from pressing Play to moving picture (`e2e/play.mjs`, mock provider
-with `MOCK_LATENCY_MS` per request, your-own-file = 1080p 10-bit HEVC converted on NVENC):
-
-| What | Provider delay | 0.2.6 | Next |
-|---|---|---|---|
-| Requests before a converted film starts | any | 6 | 3 |
-| H.264 MKV with AC-3 (copied), first picture | 150 ms | 1.06 s | 0.60 s |
-| HEVC film (converted), first picture | 150 ms | 1.56 s | 1.05 s |
-| HEVC film, after a seek | 150 ms | 0.91 s | 0.76 s |
-| H.264 MKV with AC-3, first picture | 500 ms | 3.16 s | 1.66 s |
-| HEVC film, first picture | 500 ms | 3.66 s | 2.11 s |
-| HEVC film, after a seek | 500 ms | 2.07 s | 1.51 s |
-
-| Live channel that ends early (mock 4 s clip), first picture | 150 ms | 15.3 s | 0.5 s (H.264), 1.0 s (HEVC converted) |
-
-Bundled files stored zstd-compressed inside the app, and the native server stripped of symbols
-(sizes from a CI build of every platform, all checks passed; launch timed locally on Linux):
-
-| What | 0.2.6 | Next |
-|---|---|---|
-| Windows download | 17.1 MB (after dropping ffprobe) | 7.5 MB |
-| Linux download | 17.3 MB (after dropping ffprobe) | 8.1 MB |
-| Mac download (Apple Silicon) | 6.4 MB | 5.5 MB |
-| Mac download (Intel) | 7.0 MB | 6.1 MB |
-| Launch to ready [unpacking included] | 37 ms | 148 ms |
-| Page ready in Chrome | — | 75 ms (wasm 1.8 MB loads in 5 ms; 3 MB JS heap) |
 
 ## 0.2.6
 
