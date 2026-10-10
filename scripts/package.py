@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a single-file app with its web app and media tools embedded. Stdlib only."""
+"""Build a single-file app with its web app and media tools embedded. Stdlib only (Python 3.14+)."""
 import argparse
 import hashlib
 import json
@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import tempfile
 import urllib.request
+from compression import zstd
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = json.loads((ROOT / "scripts/ffmpeg.json").read_text())
@@ -103,6 +104,10 @@ def package(platform, version, server, web, output, target):
         (bundle / "SHA256SUMS.txt").write_text("\n".join(hashes) + "\n")
         for path in (bundle / "bin").iterdir():
             shutil.copy2(path, tools / path.name)
+        # Embedded compressed (the app unpacks them on start): about a third of the download.
+        for path in [p for p in bundle.rglob("*") if p.is_file()]:
+            path.with_name(path.name + ".zst").write_bytes(zstd.compress(path.read_bytes(), 19))
+            path.unlink()
         env = os.environ.copy()
         env["IPTV_BUNDLE_DIR"] = str(bundle)
         subprocess.run(["cargo", "build", "--release", "--locked", "-p", "riptv", "--target", target],

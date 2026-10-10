@@ -26,7 +26,7 @@ fn main() {
     if let Some(root) = env::var_os("IPTV_BUNDLE_DIR") {
         let root = fs::canonicalize(root).expect("bundle directory");
         assert!(
-            root.join("web/index.html").is_file(),
+            root.join("web/index.html").is_file() || root.join("web/index.html.zst").is_file(),
             "bundle needs web app"
         );
         collect(&root, &root, &mut entries);

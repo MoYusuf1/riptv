@@ -12,3 +12,7 @@ codegen-units = 1
 panic = "abort"
 # Keep wasm-bindgen custom sections until the web bundler has processed them.
 strip = "debuginfo"
+
+# The native server keeps nothing for debuggers: about 1 MB off every download.
+[profile.release.package.riptv]
+strip = "symbols"

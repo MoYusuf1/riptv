@@ -41,6 +41,11 @@ pub fn prepare() -> io::Result<Option<Bundle>> {
         if !safe_path(relative) {
             return Err(io::Error::other("invalid embedded resource path"));
         }
+        // Packaging stores each file zstd-compressed (`name.zst`): a third of the download.
+        let (relative, bytes) = match relative.strip_suffix(".zst") {
+            Some(name) => (name, unpack(bytes)?),
+            None => (relative, bytes.to_vec()),
+        };
         let path = folder.join(relative);
         fs::create_dir_all(path.parent().unwrap())?;
         fs::write(&path, bytes)?;
@@ -53,6 +58,15 @@ pub fn prepare() -> io::Result<Option<Bundle>> {
     ROOT.set(folder)
         .map_err(|_| io::Error::other("bundle already initialized"))?;
     Ok(Some(bundle))
+}
+
+fn unpack(compressed: &[u8]) -> io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    ruzstd::decoding::StreamingDecoder::new(compressed)
+        .map_err(io::Error::other)?
+        .read_to_end(&mut out)?;
+    Ok(out)
 }
 
 fn safe_path(path: &str) -> bool {
@@ -72,5 +86,15 @@ mod tests {
         }
         assert!(safe_path("web/assets/app.wasm"));
         assert!(safe_path("bin/ffmpeg.exe"));
+    }
+
+    #[test]
+    fn unpacks_what_packaging_compressed() {
+        // `python3 -c "from compression import zstd; print(list(zstd.compress(b'RIPTV ' * 4, 19)))"`
+        let packed = [
+            40, 181, 47, 253, 32, 24, 109, 0, 0, 56, 82, 73, 80, 84, 86, 32, 82, 1, 0, 153, 139, 17,
+        ];
+        assert_eq!(unpack(&packed).unwrap(), b"RIPTV ".repeat(4));
+        assert!(unpack(b"not zstd").is_err());
     }
 }
