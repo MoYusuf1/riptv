@@ -6,9 +6,10 @@ Download your app below, then open it. Everything is included.
 
 Your browser opens automatically. No Rust or FFmpeg setup.
 
-This update fixes scrubbing in movies and TV episodes: the seek bar no longer freezes
-after a drag, the controls stay put while your pointer is on them, and they hide again
-once you're done.
+This update makes the download much smaller: about 26 MB instead of over 100 MB on Windows
+and Linux, and about a third of the size on Mac. RIPTV now carries its own lean build of
+FFmpeg with only what it needs. On Linux with an NVIDIA graphics card, 4K channels that
+need converting now use the graphics card instead of the processor.
 
 Apps are unsigned, so your computer may show a security warning.
 The checksums and FFmpeg source download are for verification, not for running the app.
