@@ -31,6 +31,8 @@ with `MOCK_LATENCY_MS` per request, your-own-file = 1080p 10-bit HEVC converted 
 | HEVC film, first picture | 500 ms | 3.66 s | 2.11 s |
 | HEVC film, after a seek | 500 ms | 2.07 s | 1.51 s |
 
+| Live channel that ends early (mock 4 s clip), first picture | 150 ms | 15.3 s | 0.5 s (H.264), 1.0 s (HEVC converted) |
+
 ## 0.2.6
 
 | What | Before | After |

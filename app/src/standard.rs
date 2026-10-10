@@ -18,6 +18,14 @@ use xtream::Client;
 pub struct Stream {
     abort: AbortController,
     object: String,
+    media: MediaSource,
+}
+
+impl Stream {
+    /// The channel sent all it had (a clip, or a channel that stopped): nothing more is coming.
+    pub fn ended(&self) -> bool {
+        self.media.ready_state() == MediaSourceReadyState::Ended
+    }
 }
 
 impl Drop for Stream {
@@ -38,15 +46,20 @@ pub fn start(
     let signal = abort.signal();
     video.set_src(&object);
     video.load();
+    let pumped = media.clone();
     spawn_local(async move {
-        let result = pump(&video, &media, &src, &signal).await;
+        let result = pump(&video, &pumped, &src, &signal).await;
         if !signal.aborted()
             && let Err(why) = result
         {
             on_error(why);
         }
     });
-    Ok(Stream { abort, object })
+    Ok(Stream {
+        abort,
+        object,
+        media,
+    })
 }
 
 fn js_error(value: JsValue) -> String {

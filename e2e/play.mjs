@@ -92,10 +92,13 @@ try {
 
   await step("live channel, H.264 + AC-3", async () => {
     await page.getByText("H.264 video + AC-3 sound", { exact: true }).first().click();
+    console.log(`TIME live channel, H.264 + AC-3: first picture ${await firstPicture(page, Date.now())} ms after choosing it`);
     await plays(page, "live channel, H.264 + AC-3");
   }, page);
   await step("live channel, HEVC + AC-3 (transcoded)", async () => {
+    const before = await page.evaluate(() => document.querySelector("video").currentSrc);
     await page.getByText("HEVC video + AC-3 sound (needs conversion)", { exact: true }).first().click();
+    console.log(`TIME live channel, HEVC + AC-3: first picture ${await firstPicture(page, Date.now(), before)} ms after choosing it`);
     await plays(page, "live channel, HEVC + AC-3 (transcoded)");
   }, page);
   await page.getByRole("button", { name: "Movies" }).click();

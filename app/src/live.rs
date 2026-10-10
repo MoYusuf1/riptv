@@ -174,8 +174,10 @@ pub(crate) fn LivePlayer(
     };
     {
         let trace = trace.clone();
+        let live_stream = live_stream.clone();
         use_future(move || {
             let trace = trace.clone();
+            let live_stream = live_stream.clone();
             async move {
                 let mut held_since = None::<f64>;
                 let mut healthy_since = None::<f64>;
@@ -202,8 +204,16 @@ pub(crate) fn LivePlayer(
                             let _ = video.pause();
                         }
                         // Accumulate a reserve before starting or resuming. A finite wait also
-                        // accommodates browsers that stop preloading before six seconds.
-                        if ahead >= 6.0 || (now - since >= 15_000.0 && ahead >= 1.0) {
+                        // accommodates browsers that stop preloading before six seconds; a stream
+                        // that has ended has nothing more to wait for.
+                        let ended = live_stream
+                            .borrow()
+                            .as_ref()
+                            .is_some_and(standard::Stream::ended);
+                        if ahead >= 6.0
+                            || (ended && ahead > 0.0)
+                            || (now - since >= 15_000.0 && ahead >= 1.0)
+                        {
                             holding.set(false);
                             buffering.set(false);
                             held_since = None;
