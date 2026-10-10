@@ -5,6 +5,7 @@ name: FFmpeg build
 # go in scripts/ffmpeg.json. Pre-releases are never offered as app updates.
 on:
   push:
+    branches: ['**']
     paths: ['scripts/build_ffmpeg.sh', '.github/workflows/ffmpeg.yml']
   workflow_dispatch:
     inputs:
