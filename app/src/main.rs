@@ -243,6 +243,7 @@ svg{width:1.1rem;height:1.1rem}
 .epc{flex:0 0 clamp(14rem,13vw,18rem);min-width:0;scroll-snap-align:start}
 .thumb{position:relative;display:grid;place-items:center;width:100%;aspect-ratio:16/9;overflow:hidden;border-radius:12px;background:var(--row);color:var(--faint);font-size:1.4rem;font-weight:700}
 .thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.thumb img.series-still{filter:brightness(.45) saturate(.7);transform:scale(1.08)}
 .thumb .ep-num{position:absolute;top:.45rem;left:.45rem;padding:.18rem .45rem;border:1px solid rgba(255,255,255,.35);border-radius:999px;background:rgba(0,0,0,.65);color:#fff;font-size:.67rem;font-weight:700;line-height:1}
 .thumb .go{position:absolute;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.4);color:#fff;opacity:0;transition:opacity .15s}
 .thumb .go svg{width:2rem;height:2rem;fill:currentColor}
@@ -464,6 +465,28 @@ img[data-failed]{display:none}
 .card small{display:block;margin-top:.1rem;color:var(--faint);font-size:.68rem}
 "#,
     // Narrow screens: the rail becomes a floating tab bar, categories a button
+    // Feel: motion and feedback only; nothing here moves anything to a new place.
+    r#".card{transition:none}
+.card:hover{transform:none}
+.card .art{transition:transform .35s var(--ease),box-shadow .35s var(--ease)}
+.card .art img{transition:transform .5s var(--ease)}
+.card strong{transition:color .2s}
+.card:hover .art,.card:focus-visible .art{transform:translateY(-4px);box-shadow:0 16px 34px rgba(0,0,0,.5),0 0 0 1px rgba(255,125,146,.22)}
+.card:hover .art img{transform:scale(1.04)}
+.card:hover strong,.card:focus-visible strong{color:var(--text)}
+.card:active .art{transform:translateY(-1px) scale(.985)}
+button{-webkit-tap-highlight-color:transparent}
+.icon-btn,.who,.rail button,.ctl{transition:background .2s var(--ease),color .2s,transform .12s var(--ease)}
+.icon-btn:active,.who:active,.rail button:active,.ctl:active{transform:scale(.93)}
+.row{transition:background .18s var(--ease)}
+.thumb{transition:transform .35s var(--ease),box-shadow .35s var(--ease)}
+.thumb img{transition:transform .5s var(--ease)}
+.epc:hover .thumb{transform:translateY(-3px);box-shadow:0 14px 30px rgba(0,0,0,.5)}
+.epc:hover .thumb img:not(.series-still){transform:scale(1.04)}
+.menu button,.w-menu button{transition:background .15s}
+.art img,.thumb img,.d-art,.d-poster{animation:fade .5s var(--ease)}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+"#,
     r#"@media(max-width:1080px){.topbar{gap:.7rem}.who b{display:none}.rail button{padding:0 .65rem}}
 @media(max-width:820px){.brand{display:none}.who b{display:none}.topbar{gap:.5rem;height:3rem;inset:.6rem .6rem auto}.rail{position:fixed;z-index:25;top:auto;bottom:.8rem;left:50%;flex-direction:row;transform:translateX(-50%);background:rgba(24,16,20,.94);backdrop-filter:blur(24px);box-shadow:0 10px 30px rgba(0,0,0,.4);border-radius:18px}.rail button{flex-direction:column;gap:.15rem;width:auto;min-width:4.4rem;height:3rem;padding:0 .8rem}.rail span{font-size:.65rem}.workspace{inset:4.2rem 0 0;grid-template-columns:1fr;padding:0 .6rem .6rem}.sidebar{display:none}.cats-btn{display:inline-flex}.scroll,.episodes{padding-bottom:5.5rem}.d-hero{min-height:auto;padding:7rem 1rem 1.6rem}.d-facts{position:relative;inset:auto;width:auto;margin-top:1.4rem}.d-sec{padding:1rem 1rem .8rem}.w-top{padding:.8rem .8rem 2.5rem}.w-bottom{padding:3rem .8rem .6rem}.w-row .vol,.w-row .volume{display:none}.w-menu{right:.8rem;bottom:5.2rem}}
 @media(max-width:820px){.topbar{backdrop-filter:none;background:#181014}}
