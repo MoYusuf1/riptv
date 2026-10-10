@@ -8,7 +8,7 @@
   most browsers can't play.
 - **Private.** It runs on your own computer. No account, ads or tracking. Your logins never leave
   your machine except to reach your own provider.
-- **Free and open source.**
+- **Free and open source**, under the MIT License.
 - **Small and simple.** A single download of 10–28 MB. Nothing else to install.
 - **Picks up where you left off.** Resume movies and episodes, keep a list of favourites, and have a
   separate profile for each person.
@@ -43,3 +43,8 @@ converter at all. It's still being tested.
 
 [Build from source](docs/setup.md) · [How it works](docs/reference.md) ·
 [For developers](docs/technical-breakdown.md) · [Bundled software](docs/third-party.md)
+
+## License
+
+RIPTV is free for everyone under the [MIT License](LICENSE): use it, change it, share it.
+The bundled FFmpeg has its own license ([details](docs/third-party.md)).
