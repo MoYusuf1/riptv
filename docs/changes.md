@@ -34,11 +34,14 @@ with `MOCK_LATENCY_MS` per request, your-own-file = 1080p 10-bit HEVC converted 
 | Live channel that ends early (mock 4 s clip), first picture | 150 ms | 15.3 s | 0.5 s (H.264), 1.0 s (HEVC converted) |
 
 Bundled files stored zstd-compressed inside the app, and the native server stripped of symbols
-(Linux, measured locally; CI measures every platform before release):
+(sizes from a CI build of every platform, all checks passed; launch timed locally on Linux):
 
 | What | 0.2.6 | Next |
 |---|---|---|
-| Linux download | 17.3 MB (after dropping ffprobe) | 8.0 MB |
+| Windows download | 17.1 MB (after dropping ffprobe) | 7.5 MB |
+| Linux download | 17.3 MB (after dropping ffprobe) | 8.1 MB |
+| Mac download (Apple Silicon) | 6.4 MB | 5.5 MB |
+| Mac download (Intel) | 7.0 MB | 6.1 MB |
 | Launch to ready [unpacking included] | 37 ms | 148 ms |
 | Page ready in Chrome | — | 75 ms (wasm 1.8 MB loads in 5 ms; 3 MB JS heap) |
 
