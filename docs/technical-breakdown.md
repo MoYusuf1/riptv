@@ -28,7 +28,7 @@ It ships as one native executable (`riptv`), which does three things:
   mixed content and odd headers);
 - it runs **ffmpeg/ffprobe** as subprocesses to convert streams that the browser can't play natively.
 
-Release downloads bundle ffmpeg 8.1.2 (static builds from Shaka), so users need nothing else installed.
+Release downloads bundle a minimal ffmpeg 8.1.3 built by `scripts/build_ffmpeg.sh` (published as a pre-release; pinned in `scripts/ffmpeg.json`), so users need nothing else installed.
 
 ---
 

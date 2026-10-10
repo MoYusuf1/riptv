@@ -1,22 +1,23 @@
 {
-  "repository": "shaka-project/static-ffmpeg-binaries",
-  "tag": "n8.1.2-1",
+  "repository": "MoYusuf1/riptv",
+  "tag": "ffmpeg-n8.1.3-1",
+  "sources": "729b33af6396daee48decfc50adbd7bbbe3139637ac1a4079f2c945fa6980d4d",
   "assets": {
     "linux-x64": {
-      "ffmpeg-linux-x64": "9eac5b2b5076db5ff853a6fa0dcd6b8de7d0cac8481eadda6c47cd935825f1ee",
-      "ffprobe-linux-x64": "065d3c56926052a76e884c4e4b51b7d95248da9391ab7effdcca6b94ceab98cf"
+      "ffmpeg-linux-x64": "015dfff56cae0ac4a530c5e78517caaeac12afb99abf2b783b47c6944cbd64c6",
+      "ffprobe-linux-x64": "73967b8c7355c1cc4b3318cd84c4cfab10ebb739628eba8f2297d838c1b2d671"
     },
     "windows-x64": {
-      "ffmpeg-win-x64.exe": "4044b3924c977ad31229d504c5d5b8685f9553124fbaff6e9c99048b42830341",
-      "ffprobe-win-x64.exe": "fc37ca23d31ee08bb8f7e108edf3822f6ef3efc1a8d306bbe0b779190230710b"
+      "ffmpeg-windows-x64.exe": "09eb44539a2fef721112df71ac1b4ff745c97cd7aabf15a1952659048a4dd833",
+      "ffprobe-windows-x64.exe": "943e299adf3e96133e1dcd82e4ba36c1984fc7ae7ce2867f74a07adc8fde4875"
     },
     "macos-arm64": {
-      "ffmpeg-osx-arm64": "e7b9fcd97f95f333512d6e8b8ac24d9dbc08f189f36047695499bd7b57214b22",
-      "ffprobe-osx-arm64": "ded4c698b8ff38d0bc1fd30fcc5e768dc46f58bc15a8dfd61f98615ba49cde5c"
+      "ffmpeg-macos-arm64": "f08e82bd0a674bd42aef8c403767492bc09e8fd637a3d27abe61b8791f17e1fa",
+      "ffprobe-macos-arm64": "2e8f8b0849b5a72c86f2945b7c716a60c382b7f3ba779e92ea3ec1b97a340001"
     },
     "macos-x64": {
-      "ffmpeg-osx-x64": "62c87854d851f202fc4a29bdda0fe7b6ebcddd37b863482ce1bdc81151b03fe4",
-      "ffprobe-osx-x64": "d530823f480a3c7eb6334f18a00197d1e9f1070e86172b9aa89c4bf4022bd879"
+      "ffmpeg-macos-x64": "5fa581d51dbac9c2c8d1a7089b6d89f39ede87e3b8e6a21551f2c324c6d44de1",
+      "ffprobe-macos-x64": "12bbe67bbd64d760a785eb090353c8394bd4a3474d40e36cc9947e0eb7d59c4a"
     }
   }
 }
