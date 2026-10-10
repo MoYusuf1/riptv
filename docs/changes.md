@@ -5,6 +5,19 @@ release's notes (`docs/release-notes.md`), and the published release also lists 
 How each number was measured is in brackets; live-channel start times are in
 [live-playback.md](live-playback.md).
 
+## Unreleased
+
+Measured on a test build of the release pipeline (all checks passed, including playback in Chrome).
+
+| What | 0.2.6 | Next |
+|---|---|---|
+| Windows download | 28.4 MB | 17.1 MB |
+| Linux download | 27.0 MB | 17.3 MB |
+| Mac download (Apple Silicon) | 10.3 MB | 6.4 MB |
+| Mac download (Intel) | 11.4 MB | 7.0 MB |
+| Programs bundled | ffmpeg + ffprobe | ffmpeg only |
+| License | none stated | MIT |
+
 ## 0.2.6
 
 | What | Before | After |
