@@ -1,6 +1,6 @@
 # Download help
 
-Choose your computer on the [download page](https://github.com/MoYusuf1/riptv#download-and-open).
+Choose your computer on the [download page](https://github.com/MoYusuf1/riptv#download).
 
 - **Windows:** open `RIPTV-Windows.exe`.
 - **Linux:** allow `RIPTV-Linux` to run, then open it. In a terminal: `chmod +x RIPTV-Linux && ./RIPTV-Linux`.
