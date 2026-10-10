@@ -12,6 +12,11 @@ How each number was measured is in brackets; live-channel start times are in
 | Live channel with no sound track, converted (mock 576i interlaced) | never played; 8 provider requests in 2 s, then gave up | first picture in 0.77 s, 1 request |
 | Same, 150 ms provider delay | never played | 1.02 s |
 | Interlaced channel with sound (576i, deinterlaced on NVENC) | 1.03 s | 1.03 s (unchanged; the deinterlace and encode add about 0.5 s) |
+| Episode name when the title only numbers it ("Show - S01E02") or is empty | the numbering, or "2. " | the episode's own name, or "Episode 2" |
+| Episode plot sent as `overview`, date as `release_date`, picture as a TMDB path, `info` as a JSON string | missing | shown |
+| Season keyed both "02" and "2" | two "Season 2"s, one unreachable | one season, episodes in order |
+| Episode with no picture | empty box | the series' art, dimmed |
+| Layout shift / frames over 50 ms while browsing (30,000-title mock) | 0 / none | 0 / none (motion added without either) |
 
 ## 0.2.8
 

@@ -105,13 +105,16 @@ pub(crate) fn youtube_id(text: &str) -> Option<String> {
     .map(str::to_owned)
 }
 
-/// "3. Title", or the title alone when it already says which episode it is.
+/// "3. Title", the title alone when it already says which episode it is, or "Episode 3".
 pub(crate) fn episode_name(ep: &Episode, nth: usize) -> String {
     let num = ep.episode_num.unwrap_or(nth as u64 + 1);
-    if ep.title.to_uppercase().contains(&format!("E{num:02}")) {
-        ep.title.clone()
+    let name = ep.name();
+    if name.is_empty() {
+        format!("Episode {num}")
+    } else if name.to_uppercase().contains(&format!("E{num:02}")) {
+        name.to_owned()
     } else {
-        format!("{num}. {}", ep.title)
+        format!("{num}. {name}")
     }
 }
 
@@ -162,6 +165,10 @@ pub(crate) fn DetailPage(
     let poster_src = poster
         .as_deref()
         .filter(|src| src.starts_with("http") && !poster_failed());
+    // An episode with no picture of its own shows the series' art, dimmed, not an empty box.
+    let series_still = backdrop_src
+        .or(poster_src)
+        .map(|src| xtream::sized_art(src, xtream::Art::Still));
     let genres: Vec<String> = details
         .genre
         .as_deref()
@@ -244,11 +251,15 @@ pub(crate) fn DetailPage(
                         .as_deref()
                         .filter(|e| !e.is_empty())
                         .unwrap_or("mp4");
+                    let name = match ep.name() {
+                        "" => format!("Episode {num}"),
+                        name => name.to_owned(),
+                    };
                     all.push(Play {
                         key: format!("episode:{}", ep.id),
                         title: title.clone(),
-                        subtitle: Some(format!("S{} E{num} · {}", season.number, ep.title)),
-                        file: format!("{title} S{}E{num}: {}", season.number, ep.title),
+                        subtitle: Some(format!("S{} E{num} · {name}", season.number)),
+                        file: format!("{title} S{}E{num}: {name}", season.number),
                         url: client.episode_url(ep.id, ext).to_string(),
                         duration: ep.info.runtime_secs,
                         entry: Some(entry_of(
@@ -377,9 +388,10 @@ pub(crate) fn DetailPage(
                             for (i, ep) in seasons.iter().flat_map(|s| s.episodes.iter()).enumerate().skip(range.start).take(range.len()) {
                                 div { class: "epc", key: "{ep.id}",
                                     button { class: "thumb", aria_label: "Play", onclick: { let play_at = play_at.clone(); move |_| play_at(i) },
-                                        span { class: "ph", "E{ep.episode_num.unwrap_or(0)}" }
                                         if let Some(img) = ep.info.image.as_deref().filter(|s| s.starts_with("http")) {
                                             img { src: "{xtream::sized_art(img, xtream::Art::Still)}", loading: "lazy", decoding: "async" }
+                                        } else if let Some(src) = &series_still {
+                                            img { class: "series-still", src: "{src}", loading: "lazy", decoding: "async", alt: "" }
                                         }
                                         if let Some(p) = shelves::percent(&all[i].key) { span { class: "prog", i { style: "width:{p}%" } } }
                                         span { class: "ep-num", "E{ep.episode_num.unwrap_or((i - range.start + 1) as u64)}" }

@@ -441,7 +441,15 @@ async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
                        "info": {"plot": "The same clip again, now in a different container.",
                                 "duration_secs": 16, "releasedate": "2021-03-08"}}],
                 "2": [{"id": "201", "episode_num": 1, "title": "Return", "container_extension": "mp4",
-                       "info": []}]
+                       "info": []}],
+                // Shapes real panels send: a title that only numbers the episode (its name is in
+                // `info`), `info` as a JSON string, a season keyed "02" next to "2", no title at all.
+                "02": [{"id": "202", "episode_num": 2, "title": "Flower: The Series - S02E02",
+                        "container_extension": "mp4",
+                        "info": {"name": "Seeds", "overview": "Told from the bee's side.",
+                                 "release_date": "2021-04-05", "duration_secs": "16"}},
+                       {"id": "203", "episode_num": 3, "title": "", "container_extension": "mp4",
+                        "info": "{\"name\":\"Winter\",\"plot\":\"Nothing grows.\",\"duration\":\"00:00:16\"}"}]
             }
         }),
         Some("get_simple_data_table") => json!({"epg_listings": schedule(stream_id)}),

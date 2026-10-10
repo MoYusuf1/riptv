@@ -267,9 +267,39 @@ pub struct Episode {
     pub info: EpisodeInfo,
 }
 
+impl Episode {
+    /// What to call it: the panel's `title` field is often empty or only "Show - S01E02", with
+    /// the episode's own name in `info.name`.
+    pub fn name(&self) -> &str {
+        let title = self.title.trim();
+        let only_numbering = title.is_empty() || has_episode_code(title);
+        match self.info.name.as_deref() {
+            Some(name) if only_numbering && !has_episode_code(name) => name,
+            _ => title,
+        }
+    }
+}
+
+/// Whether `text` says which episode it is, like "S01E02" (any case, one or more digits).
+fn has_episode_code(text: &str) -> bool {
+    let t = text.as_bytes();
+    (0..t.len()).any(|i| {
+        let digits = |from: usize| t[from..].iter().take_while(|b| b.is_ascii_digit()).count();
+        t[i].eq_ignore_ascii_case(&b'S') && {
+            let s = digits(i + 1);
+            s > 0
+                && t.get(i + 1 + s)
+                    .is_some_and(|b| b.eq_ignore_ascii_case(&b'E'))
+                && digits(i + 2 + s) > 0
+        }
+    })
+}
+
 /// What a panel knows about one episode (its `info` object, which is `[]` when it knows nothing).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct EpisodeInfo {
+    /// The episode's own name ("Pilot"), when the panel has one.
+    pub name: Option<String>,
     pub plot: Option<String>,
     pub image: Option<String>,
     pub runtime_secs: Option<u64>,
@@ -279,13 +309,29 @@ pub struct EpisodeInfo {
 
 fn episode_info<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<EpisodeInfo, D::Error> {
     let v = Value::deserialize(d)?;
+    // Some panels send the object encoded as a string.
+    let v = match v {
+        Value::String(text) => serde_json::from_str(&text).unwrap_or(Value::Null),
+        v => v,
+    };
     let v = Some(&v);
     Ok(EpisodeInfo {
-        plot: pick(v, &["plot", "description"]),
-        image: pick(v, &["movie_image", "cover_big", "cover"]),
+        name: pick(v, &["name", "title"]),
+        plot: pick(v, &["plot", "description", "overview"]),
+        // A bare TMDB path ("/abc.jpg") is a still on TMDB's image server.
+        image: pick(v, &["movie_image", "cover_big", "cover", "still_path"]).map(|i| {
+            if i.starts_with('/') && !i.starts_with("//") {
+                format!("https://image.tmdb.org/t/p/w300{i}")
+            } else {
+                i
+            }
+        }),
         runtime_secs: runtime_secs(v),
-        release_date: pick(v, &["releasedate", "releaseDate", "air_date"]),
-        rating: pick(v, &["rating"]),
+        release_date: pick(
+            v,
+            &["releasedate", "releaseDate", "release_date", "air_date"],
+        ),
+        rating: pick(v, &["rating", "vote_average"]),
     })
 }
 
@@ -580,6 +626,16 @@ fn parse_series_info(v: Value) -> Result<SeriesInfo> {
         .collect::<Result<Vec<_>>>()?;
     seasons.retain(|s| !s.episodes.is_empty());
     seasons.sort_by_key(|s| s.number);
+    // "01" and "1" are the same season: one list, not two "Season 1"s with half the episodes each.
+    seasons.dedup_by(|later, kept| {
+        let same = later.number == kept.number;
+        if same {
+            kept.episodes.append(&mut later.episodes);
+            kept.episodes
+                .sort_by_key(|e| e.episode_num.unwrap_or(u64::MAX));
+        }
+        same
+    });
     Ok(SeriesInfo {
         details: parse_details(v.get("info")),
         seasons,
@@ -1293,6 +1349,46 @@ mod tests {
                 .seasons
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn episodes_get_their_information_however_panels_send_it() {
+        let i = parse_series_info(json!({"episodes": {
+            "01": [{"id": 1, "episode_num": 1, "title": "Show - S01E01", "info": {"name": "Pilot", "overview": "o",
+                    "still_path": "/s.jpg", "release_date": "2020-01-02", "vote_average": 7.9}}],
+            "1": [{"id": 2, "episode_num": 2, "title": "", "info": "{\"name\":\"Second\",\"plot\":\"p\"}"}],
+            "2": [{"id": 3, "title": "The Real Title", "info": {"name": "Show - S02E01"}},
+                  {"id": 4, "title": "", "info": []}]
+        }}))
+        .unwrap();
+        // "01" and "1": one season with both episodes, in order.
+        assert_eq!(i.seasons.len(), 2);
+        assert_eq!(
+            i.seasons[0]
+                .episodes
+                .iter()
+                .map(|e| e.id)
+                .collect::<Vec<_>>(),
+            [1, 2]
+        );
+        let (a, b) = (&i.seasons[0].episodes[0], &i.seasons[0].episodes[1]);
+        assert_eq!(a.name(), "Pilot", "the title only numbered it");
+        assert_eq!(a.info.plot.as_deref(), Some("o"));
+        assert_eq!(
+            a.info.image.as_deref(),
+            Some("https://image.tmdb.org/t/p/w300/s.jpg")
+        );
+        assert_eq!(a.info.release_date.as_deref(), Some("2020-01-02"));
+        assert_eq!(a.info.rating.as_deref(), Some("7.9"));
+        assert_eq!(
+            (b.name(), b.info.plot.as_deref()),
+            ("Second", Some("p")),
+            "info as a string"
+        );
+        let (c, d) = (&i.seasons[1].episodes[0], &i.seasons[1].episodes[1]);
+        assert_eq!(c.name(), "The Real Title", "a real title is kept");
+        assert_eq!(d.name(), "", "nothing to go on");
+        assert!(has_episode_code("Show - s1e12 - x") && !has_episode_code("Season 2"));
     }
 
     #[test]
