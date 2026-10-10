@@ -1,4 +1,4 @@
-// End-to-end check in a real browser: sign in to the mock provider, play a live channel that
+// End-to-end check in a real browser (RIPTV runs with --logs, so its trace shows what it chose): sign in to the mock provider, play a live channel that
 // needs conversion and a movie that needs conversion, seek it, and require moving picture and
 // decoded sound each time. Runs against Google Chrome (Playwright's own Chromium has no H.264
 // or AAC, so it can't judge playback).
@@ -79,8 +79,8 @@ async function step(what, run, page) {
 
 const [mock, app] = await Promise.all([free(), free()]);
 start("cargo", ["run", "-q", "--release", "-p", "riptv", "--example", "mock_provider"], { MOCK_PORT: String(mock) });
-if (process.env.RIPTV_BIN) start(process.env.RIPTV_BIN, ["--no-open"], { IPTV_PORT: String(app) });
-else start("cargo", ["run", "-q", "--release", "-p", "riptv", "--", "--no-open"], { IPTV_PORT: String(app) });
+if (process.env.RIPTV_BIN) start(process.env.RIPTV_BIN, ["--logs", "--no-open"], { IPTV_PORT: String(app) });
+else start("cargo", ["run", "-q", "--release", "-p", "riptv", "--", "--logs", "--no-open"], { IPTV_PORT: String(app) });
 const browser = await chromium.launch({ channel: "chrome", args: ["--autoplay-policy=no-user-gesture-required"] });
 try {
   await Promise.all([up(`http://127.0.0.1:${mock}/player_api.php`), up(`http://127.0.0.1:${app}/`)]);
@@ -104,16 +104,17 @@ try {
       await plays(page, name("live channel, H.264 + AC-3"));
     }, page);
     if (mode === "standard") {
-      await step("live channel, HEVC + AC-3 (transcoded)", async () => {
+      await step("live channel, HEVC + AC-3", async () => {
         const before = await page.evaluate(() => document.querySelector("video").currentSrc);
         await page.getByText("HEVC video + AC-3 sound (needs conversion)", { exact: true }).first().click();
         console.log(`TIME live channel, HEVC + AC-3: first picture ${await firstPicture(page, Date.now(), before)} ms after choosing it`);
-        await plays(page, "live channel, HEVC + AC-3 (transcoded)");
+        await plays(page, "live channel, HEVC + AC-3");
       }, page);
     }
     await page.getByRole("button", { name: "Movies" }).click();
     for (const [what, title] of [
       ["movie, MKV with AC-3", "AC-3 sound in an MKV"],
+      ...(mode === "standard" ? [["movie, 10-bit HEVC MKV", "10-bit HEVC in an MKV"]] : []),
       ...(process.env.MOCK_MOVIE && mode === "standard" ? [["movie, your own file", "Your own file (MOCK_MOVIE)"]] : []),
     ]) {
       await step(name(what), async () => {
@@ -123,6 +124,15 @@ try {
         const t0 = Date.now();
         console.log(`TIME ${name(what)}: first picture ${await firstPicture(page, t0)} ms after Play`);
         await plays(page, name(what), 2);
+        // HEVC is copied exactly when this browser decodes 10-bit 4K HEVC, converted otherwise.
+        const { video, hevc } = await page.evaluate(() => ({
+          video: new URL(document.querySelector("video").currentSrc, location.href).searchParams.get("video"),
+          hevc: MediaSource.isTypeSupported('video/mp4; codecs="hvc1.2.4.L153.B0"'),
+        }));
+        if (what.includes("HEVC")) {
+          console.log(`INFO ${what}: browser decodes HEVC: ${hevc}, video=${video}`);
+          if (video !== (hevc ? "hevc" : "transcode")) throw new Error(`video=${video} with HEVC decoding ${hevc}`);
+        }
       }, page);
       await step(name(`${what}, seek`), async () => {
         // What a drag on the seek bar ends with: the range input's value and a change event.

@@ -33,7 +33,7 @@ use xtream::{Sniff, sniff::Plan};
 use crate::{
     AppState,
     compat::{
-        MISSING, Piped, agent, encode_args, max_height, nvenc_works, pick_variant, vet,
+        MISSING, Piped, agent, encode_args, hardware_encoder, max_height, pick_variant, vet,
         watch_ffmpeg,
     },
     diagnostics, refusal,
@@ -222,7 +222,11 @@ pub async fn stream(
         }
         _ => head,
     };
-    let nvenc = transcode && nvenc_works().await;
+    let encoder = if transcode {
+        hardware_encoder().await
+    } else {
+        None
+    };
     let mut args: Vec<String> = [
         "-hide_banner",
         "-loglevel",
@@ -253,7 +257,7 @@ pub async fn stream(
     args.extend(["-i", "pipe:0"].map(String::from));
     args.extend(encode_args(
         video,
-        nvenc,
+        encoder,
         sniffed.height.unwrap_or(0),
         max_height(),
         audio,

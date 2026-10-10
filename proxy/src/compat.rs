@@ -203,38 +203,94 @@ async fn probe(url: &str, ua: &str) -> Result<Option<Probe>, Failure> {
     Ok(Probe::parse(&err))
 }
 
-/// NVENC, when this machine really has it: listed by ffmpeg is not the same as working.
-pub(crate) async fn nvenc_works() -> bool {
-    static WORKS: OnceCell<bool> = OnceCell::const_new();
-    *WORKS
+/// The hardware H.264 encoders the bundled ffmpeg has, tried in this order: NVIDIA's (Linux and
+/// Windows), Apple's VideoToolbox, then Windows' Media Foundation (Intel, AMD and NVIDIA).
+const HARDWARE: [&str; 3] = ["h264_nvenc", "h264_videotoolbox", "h264_mf"];
+
+/// The machine's hardware encoder, if one really works here: listed by ffmpeg is not the same as
+/// working (no GPU, an old driver, a virtual machine). Tried once, with the options it will get.
+pub(crate) async fn hardware_encoder() -> Option<&'static str> {
+    static FOUND: OnceCell<Option<&'static str>> = OnceCell::const_new();
+    *FOUND
         .get_or_init(|| async {
-            let test = Command::new(media_tool("ffmpeg"))
-                .args([
-                    "-v",
-                    "error",
-                    "-f",
-                    "lavfi",
-                    "-i",
-                    "nullsrc=s=256x256:d=0.1",
-                ])
-                .args(["-c:v", "h264_nvenc", "-f", "null", "-"])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .kill_on_drop(true)
-                .status();
-            matches!(timeout(Duration::from_secs(20), test).await, Ok(Ok(s)) if s.success())
+            for encoder in HARDWARE {
+                let test = Command::new(media_tool("ffmpeg"))
+                    .args([
+                        "-v",
+                        "error",
+                        "-f",
+                        "lavfi",
+                        "-i",
+                        "nullsrc=s=256x256:d=0.1",
+                    ])
+                    .args(["-vf", "format=yuv420p"])
+                    .args(encoder_args(Some(encoder)))
+                    .args(["-f", "null", "-"])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .kill_on_drop(true)
+                    .status();
+                if matches!(timeout(Duration::from_secs(20), test).await, Ok(Ok(s)) if s.success())
+                {
+                    return Some(encoder);
+                }
+            }
+            None
         })
         .await
 }
 
-/// The ffmpeg command line. `video` is `copy` (leave the video alone) or anything else (encode
-/// H.264, deinterlaced, at most `max_height` tall so the browser can decode it smoothly).
+/// How to encode H.264 with `encoder` (x264 if none): each wants its own settings.
+fn encoder_args(encoder: Option<&str>) -> Vec<String> {
+    let a: &[&str] = match encoder {
+        Some("h264_nvenc") => &[
+            "-c:v",
+            "h264_nvenc",
+            "-preset",
+            "p4",
+            "-profile:v",
+            "high",
+            "-rc",
+            "vbr",
+        ],
+        Some("h264_videotoolbox") => &[
+            "-c:v",
+            "h264_videotoolbox",
+            "-profile:v",
+            "high",
+            "-realtime",
+            "1",
+        ],
+        Some("h264_mf") => &["-c:v", "h264_mf", "-hw_encoding", "1"],
+        _ => &[
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-profile:v",
+            "high",
+            "-crf",
+            "22",
+            "-sc_threshold",
+            "0",
+        ],
+    };
+    a.iter().map(|s| s.to_string()).collect()
+}
+
+/// `copy` (H.264) and `hevc` (HEVC, for a browser that decodes it) leave the picture as it is.
+pub(crate) fn copies(video: &str) -> bool {
+    matches!(video, "copy" | "hevc")
+}
+
+/// The ffmpeg command line. `video` is `copy` or `hevc` (leave the video alone) or anything else
+/// (encode H.264, deinterlaced, at most `max_height` tall so the browser can decode it smoothly).
 fn ffmpeg_args(
     url: &str,
     ua: &str,
     video: &str,
-    nvenc: bool,
+    encoder: Option<&str>,
     height: u32,
     max_height: u32,
     start: u32,
@@ -265,13 +321,13 @@ fn ffmpeg_args(
     ]
     .map(String::from)
     .into();
-    if video != "copy" {
+    if !copies(video) {
         a.extend(["-hwaccel", "auto"].map(String::from));
     }
     if start > 0 {
         // Before `-i`: jump there without reading everything before it. Timestamps then begin at
         // zero, so the page adds `start` back when it shows the position.
-        if video == "copy" {
+        if copies(video) {
             // A copied picture can only begin at a keyframe, which may be seconds before `start`.
             // Begin the sound there too: trimmed to `start` exactly, it would run ahead of the
             // picture by that much (10 s on films with sparse keyframes) for the whole film.
@@ -282,7 +338,7 @@ fn ffmpeg_args(
         a.extend(["-ss".to_string(), start.to_string()]);
     }
     a.extend(["-i", url].map(String::from));
-    a.extend(encode_args(video, nvenc, height, max_height, "aac"));
+    a.extend(encode_args(video, encoder, height, max_height, "aac"));
     a
 }
 
@@ -290,7 +346,7 @@ fn ffmpeg_args(
 /// `copy` or `transcode`; `audio` is `copy` or `aac`), and fragmented MP4 out on stdout.
 pub(crate) fn encode_args(
     video: &str,
-    nvenc: bool,
+    encoder: Option<&str>,
     height: u32,
     max_height: u32,
     audio: &str,
@@ -298,8 +354,12 @@ pub(crate) fn encode_args(
     let mut a: Vec<String> = ["-map", "0:v:0?", "-map", "0:a:0?"]
         .map(String::from)
         .into();
-    if video == "copy" {
+    if copies(video) {
         a.extend(["-c:v", "copy"].map(String::from));
+        if video == "hevc" {
+            // The form Safari requires, with the parameter sets in the header (a file has them).
+            a.extend(["-tag:v", "hvc1"].map(String::from));
+        }
     } else {
         let out_height = if height == 0 {
             max_height
@@ -315,37 +375,7 @@ pub(crate) fn encode_args(
             "yadif=mode=send_field:deint=interlaced,scale=-2:'min({max_height},ih)',format=yuv420p"
         );
         a.extend(["-vf", &filter].map(String::from));
-        if nvenc {
-            a.extend(
-                [
-                    "-c:v",
-                    "h264_nvenc",
-                    "-preset",
-                    "p4",
-                    "-profile:v",
-                    "high",
-                    "-rc",
-                    "vbr",
-                ]
-                .map(String::from),
-            );
-        } else {
-            a.extend(
-                [
-                    "-c:v",
-                    "libx264",
-                    "-preset",
-                    "veryfast",
-                    "-profile:v",
-                    "high",
-                    "-crf",
-                    "22",
-                    "-sc_threshold",
-                    "0",
-                ]
-                .map(String::from),
-            );
-        }
+        a.extend(encoder_args(encoder));
         a.extend(
             [
                 "-b:v",
@@ -509,6 +539,7 @@ pub async fn stream(
     let input = one_variant(&s, &url, &ua).await;
     let (mode, height) = match q.video.as_deref() {
         Some("copy") => ("copy", 0),
+        Some("hevc") => ("hevc", 0),
         // The scaler caps the height itself; probing just to learn it cost ~2 s.
         Some("transcode") => ("transcode", 0),
         _ => match probe(input.as_str(), &ua).await {
@@ -518,12 +549,16 @@ pub async fn stream(
         },
     };
     let max_height = max_height();
-    let nvenc = mode != "copy" && nvenc_works().await;
+    let encoder = if copies(mode) {
+        None
+    } else {
+        hardware_encoder().await
+    };
     let mut args = ffmpeg_args(
         input.as_str(),
         &ua,
         mode,
-        nvenc,
+        encoder,
         height,
         max_height,
         q.start.unwrap_or(0),
@@ -539,12 +574,10 @@ pub async fn stream(
                 "{}ffmpeg start {} video={mode}{} height={height} start={}",
                 diagnostics::tag(&s, &url),
                 diagnostics::kind_of(&url),
-                if mode == "copy" {
-                    ""
-                } else if nvenc {
-                    " encoder=nvenc"
+                if copies(mode) {
+                    String::new()
                 } else {
-                    " encoder=libx264"
+                    format!(" encoder={}", encoder.unwrap_or("libx264"))
                 },
                 q.start.unwrap_or(0)
             ),
@@ -919,7 +952,7 @@ mod tests {
 
     #[test]
     fn the_command_line_copies_or_encodes_as_asked() {
-        let copy = ffmpeg_args("http://h/x.ts", "UA", "copy", false, 0, 1080, 0);
+        let copy = ffmpeg_args("http://h/x.ts", "UA", "copy", None, 0, 1080, 0);
         assert!(
             has(&copy, ["-c:v", "copy"]) && !copy.iter().any(|a| a == "-hwaccel" || a == "-vf")
         );
@@ -931,20 +964,28 @@ mod tests {
 
         // A seek goes before the input (so nothing earlier is read); no seek, no flag.
         assert!(!copy.iter().any(|a| a == "-ss"));
-        let seek = ffmpeg_args("http://h/x.mp4", "UA", "copy", false, 0, 1080, 754);
+        let seek = ffmpeg_args("http://h/x.mp4", "UA", "copy", None, 0, 1080, 754);
         let at = |flag: &str| seek.iter().position(|a| a == flag).unwrap();
         assert!(at("-ss") < at("-i") && seek[at("-ss") + 1] == "754");
         // A copied picture starts at a keyframe: the sound must start there too, never trimmed
         // to the exact second (it would run ahead), and never stretched by `first_pts`.
         assert!(at("-noaccurate_seek") < at("-ss"));
         assert!(!seek.iter().any(|a| a.contains("first_pts")));
-        let exact = ffmpeg_args("http://h/x.mp4", "UA", "transcode", false, 0, 1080, 754);
+        let exact = ffmpeg_args("http://h/x.mp4", "UA", "transcode", None, 0, 1080, 754);
         assert!(
             !exact.iter().any(|a| a == "-noaccurate_seek"),
             "a re-encode cuts exactly"
         );
 
-        let gpu = ffmpeg_args("http://h/x.ts", "UA", "transcode", true, 2160, 1080, 0);
+        let gpu = ffmpeg_args(
+            "http://h/x.ts",
+            "UA",
+            "transcode",
+            Some("h264_nvenc"),
+            2160,
+            1080,
+            0,
+        );
         assert!(has(&gpu, ["-c:v", "h264_nvenc"]) && has(&gpu, ["-hwaccel", "auto"]));
         assert!(
             has(&gpu, ["-b:v", "10M"]),
@@ -955,8 +996,41 @@ mod tests {
                 .any(|a| a.contains("min(1080,ih)") && a.contains("yadif"))
         );
 
-        let cpu = ffmpeg_args("http://h/x.ts", "UA", "transcode", false, 2160, 2160, 0);
+        let cpu = ffmpeg_args("http://h/x.ts", "UA", "transcode", None, 2160, 2160, 0);
         assert!(has(&cpu, ["-c:v", "libx264"]) && has(&cpu, ["-b:v", "20M"]));
         assert_eq!(cpu.last().map(String::as_str), Some("pipe:1"));
+
+        // HEVC for a browser that decodes it: copied, tagged the way Safari needs, cut like a copy.
+        let hevc = ffmpeg_args("http://h/x.mkv", "UA", "hevc", None, 0, 1080, 754);
+        assert!(has(&hevc, ["-c:v", "copy"]) && has(&hevc, ["-tag:v", "hvc1"]));
+        assert!(hevc.iter().any(|a| a == "-noaccurate_seek"));
+        assert!(!hevc.iter().any(|a| a == "-hwaccel" || a == "-vf"));
+        assert!(!copy.iter().any(|a| a == "hvc1"), "H.264 keeps its own tag");
+
+        // Each hardware encoder gets its own settings.
+        let mac = ffmpeg_args(
+            "http://h/x.ts",
+            "UA",
+            "transcode",
+            Some("h264_videotoolbox"),
+            1080,
+            1080,
+            0,
+        );
+        assert!(has(&mac, ["-c:v", "h264_videotoolbox"]) && has(&mac, ["-realtime", "1"]));
+        let win = ffmpeg_args(
+            "http://h/x.ts",
+            "UA",
+            "transcode",
+            Some("h264_mf"),
+            1080,
+            1080,
+            0,
+        );
+        assert!(has(&win, ["-c:v", "h264_mf"]) && has(&win, ["-hw_encoding", "1"]));
+        assert!(
+            !win.iter().any(|a| a == "-preset"),
+            "x264's settings stay with x264"
+        );
     }
 }

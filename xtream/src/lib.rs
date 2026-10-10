@@ -800,12 +800,13 @@ impl Client {
     }
 
     /// The conversion of a movie or episode whose video the page has already read from the file's
-    /// index: no check in front, so it starts a round trip and an ffmpeg run sooner. `copy_video`
-    /// is for 8-bit progressive H.264, which every browser plays.
+    /// index: no check in front, so it starts a round trip and an ffmpeg run sooner. `video` is
+    /// `copy` (8-bit progressive H.264, which every browser plays), `hevc` (copied, for a browser
+    /// that decodes it) or `transcode`.
     pub fn convert_known(
         &self,
         media: &Url,
-        copy_video: bool,
+        video: &str,
         duration: Option<u64>,
     ) -> Result<Converted> {
         let Some(proxy) = &self.proxy else {
@@ -816,7 +817,7 @@ impl Client {
         url.set_query(None);
         url.query_pairs_mut()
             .append_pair("url", self.upstream(media).as_str())
-            .append_pair("video", if copy_video { "copy" } else { "transcode" });
+            .append_pair("video", video);
         Ok(Converted { url, duration })
     }
 

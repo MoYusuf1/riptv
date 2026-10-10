@@ -43,13 +43,21 @@ pub(crate) async fn choose(c: &Client, url: &str, experimental: bool) -> Engine 
 }
 
 /// Convert what the index already describes: copy 8-bit progressive H.264 (avcC profile 66, 77,
-/// 88 or 100), encode anything else.
+/// 88 or 100), and HEVC for a browser that decodes it; encode anything else.
 fn known(c: &Client, media: &xtream::Url, movie: &rstreamkit::vod::Movie, why: String) -> Engine {
     let video = &movie.video;
-    let copy = !video.interlaced && matches!(video.avcc.get(1), Some(66 | 77 | 88 | 100));
+    let mode = if video.interlaced {
+        "transcode"
+    } else if matches!(video.avcc.get(1), Some(66 | 77 | 88 | 100)) {
+        "copy"
+    } else if video.name == "HEVC" && crate::standard::decodes_hevc() {
+        "hevc"
+    } else {
+        "transcode"
+    };
     let duration =
         (movie.duration.is_finite() && movie.duration > 0.0).then_some(movie.duration as u64);
-    match c.convert_known(media, copy, duration) {
+    match c.convert_known(media, mode, duration) {
         Ok(converted) => Engine::Converted(converted, why),
         Err(e) => Engine::Failed(format!(
             "This has {why}, which your browser can't play: {e}"

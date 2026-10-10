@@ -142,6 +142,8 @@ const H264_AC3: &[u8] = include_bytes!("../fixtures/h264_ac3.ts");
 const MOVIE_AC3_MP4: &[u8] = include_bytes!("../fixtures/movie_ac3.mp4");
 const MOVIE_AC3_MKV: &[u8] = include_bytes!("../fixtures/movie_ac3.mkv");
 const MOVIE_DTS_MKV: &[u8] = include_bytes!("../fixtures/movie_dts.mkv");
+/// The same clip in 10-bit HEVC: copied to a browser that decodes HEVC, converted for one that doesn't.
+const MOVIE_HEVC_MKV: &[u8] = include_bytes!("../fixtures/movie_hevc.mkv");
 
 const PLAYLIST: [(header::HeaderName, &str); 1] =
     [(header::CONTENT_TYPE, "application/vnd.apple.mpegurl")];
@@ -320,6 +322,8 @@ fn vod_streams() -> Value {
                "rating": "7.1", "category_id": "10", "added": "1785000000", "stream_icon": POSTER}),
         json!({"stream_id": 5, "name": "DTS sound (needs ffmpeg)", "container_extension": "mkv",
                "rating": "4.0", "category_id": "10", "added": "1775000000"}),
+        json!({"stream_id": 7, "name": "10-bit HEVC in an MKV", "container_extension": "mkv",
+               "rating": "7.4", "category_id": "10", "added": "1786000000", "stream_icon": POSTER}),
     ];
     movies.extend(synthetic_list("vod", &poster_url()));
     if own().is_some() {
@@ -494,6 +498,7 @@ async fn main() {
                         "2" => ranged(&headers, MOVIE_AC3_MP4, "video/mp4"),
                         "4" => ranged(&headers, MOVIE_AC3_MKV, "video/x-matroska"),
                         "5" => ranged(&headers, MOVIE_DTS_MKV, "video/x-matroska"),
+                        "7" => ranged(&headers, MOVIE_HEVC_MKV, "video/x-matroska"),
                         "6" if own().is_some() => {
                             let (bytes, kind) = own().expect("checked");
                             ranged(&headers, bytes, kind)

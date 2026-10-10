@@ -281,9 +281,17 @@ pub fn live(client: &Client, url: &str, transcode: bool) -> Option<String> {
 }
 
 /// The codecs this browser decodes beyond H.264 and AAC, as `/live` takes them.
+/// 10-bit HEVC at 4K (Main 10, level 5.1), what 4K channels and films mostly are: a browser that
+/// decodes this decodes the rest of HEVC too, and gets it as it is instead of re-encoded.
+const HEVC: &str = r#"video/mp4; codecs="hvc1.2.4.L153.B0""#;
+
+pub(crate) fn decodes_hevc() -> bool {
+    decodes(HEVC)
+}
+
 fn can() -> String {
     [
-        ("hevc", r#"video/mp4; codecs="hvc1.1.6.L120.90""#),
+        ("hevc", HEVC),
         ("ac3", r#"audio/mp4; codecs="ac-3""#),
         ("eac3", r#"audio/mp4; codecs="ec-3""#),
     ]
