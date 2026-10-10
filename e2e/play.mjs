@@ -104,6 +104,11 @@ try {
       await plays(page, name("live channel, H.264 + AC-3"));
     }, page);
     if (mode === "standard") {
+      await step("offline channel says so", async () => {
+        await page.getByText("Offline channel (gives 404)", { exact: true }).first().click();
+        await page.getByText("This channel is offline").first().waitFor({ timeout: 5000 });
+        console.log("PASS offline channel says so");
+      }, page);
       await step("live channel, HEVC + AC-3", async () => {
         const before = await page.evaluate(() => document.querySelector("video").currentSrc);
         await page.getByText("HEVC video + AC-3 sound (needs conversion)", { exact: true }).first().click();

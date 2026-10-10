@@ -443,6 +443,14 @@ pub(crate) fn LivePlayer(
                             paused.set(true);
                             status.set(why);
                         }
+                    } else if ["404", "410", "401", "403"]
+                        .iter()
+                        .any(|c| why.contains(&format!("returned {c}")))
+                    {
+                        // The provider's final answer (gone, refused): reconnecting only asks again.
+                        holding.set(false);
+                        paused.set(true);
+                        status.set(channel_trouble(&xtream::Error::Proxy(why)));
                     } else {
                         reconnect();
                     }
