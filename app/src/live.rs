@@ -329,9 +329,14 @@ pub(crate) fn LivePlayer(
         let mut last = (0_u64, js_sys::Date::now());
         let mut frame_counter = None;
         let mut frame_counter_checked = false;
+        // The first readout at once (fps from the second, once there is an interval to count).
+        let mut first = true;
         loop {
-            rstreamkit::mse::sleep(Duration::from_secs(1)).await;
+            if !first {
+                rstreamkit::mse::sleep(Duration::from_secs(1)).await;
+            }
             let Some(v) = video_el() else {
+                first = false;
                 continue;
             };
             if !frame_counter_checked {
@@ -364,8 +369,14 @@ pub(crate) fn LivePlayer(
                 Feed::Partial => "Rust player, no sound",
                 Feed::Converted(_) => "converted by ffmpeg",
             };
+            let fps = if first {
+                "… fps".to_string()
+            } else {
+                format!("{fps} fps")
+            };
+            first = false;
             stats.set(format!(
-                "{}×{} · {fps} fps · {} dropped · {ahead}s buffered · {source}",
+                "{}×{} · {fps} · {} dropped · {ahead}s buffered · {source}",
                 v.video_width(),
                 v.video_height(),
                 quality.dropped_video_frames()

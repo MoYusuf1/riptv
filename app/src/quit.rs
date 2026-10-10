@@ -4,6 +4,7 @@ use super::*;
 use wasm_bindgen_futures::JsFuture;
 
 pub(crate) const CSS: &str = r#"
+.menu .quit{margin-top:.25rem;border-top:1px solid var(--hair);border-radius:0 0 10px 10px}
 .quit-screen{position:fixed;inset:0;display:grid;place-items:center;background:var(--bg);color:var(--dim);font-size:.95rem;animation:fade .4s var(--ease)}
 "#;
 
@@ -35,6 +36,7 @@ pub(crate) fn Quit() -> Element {
     let mut quit = use_context::<Signal<bool>>();
     rsx! {
         button {
+            class: "quit",
             onclick: move |_| {
                 spawn(async move {
                     if stop_server().await {

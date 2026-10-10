@@ -4,7 +4,7 @@ use wasm_bindgen_futures::JsFuture;
 use xtream::updates::UpdateInfo;
 
 pub(crate) const CSS: &str = r#"
-.update-notice{position:fixed;z-index:90;right:1rem;bottom:4.5rem;display:flex;align-items:center;gap:.8rem;padding:.8rem 1rem;border:1px solid var(--hair);border-radius:14px;background:#21161c;box-shadow:0 8px 30px #0006;font-size:.85rem}.update-notice a{color:var(--accent)}.update-notice button{color:var(--dim)}.update-status{padding:.5rem .8rem;color:var(--dim);font-size:.75rem}.menu .update-download{display:block;padding:.7rem .8rem;color:var(--accent)}
+.update-notice{position:fixed;z-index:90;right:1rem;bottom:4.5rem;display:flex;align-items:center;gap:.8rem;padding:.8rem 1rem;border:1px solid var(--hair);border-radius:14px;background:#21161c;box-shadow:0 8px 30px #0006;font-size:.85rem}.update-notice a{color:var(--accent)}.update-notice button{color:var(--dim)}.update-status{margin:0;padding:0 .8rem .45rem;color:var(--faint);font-size:.72rem}.menu .update-download{display:block;padding:.7rem .8rem;color:var(--accent)}
 "#;
 
 async fn fetch(manual: bool) -> Option<UpdateInfo> {

@@ -138,7 +138,8 @@ svg{width:1.1rem;height:1.1rem}
 .who i svg{width:.9rem;height:.9rem}
 .who i{display:grid;place-items:center;width:1.6rem;height:1.6rem;border-radius:50%;background:var(--fill);color:#fff;font-size:.72rem;font-style:normal;font-weight:700;text-transform:uppercase}
 .scrim{position:fixed;z-index:35;inset:0;cursor:default}
-.menu{position:absolute;z-index:40;top:calc(100% + .5rem);right:0;min-width:12rem;padding:.3rem;border-radius:14px;background:rgba(32,23,28,.94);box-shadow:0 18px 50px rgba(0,0,0,.55);backdrop-filter:blur(20px)}
+.menu{position:absolute;z-index:40;top:calc(100% + .6rem);right:0;min-width:12rem;padding:.3rem;border:1px solid var(--hair);border-radius:14px;background:#1f161b;box-shadow:0 18px 50px rgba(0,0,0,.55)}
+.page-scrim{z-index:19}
 .menu button{display:block;width:100%;padding:.7rem .8rem;border-radius:10px}
 .menu button:hover{background:var(--soft)}
 "#,
@@ -157,7 +158,7 @@ svg{width:1.1rem;height:1.1rem}
 .main,.channels{display:flex;flex-direction:column;flex:1;min-width:0;min-height:0}
 .main.covered{visibility:hidden}
 .workspace.detail-open{display:none}
-.head{display:flex;align-items:flex-end;justify-content:space-between;gap:1rem;padding:.4rem 1rem .7rem .4rem}
+.head{display:flex;align-items:flex-end;justify-content:space-between;gap:1rem;padding:.4rem .4rem .7rem}
 .head h1{margin:0;font-size:1.6rem;letter-spacing:-.03em;line-height:1.1}
 .head span{color:var(--dim);font-size:.8rem}
 .tools{display:flex;align-items:center;gap:.5rem}
@@ -179,7 +180,7 @@ svg{width:1.1rem;height:1.1rem}
 .scroll{flex:1;min-height:0;padding:0 .4rem 2rem;overflow:auto;scrollbar-width:thin}
 "#,
     // Posters and channel tiles
-    r#".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(8.6rem,1fr));gap:1.5rem 1rem}
+    r#".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(8.6rem,1fr));align-items:start;gap:1.5rem 1rem}
 .card{min-width:0;text-align:center;transition:transform .15s;content-visibility:auto;contain-intrinsic-size:auto 17rem}
 .card:hover{transform:scale(1.03)}
 .art{position:relative;display:grid;place-items:center;aspect-ratio:2/3;overflow:hidden;border-radius:12px;background:var(--row);box-shadow:0 6px 18px rgba(0,0,0,.35);color:var(--faint);font-size:1.6rem;font-weight:700}
@@ -269,6 +270,8 @@ svg{width:1.1rem;height:1.1rem}
 .row .eq{flex:none;height:12px;margin:0 .35rem 0 auto;gap:2px}
 .row .eq i{width:2.5px;background:var(--accent)}
 .channel-preview{position:fixed;z-index:45;display:flex;flex-direction:column;gap:.5rem;width:min(320px,calc(100vw - 24px));padding:1rem 1.1rem;border:1px solid rgba(255,125,146,.22);border-radius:16px;background:#22171e;box-shadow:0 16px 48px rgba(0,0,0,.5);text-align:left;pointer-events:none;animation:fade .16s var(--ease)}
+/* A hover card: a touch screen has no hover to end it, so it would stay over the list. */
+@media(hover:none){.channel-preview{display:none}}
 .channel-preview .preview-label{color:var(--accent);font-size:.61rem;font-weight:700;letter-spacing:.09em}
 .channel-preview strong{font-size:.98rem;line-height:1.35;white-space:normal}
 .channel-preview time{font-size:.75rem;color:var(--dim);font-variant-numeric:tabular-nums}
@@ -404,7 +407,7 @@ svg{width:1.1rem;height:1.1rem}
 .w-time span{color:var(--dim)}
 .next-btn{display:inline-flex;align-items:center;gap:.4rem;height:2.4rem;margin-right:.3rem;padding:0 .9rem;border-radius:999px;background:rgba(255,255,255,.16);font-size:.8rem;font-weight:600}
 .next-btn:hover{background:rgba(255,255,255,.26)}
-.w-menu{position:absolute;z-index:40;right:1.4rem;bottom:5.6rem;width:15rem;padding:.4rem;border-radius:14px;background:rgba(28,20,24,.94);box-shadow:0 18px 50px rgba(0,0,0,.6);backdrop-filter:blur(20px)}
+.w-menu{position:absolute;z-index:40;right:1.4rem;bottom:5.6rem;width:15rem;padding:.4rem;border:1px solid var(--hair);border-radius:14px;background:#1f161b;box-shadow:0 18px 50px rgba(0,0,0,.6)}
 .w-menu h5{margin:.5rem .7rem .3rem;color:var(--faint);font-size:.68rem;font-weight:600;letter-spacing:.07em;text-transform:uppercase}
 .w-menu button{display:flex;align-items:center;justify-content:space-between;width:100%;padding:.5rem .7rem;border-radius:9px;font-size:.85rem}
 .w-menu button:hover{background:var(--soft)}
@@ -636,7 +639,12 @@ fn score(rating: &Option<String>) -> Option<String> {
         .as_deref()
         .map(str::trim)
         .filter(|r| !r.chars().all(|c| c == '0' || c == '.'))
-        .map(|r| r.chars().take(3).collect())
+        // One decimal everywhere ("5" and "7.45" read 5.0 and 7.5), a perfect 10 as 10.
+        .map(|r| match r.parse::<f64>() {
+            Ok(n) if n >= 10.0 => "10".into(),
+            Ok(n) => format!("{n:.1}"),
+            Err(_) => r.chars().take(3).collect(),
+        })
 }
 
 /// `Title.ext`, safe as a file name. `url` is a stream URL, which ends in `<id>.<ext>`.
@@ -1564,6 +1572,7 @@ fn Browse() -> Element {
                 }
             }
             div { class: "account",
+                onkeydown: move |e| if e.key() == Key::Escape { account_open.set(false) },
                 button {
                     class: if initial.is_some() { "who" } else { "who solo" },
                     aria_label: "Account",
@@ -1575,11 +1584,6 @@ fn Browse() -> Element {
                     if initial.is_some() { b { "{account_name}" } }
                 }
                 if account_open() {
-                    button {
-                        class: "scrim",
-                        aria_label: "Close menu",
-                        onclick: move |_| account_open.set(false)
-                    }
                     div { class: "menu",
                         button {
                             onclick: move |_| {
@@ -1610,6 +1614,15 @@ fn Browse() -> Element {
                         quit::Quit {}
                     }
                 }
+            }
+        }
+        // Outside the top bar: its blur makes it the frame for anything fixed inside it, so a
+        // scrim in there would only cover the bar and clicks on the page wouldn't close the menu.
+        if account_open() {
+            button {
+                class: "scrim page-scrim",
+                aria_label: "Close menu",
+                onclick: move |_| account_open.set(false)
             }
         }
         if open().is_none() {
