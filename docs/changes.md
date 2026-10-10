@@ -5,6 +5,23 @@ release's notes (`docs/release-notes.md`), and the published release also lists 
 How each number was measured is in brackets; live-channel start times are in
 [live-playback.md](live-playback.md).
 
+## 0.2.8
+
+Mac numbers are from the release pipeline's Apple Silicon machine (Chrome decodes HEVC there);
+the rest from `e2e/play.mjs` and the mock provider on Linux.
+
+| What | 0.2.7 | 0.2.8 |
+|---|---|---|
+| 10-bit HEVC movie, first picture (Mac) | 634 ms, converted | 324 ms, copied |
+| 10-bit HEVC movie, after a seek (Mac) | 370 ms | 292 ms |
+| Hardware conversion | NVIDIA only | NVIDIA, Apple VideoToolbox (seen working on the Mac), Windows Media Foundation |
+| Live HEVC check | 8-bit 1080p | 10-bit 4K, what 4K channels are |
+| Offline channel (provider says 404) | 4 requests, "keeps dropping" | 1 request, "This channel is offline" in 15 ms |
+| Stream info after pressing it | empty for up to 1 s | filled in 150 ms |
+| Account menu | stayed open over every page | closes on any outside click or Escape |
+| Menus | see-through | solid |
+| Playback checks before a release | 12, Linux | 14, Linux and Mac |
+
 ## 0.2.7
 
 Sizes from a CI build of every platform (all checks passed, including playback in Chrome).
