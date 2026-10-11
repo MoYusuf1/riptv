@@ -107,7 +107,9 @@ pub(crate) fn Watch(
     // to play it, the request, then each second buffered (3 s is plenty to start), the first
     // frame, playing.
     let mut ready = use_signal(|| 0_u32);
-    let ring_from = use_hook(|| Rc::new(Cell::new(u64::MAX)));
+    // Bumped by every seek: each one is a new wait, measured from zero.
+    let mut seeks = use_signal(|| 0_u32);
+    let ring_from = use_hook(|| Rc::new(Cell::new(u32::MAX)));
     // A moment after a start, to let the ring land on 100% instead of vanishing short of it.
     let mut landing = use_signal(|| false);
     use_effect(move || {
@@ -117,16 +119,19 @@ pub(crate) fn Watch(
             1 => 25,
             2 => 45 + ((buffered / 3.0).min(1.0) * 45.0) as u32,
             3 => 92,
+            // Playing already: a wait here is a seek within the same stream or the buffer
+            // running dry; 2 s of picture at the new position is ready to go.
+            _ if waiting() => ((buffered / 2.0).min(1.0) * 95.0) as u32,
             _ => 100,
         };
-        // A seek in a converted title (a new start position) starts again from the bottom; a
-        // switch of player (the experimental one stalling) carries on from where the ring was.
-        let from = start();
+        // A seek starts the ring again from where that seek's wait stands (from zero); a switch
+        // of player (the experimental one stalling) carries on from where the ring was.
+        let seek = seeks();
         let now = *ready.peek();
-        if target > now || from != ring_from.get() && target < now {
+        if target > now || seek != ring_from.get() {
             ready.set(target);
         }
-        ring_from.set(from);
+        ring_from.set(seek);
     });
     let mut muted = use_signal(move || saved_volume == 0);
     let mut volume = use_signal(move || saved_volume);
@@ -310,7 +315,10 @@ pub(crate) fn Watch(
             t.max(0.0)
         };
         pos.set(t);
+        seeks += 1;
         if matches!(engine.peek().as_ref(), Some(Engine::Converted(..))) {
+            // A new stream from `t`: count it up by its own stages, not the old stream's buffer.
+            load_stage.set(0);
             start.set(t as u64);
             waiting.set(true);
         } else if let Some(v) = watch_video() {
@@ -533,7 +541,8 @@ pub(crate) fn Watch(
                     onloadstart: move |_| load_stage.set(1),
                     onloadeddata: move |_| if *load_stage.peek() < 3 { load_stage.set(3) },
                     onplaying: move |_| {
-                        if *load_stage.peek() < 4 && *ready.peek() < 100 {
+                        // Whatever the ring was waiting for (a start, a seek, a refill): finish it.
+                        if (*load_stage.peek() < 4 || *waiting.peek()) && *ready.peek() < 100 {
                             landing.set(true);
                             spawn(async move {
                                 rstreamkit::mse::sleep(Duration::from_millis(1100)).await;
@@ -635,13 +644,12 @@ pub(crate) fn Watch(
                 // One ring from the start to the picture: when it's ready the same ring sweeps on to
                 // 100% and fades (a new element would have nothing to animate from).
                 // Until it plays: `canplay` clears `waiting` a moment before `playing`, which would
-                // drop the ring for an instant and bring back a new one.
-                if (load_stage() < 4 && !paused()) || landing() {
+                // drop the ring for an instant and bring back a new one. Never while dragging the
+                // seek bar: the wait starts when the drag ends.
+                if !scrubbing() && ((load_stage() < 4 && !paused()) || (waiting() && !paused()) || landing()) {
                     div { class: if landing() { "hud landing" } else { "hud" },
                         LoadRing { stage: load_stage(), percent: Some(if landing() { 100 } else { ready() }) }
                     }
-                } else if waiting() && !paused() {
-                    div { class: "hud", i { class: "spinner" } }
                 }
                 if paused() && !waiting() && up_next().is_none() {
                     button { class: "bigplay", aria_label: "Play", onclick: move |_| toggle_watch(), Icon { d: PLAY } }
@@ -699,45 +707,51 @@ pub(crate) fn Watch(
                     // would land on the picture (pausing it) instead of seeking.
                     onmouseenter: move |_| over_controls.set(true),
                     onmouseleave: move |_| over_controls.set(false),
-                    input {
-                        class: "w-seek",
-                        r#type: "range",
-                        min: "0",
-                        max: "{total() as u64}",
-                        step: "1",
-                        value: "{pos() as u64}",
-                        style: "--p:{p}%;--b:{b}%",
-                        disabled: total() <= 0.0,
-                        aria_label: "Seek",
-                        title: if total() > 0.0 { "Seek" } else { "Total length unavailable from this stream" },
-                        oninput: move |e| {
-                            if !*scrubbing.peek() {
-                                let from = *pos.peek();
-                                scrub_from.set(from);
-                                scrubbing.set(true);
-                            }
-                            pos.set(e.value().parse().unwrap_or(0.0));
-                        },
-                        onchange: move |e| {
-                            scrubbing.set(false);
-                            seek_to(e.value().parse().unwrap_or(0.0));
-                            // Give the focus back (arrow keys never move this bar: the player's
-                            // own keys take them), or the controls would stay up for the rest of
-                            // the film: they show while anything in them has focus.
-                            if let Some(bar) = web_sys::window()
-                                .and_then(|w| w.document())
-                                .and_then(|d| d.active_element())
-                                .filter(|el| el.class_name() == "w-seek")
-                                && let Ok(blur) = js_sys::Reflect::get(&bar, &"blur".into())
-                                && let Some(blur) = blur.dyn_ref::<js_sys::Function>()
-                            {
-                                let _ = blur.call0(&bar);
-                            }
-                        },
-                        onpointerup: move |_| let_go(),
-                        onpointercancel: move |_| let_go(),
-                        onblur: move |_| let_go(),
+                // The bar, and while it's dragged, where you'd land.
+                div { class: "w-seekwrap",
+                        input {
+                            class: if scrubbing() { "w-seek dragging" } else { "w-seek" },
+                            r#type: "range",
+                            min: "0",
+                            max: "{total() as u64}",
+                            step: "1",
+                            value: "{pos() as u64}",
+                            style: "--sp:{p}%;--sb:{b}%",
+                            disabled: total() <= 0.0,
+                            aria_label: "Seek",
+                            title: if total() > 0.0 { "Seek" } else { "Total length unavailable from this stream" },
+                            oninput: move |e| {
+                                if !*scrubbing.peek() {
+                                    let from = *pos.peek();
+                                    scrub_from.set(from);
+                                    scrubbing.set(true);
+                                }
+                                pos.set(e.value().parse().unwrap_or(0.0));
+                            },
+                            onchange: move |e| {
+                                scrubbing.set(false);
+                                seek_to(e.value().parse().unwrap_or(0.0));
+                                // Give the focus back (arrow keys never move this bar: the player's
+                                // own keys take them), or the controls would stay up for the rest of
+                                // the film: they show while anything in them has focus.
+                                if let Some(bar) = web_sys::window()
+                                    .and_then(|w| w.document())
+                                    .and_then(|d| d.active_element())
+                                    .filter(|el| el.class_name().split(' ').any(|c| c == "w-seek"))
+                                    && let Ok(blur) = js_sys::Reflect::get(&bar, &"blur".into())
+                                    && let Some(blur) = blur.dyn_ref::<js_sys::Function>()
+                                {
+                                    let _ = blur.call0(&bar);
+                                }
+                            },
+                            onpointerup: move |_| let_go(),
+                            onpointercancel: move |_| let_go(),
+                            onblur: move |_| let_go(),
+                        }
+                    if scrubbing() {
+                        span { class: "w-tip", style: "--sp:{p}%", "{hms(pos() as u64)}" }
                     }
+                }
                     div { class: "w-row",
                         button { class: "ctl", aria_label: "Play or pause", title: "Play or pause (Space)", onclick: move |_| toggle_watch(),
                             Icon { d: if paused() { PLAY } else { PAUSE } }

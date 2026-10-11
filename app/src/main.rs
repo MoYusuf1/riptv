@@ -340,6 +340,15 @@ svg{width:1.1rem;height:1.1rem}
 .loader-pct{display:flex;align-items:baseline;color:#fff;font-size:1.05rem;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
 .loader-pct::before{counter-reset:p var(--p);content:counter(p)}
 .loader-pct small{margin-left:.05em;font-size:.6em;font-weight:500;opacity:.55}
+/* The ring's face: a frosted disc so it reads on any picture, a heavier line, a soft glow. */
+.loader{width:5.4rem;height:5.4rem;border-radius:50%;background:rgba(14,10,12,.5);box-shadow:0 12px 40px rgba(0,0,0,.45),inset 0 0 0 1px rgba(255,255,255,.07);backdrop-filter:blur(14px) saturate(140%)}
+.loader svg{inset:.35rem;width:calc(100% - .7rem);height:calc(100% - .7rem);animation-duration:2.4s}
+.loader circle{stroke-width:2.8}
+.ring-track{stroke:rgba(255,255,255,.09)}
+.ring-fill{filter:drop-shadow(0 0 5px rgba(255,125,146,.55))}
+/* A percentage grows from twelve o'clock and holds still; only the logo ring turns. */
+.loader.pct svg{animation:none;transform:rotate(-90deg)}
+.loader-pct{font-size:1.25rem;font-weight:650;letter-spacing:-.03em;text-shadow:0 1px 8px rgba(0,0,0,.4)}
 .hud.landing{animation:landing 1.1s var(--ease) forwards;pointer-events:none}
 .hud.landing .loader.pct{transition-duration:.55s}
 @keyframes landing{0%,55%{opacity:1;transform:none}100%{opacity:0;transform:scale(1.08)}}
@@ -411,15 +420,21 @@ svg{width:1.1rem;height:1.1rem}
 .w-bottom{bottom:0;padding:3.6rem 1.4rem .9rem;background:linear-gradient(transparent,rgba(0,0,0,.88))}
 .watch.active .w-top,.watch.active .w-bottom,.watch.paused .w-top,.watch.paused .w-bottom,.w-bottom:focus-within{opacity:1;pointer-events:auto}
 .watch:has(.w-load) .w-top,.watch:has(.w-fail) .w-top{opacity:1;pointer-events:auto}
-.w-seek{display:block;width:100%;height:1.2rem;margin:0;background:none;cursor:pointer;-webkit-appearance:none;appearance:none}
-.w-seek::-webkit-slider-runnable-track{height:4px;border-radius:99px;background:linear-gradient(90deg,var(--fill) var(--p),rgba(255,255,255,.5) var(--p) var(--b),rgba(255,255,255,.2) var(--b))}
-.w-seek::-moz-range-track{height:4px;border-radius:99px;background:linear-gradient(90deg,var(--fill) var(--p),rgba(255,255,255,.5) var(--p) var(--b),rgba(255,255,255,.2) var(--b))}
-.w-seek::-webkit-slider-thumb{-webkit-appearance:none;width:0;height:0}
-.w-seek::-moz-range-thumb{width:0;height:0;border:0}
-.w-seek:hover::-webkit-slider-runnable-track,.w-seek:focus-visible::-webkit-slider-runnable-track{height:6px}
-.w-seek:hover::-webkit-slider-thumb,.w-seek:focus-visible::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;margin-top:-4px;border-radius:50%;background:#fff}
-.w-seek:hover::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:#fff}
+@property --sp{syntax:'<percentage>';inherits:true;initial-value:0%}
+@property --sb{syntax:'<percentage>';inherits:true;initial-value:0%}
+.w-seekwrap{position:relative}
+.w-seek{display:block;width:100%;height:1.4rem;margin:0;background:none;cursor:pointer;-webkit-appearance:none;appearance:none;transition:--sp .25s linear,--sb .6s var(--ease)}
+.w-seek.dragging{transition:--sb .6s var(--ease)}
+.w-seek::-webkit-slider-runnable-track{height:5px;border-radius:99px;background:linear-gradient(90deg,var(--accent) var(--sp),rgba(255,255,255,.45) var(--sp) var(--sb),rgba(255,255,255,.18) var(--sb));transition:height .15s var(--ease)}
+.w-seek::-moz-range-track{height:5px;border-radius:99px;background:linear-gradient(90deg,var(--accent) var(--sp),rgba(255,255,255,.45) var(--sp) var(--sb),rgba(255,255,255,.18) var(--sb))}
+.w-seek::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;margin-top:-4.5px;border-radius:50%;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.5);transform:scale(0);transition:transform .15s var(--ease)}
+.w-seek::-moz-range-thumb{width:14px;height:14px;border:0;border-radius:50%;background:#fff;transform:scale(0);transition:transform .15s var(--ease)}
+.w-seek:hover::-webkit-slider-runnable-track,.w-seek:focus-visible::-webkit-slider-runnable-track,.w-seek.dragging::-webkit-slider-runnable-track{height:7px}
+.w-seek:hover::-webkit-slider-thumb,.w-seek:focus-visible::-webkit-slider-thumb,.w-seek.dragging::-webkit-slider-thumb{margin-top:-3.5px;transform:scale(1)}
+.w-seek.dragging::-webkit-slider-thumb{transform:scale(1.25)}
+.w-seek:hover::-moz-range-thumb,.w-seek.dragging::-moz-range-thumb{transform:scale(1)}
 .w-seek:disabled{cursor:default}
+.w-tip{position:absolute;bottom:calc(100% + .35rem);left:clamp(1.6rem,var(--sp),calc(100% - 1.6rem));padding:.25rem .55rem;border-radius:8px;background:rgba(20,14,17,.92);box-shadow:0 6px 20px rgba(0,0,0,.45);color:#fff;font-size:.8rem;font-weight:600;font-variant-numeric:tabular-nums;transform:translateX(-50%);pointer-events:none;animation:fade .15s var(--ease)}
 .w-row{display:flex;align-items:center;gap:.3rem}
 .w-row .ctl{display:grid;place-items:center;flex:none;width:2.6rem;height:2.6rem}
 .w-row .ctl svg{display:block}
@@ -494,6 +509,29 @@ body{font-size:.875rem}
 .row strong{font-weight:600}
 .d-sec h2{font-size:1.35rem;font-weight:700}
 .topbar.detail-mode .who{padding:.25rem}
+/* The full-page player at Netflix's proportions: big, legible controls (phones keep theirs). */
+.w-bottom{padding:4rem 2rem 1.2rem}
+.w-row{gap:.55rem}
+.w-row .ctl{width:3.4rem;height:3.4rem}
+.w-row .ctl svg{width:2rem;height:2rem}
+.w-row .skip svg{width:2.2rem;height:2.2rem}
+.w-row>.ctl:first-child svg{width:2.3rem;height:2.3rem}
+.w-time{margin-left:.8rem;font-size:1.05rem;font-weight:600}
+.w-top{padding:1.2rem 2rem 3.4rem}
+.w-top .icon-btn{width:2.9rem;height:2.9rem}
+.w-top .icon-btn svg{width:1.4rem;height:1.4rem}
+.w-title strong{font-size:1.15rem;font-weight:700}
+.w-title small{font-size:.85rem}
+.bigplay{width:5.6rem;height:5.6rem}
+.bigplay svg{width:2.2rem;height:2.2rem}
+.w-seek::-webkit-slider-runnable-track{height:6px}
+.w-seek:hover::-webkit-slider-runnable-track,.w-seek:focus-visible::-webkit-slider-runnable-track,.w-seek.dragging::-webkit-slider-runnable-track{height:9px}
+.w-seek::-webkit-slider-thumb{width:17px;height:17px;margin-top:-5.5px}
+.w-seek:hover::-webkit-slider-thumb,.w-seek:focus-visible::-webkit-slider-thumb,.w-seek.dragging::-webkit-slider-thumb{margin-top:-4px}
+.w-tip{font-size:.9rem;padding:.3rem .65rem}
+/* The live player's controls, a step up too (it sits in a narrower pane). */
+.controls .ctl{width:3rem;height:3rem}
+.controls .ctl svg{width:1.55rem;height:1.55rem}
 "#,
     // Feel: motion and feedback only; nothing here moves anything to a new place.
     r#".card{transition:none}
