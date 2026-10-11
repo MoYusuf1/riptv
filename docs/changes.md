@@ -21,6 +21,10 @@ How each number was measured is in brackets; live-channel start times are in
 | …time to episodes / to TVmaze's details | 67 ms / — | 67 ms / 848 ms (the page doesn't wait) |
 | Cast photos for series | names only | portraits, when TVmaze has them |
 | Cast photos for movies (mock movie with 4 real actors) | names only | 4 of 4, first in 220 ms (Wikipedia, looked up in parallel) |
+| Memory of one conversion, 1080p 10-bit HEVC film, NVENC [private memory] | 520 MB | 419 MB |
+| …same on the processor (x264), the fallback without a GPU | 966 MB | 462 MB, same speed |
+| …x264 from a 4K source | 1,583 MB | 750 MB, same speed (5.4x real time) |
+| RIPTV server's own memory while streaming | 7–8 MB | 7–8 MB |
 
 ## 0.2.8
 

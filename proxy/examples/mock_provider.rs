@@ -435,7 +435,7 @@ async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
             all.extend(synthetic_list("series", &poster_url()));
             Value::Array(all)
         }
-        Some("get_series_info") if get("series_id").as_deref() == Some("2") => json!({
+        Some("get_series_info") if get("series_id") == Some("2") => json!({
             "info": {"name": "EN - Martha Bakes", "releaseDate": "2011-01-31"},
             "episodes": {"1": (1..=6).map(|n| json!({"id": 2000 + n, "episode_num": n,
                 "title": format!("Martha Bakes - S01E{n:02}"), "container_extension": "mp4", "info": []}))

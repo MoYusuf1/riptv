@@ -279,6 +279,15 @@ fn encoder_args(encoder: Option<&str>) -> Vec<String> {
     a.iter().map(|s| s.to_string()).collect()
 }
 
+/// Threads for decoding and for encoding, each: ffmpeg's default is one per core, and every
+/// thread holds frames of its own. Six convert just as fast (5.4x real time from 4K HEVC on a
+/// 16-core machine, the same as 16) in half the memory (750 MB instead of 1,583).
+pub(crate) fn threads() -> String {
+    std::thread::available_parallelism()
+        .map_or(4, |n| n.get().min(6))
+        .to_string()
+}
+
 /// `copy` (H.264) and `hevc` (HEVC, for a browser that decodes it) leave the picture as it is.
 pub(crate) fn copies(video: &str) -> bool {
     matches!(video, "copy" | "hevc")
@@ -337,7 +346,7 @@ fn ffmpeg_args(
         }
         a.extend(["-ss".to_string(), start.to_string()]);
     }
-    a.extend(["-i", url].map(String::from));
+    a.extend(["-threads".into(), threads(), "-i".into(), url.into()]);
     a.extend(encode_args(video, encoder, height, max_height, "aac"));
     a
 }
@@ -376,6 +385,7 @@ pub(crate) fn encode_args(
         );
         a.extend(["-vf", &filter].map(String::from));
         a.extend(encoder_args(encoder));
+        a.extend(["-threads".into(), threads()]);
         a.extend(
             [
                 "-b:v",
@@ -999,6 +1009,14 @@ mod tests {
         let cpu = ffmpeg_args("http://h/x.ts", "UA", "transcode", None, 2160, 2160, 0);
         assert!(has(&cpu, ["-c:v", "libx264"]) && has(&cpu, ["-b:v", "20M"]));
         assert_eq!(cpu.last().map(String::as_str), Some("pipe:1"));
+        // Threads capped on both sides of a conversion: one per core costs memory, not speed.
+        let capped = |args: &[String]| {
+            args.windows(2)
+                .filter(|w| w[0] == "-threads")
+                .all(|w| w[1].parse::<usize>().is_ok_and(|n| (1..=6).contains(&n)))
+        };
+        assert_eq!(cpu.iter().filter(|a| *a == "-threads").count(), 2);
+        assert!(capped(&cpu) && capped(&copy));
 
         // HEVC for a browser that decodes it: copied, tagged the way Safari needs, cut like a copy.
         let hevc = ffmpeg_args("http://h/x.mkv", "UA", "hevc", None, 0, 1080, 754);

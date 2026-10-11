@@ -33,8 +33,8 @@ use xtream::{Sniff, sniff::Plan};
 use crate::{
     AppState,
     compat::{
-        MISSING, Piped, agent, encode_args, hardware_encoder, max_height, pick_variant, vet,
-        watch_ffmpeg,
+        MISSING, Piped, agent, encode_args, hardware_encoder, max_height, pick_variant, threads,
+        vet, watch_ffmpeg,
     },
     diagnostics, refusal,
 };
@@ -254,7 +254,7 @@ pub async fn stream(
     if sniffed.container == "mpeg_ts" {
         args.extend(["-f", "mpegts"].map(String::from));
     }
-    args.extend(["-i", "pipe:0"].map(String::from));
+    args.extend(["-threads".into(), threads(), "-i".into(), "pipe:0".into()]);
     args.extend(encode_args(
         video,
         encoder,
