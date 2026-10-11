@@ -26,6 +26,7 @@ How each number was measured is in brackets; live-channel start times are in
 | …x264 from a 4K source | 1,583 MB | 750 MB, same speed (5.4x real time) |
 | RIPTV server's own memory while streaming | 7–8 MB | 7–8 MB |
 | Server program (Linux, before the bundled files) | 3.41 MB | 2.66 MB (TLS on ring instead of the aws-lc C library) |
+| Downloads (Windows / Linux / Mac Apple Silicon / Mac Intel) | 7.5 / 8.1 / 5.5 / 6.1 MB | 7.1 / 7.3 / 5.3 / 5.8 MB |
 
 ## 0.2.8
 
