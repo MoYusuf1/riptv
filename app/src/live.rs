@@ -63,7 +63,7 @@ pub(crate) fn LivePlayer(
     use_effect(move || {
         let installed = media_session::Session::install(
             &media_title,
-            "Live TV · RIPTV",
+            "Live · RIPTV",
             LIVE_MEDIA_ACTIONS,
             move |action| match action {
                 media_session::Action::Play => {

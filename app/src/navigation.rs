@@ -16,13 +16,13 @@ pub(crate) fn LibraryNav(kind: Kind, playlist: bool, onpick: EventHandler<Kind>)
     let current = |k| if kind == k { "page" } else { "false" };
     rsx! {
         nav { class: "rail", aria_label: "Library",
-            button { class: class(Kind::Live), title: "Live TV", aria_current: current(Kind::Live),
-                onclick: move |_| onpick.call(Kind::Live), Icon { d: LIVE_TV } span { "Live TV" } }
+            button { class: class(Kind::Live), title: "Live", aria_current: current(Kind::Live),
+                onclick: move |_| onpick.call(Kind::Live), Icon { d: LIVE_TV } span { "Live" } }
             if !playlist {
                 button { class: class(Kind::Movies), title: "Movies", aria_current: current(Kind::Movies),
                     onclick: move |_| onpick.call(Kind::Movies), Icon { d: MOVIE } span { "Movies" } }
-                button { class: class(Kind::Series), title: "TV Shows", aria_current: current(Kind::Series),
-                    onclick: move |_| onpick.call(Kind::Series), Icon { d: SERIES } span { "TV Shows" } }
+                button { class: class(Kind::Series), title: "Shows", aria_current: current(Kind::Series),
+                    onclick: move |_| onpick.call(Kind::Series), Icon { d: SERIES } span { "Shows" } }
             }
         }
     }

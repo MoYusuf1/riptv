@@ -179,7 +179,7 @@ unchanged.
 
 ## Using it
 
-The three sections (Live TV, Movies, Series) live on a floating rail, which becomes a tab bar at the
+The three sections (Live, Movies, Shows) live on a floating rail, which becomes a tab bar at the
 bottom on a phone; there the category list turns into a **Categories** button.
 
 Live TV shows every channel as a tile grid until you pick a category; then it becomes a channel list
