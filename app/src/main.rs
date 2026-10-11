@@ -475,6 +475,16 @@ img[data-failed]{display:none}
 .card small{display:block;margin-top:.1rem;color:var(--faint);font-size:.68rem}
 "#,
     // Narrow screens: the rail becomes a floating tab bar, categories a button
+    // Scale: everything is sized in rem, so one root size scales the whole UI. It grows on wide
+    // screens (16px up to ~1440px wide, 19px at 2000px) instead of staying small and far away.
+    r#"html{font-size:clamp(16px,calc(9px + .5vw),20px)}
+body{font-size:.875rem}
+.head h1{font-weight:700}
+.card strong{font-size:.8rem;font-weight:600}
+.row strong{font-weight:600}
+.d-sec h2{font-size:1.35rem;font-weight:700}
+.topbar.detail-mode .who{padding:.25rem}
+"#,
     // Feel: motion and feedback only; nothing here moves anything to a new place.
     r#".card{transition:none}
 .card:hover{transform:none}
