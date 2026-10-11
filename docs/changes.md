@@ -28,6 +28,11 @@ How each number was measured is in brackets; live-channel start times are in
 | Server program (Linux, before the bundled files) | 3.41 MB | 2.66 MB (TLS on ring instead of the aws-lc C library) |
 | Downloads (Windows / Linux / Mac Apple Silicon / Mac Intel) | 7.5 / 8.1 / 5.5 / 6.1 MB | 7.1 / 7.3 / 5.3 / 5.8 MB |
 | Cast members linked to IMDb (mock movie with 4 real actors) | none | 4 of 4 to their exact profile (Wikidata); others to IMDb's search |
+| Browser main-thread work, movie playing with controls hidden (Chrome, 10 s) | 64 ms/s | 26 ms/s |
+| …style recalculations / seek-bar redraws | 60/s / 38/s | 12/s / 1.4/s (bar animates only while shown) |
+| …browsing, live, paused | 0–4 ms/s | 0–4 ms/s |
+| Converting progressive 1080p (yadif skipped when the MP4 index or live sniff says progressive), ffmpeg CPU for 20 s | 6.0 s | 3.9 s (−36%) |
+| …same, whole movie scenario end to end (sum of 1 s ffmpeg samples) | 830% | 500% |
 | Experimental player stalling on a real movie (A Carol for Two) | stuck at 72% for good | standard player takes over after 8 s; playing at 15.2 s |
 | Movie and episode start | a ring with a dot | a ring with the real percentage, sweeping to 100% as the picture starts |
 | Seeking in a converted movie (300 ms provider) | spinner, or a false 100% | counts up from 8%; picture and 100% at 1.25–1.65 s |

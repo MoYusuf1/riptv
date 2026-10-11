@@ -16,6 +16,8 @@ Your browser opens automatically. No Rust or FFmpeg setup.
 | Seeking | spinner or a false 100% | counts up honestly; a time bubble while you drag |
 | On a big screen | small, far away | scales with the window; Netflix-sized player controls |
 | Converting video | up to 966 MB of memory | 462 MB, just as fast |
+| Converting progressive video | always deinterlaced | skips it: 36% less CPU |
+| Browser work while a movie plays | 64 ms/s | 26 ms/s |
 | Downloads | 5.5–8.1 MB | 5.3–7.3 MB |
 
 Also: a polished account button in your profile's colour, matching back buttons, a cleaner facts
