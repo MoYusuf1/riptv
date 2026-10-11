@@ -25,3 +25,9 @@ operating-system libraries are not included.
 FFmpeg is free software, supplied without warranty. Its authors and upstream library contributors
 retain their copyrights. See the bundled license and source files for redistribution terms. Other
 Rust dependency notices and available license texts are embedded under `licenses/` as well.
+
+## Episode details and cast photos
+
+Series pages fill in what a provider leaves out from [TVmaze](https://www.tvmaze.com), whose data is
+licensed [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/); each page that uses it
+credits TVmaze and links to the show's TVmaze page. Images are loaded from TVmaze's servers.

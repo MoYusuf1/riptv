@@ -147,11 +147,51 @@ pub(crate) fn DetailPage(
         }
     });
 
+    // What the provider left out of a series (episode pictures and summaries, cast photos), from
+    // TVmaze, once the provider has said what the show is called. The page doesn't wait for it.
+    let (c, target) = (client.clone(), row.target.clone());
+    let listing = row.title.clone();
+    let guide = use_resource(move || {
+        let ask = match (&target, &*info.read()) {
+            (Target::Series(_), Some(Ok((d, _)))) => Some((
+                if d.name.is_empty() {
+                    listing.clone()
+                } else {
+                    d.name.clone()
+                },
+                d.year
+                    .as_deref()
+                    .and_then(|y| y.get(..4)?.parse::<u32>().ok()),
+            )),
+            _ => None,
+        };
+        let c = c.clone();
+        async move {
+            let (name, year) = ask?;
+            c.guide(&name, year).await
+        }
+    });
+    let guide_now = guide.read().clone().flatten();
+
     let guard = info.read();
-    let details = match &*guard {
+    let mut details = match &*guard {
         Some(Ok((d, _))) => d.clone(),
         _ => Details::default(),
     };
+    // The provider's episodes, with the gaps filled in from the guide when it has arrived.
+    let seasons: Vec<Season> = match (&*guard, &guide_now) {
+        (Some(Ok((_, s))), Some(g)) => {
+            let mut s = s.clone();
+            xtream::tvmaze::fill(&mut s, g);
+            s
+        }
+        (Some(Ok((_, s))), None) => s.clone(),
+        _ => vec![],
+    };
+    if let Some(g) = &guide_now {
+        details.plot = details.plot.take().or_else(|| g.plot.clone());
+        details.poster = details.poster.take().or_else(|| g.poster.clone());
+    }
     let title = if details.name.is_empty() {
         row.title.clone()
     } else {
@@ -231,8 +271,8 @@ pub(crate) fn DetailPage(
     // Everything there is to watch, in order: a movie is one, a series is its episodes.
     let mut all: Vec<Play> = vec![];
     let mut spans: Vec<(u64, std::ops::Range<usize>)> = vec![];
-    match (&row.target, &*guard) {
-        (Target::Movie { id, url }, _) => all.push(Play {
+    match &row.target {
+        Target::Movie { id, url } => all.push(Play {
             key: format!("movie:{id}"),
             title: title.clone(),
             subtitle: None,
@@ -241,8 +281,8 @@ pub(crate) fn DetailPage(
             duration: details.runtime_secs,
             entry: Some(entry_of(&row, &title, poster.clone(), extension(url), None)),
         }),
-        (Target::Series(_), Some(Ok((_, seasons)))) => {
-            for season in seasons {
+        Target::Series(_) => {
+            for season in &seasons {
                 let from = all.len();
                 for (n, ep) in season.episodes.iter().enumerate() {
                     let num = ep.episode_num.unwrap_or(n as u64 + 1);
@@ -384,7 +424,7 @@ pub(crate) fn DetailPage(
                         }
                     }
                     div { class: "eps",
-                        if let (Some((_, range)), Some(Ok((_, seasons)))) = (spans.iter().find(|s| Some(s.0) == season_now), &*guard) {
+                        if let Some((_, range)) = spans.iter().find(|s| Some(s.0) == season_now) {
                             for (i, ep) in seasons.iter().flat_map(|s| s.episodes.iter()).enumerate().skip(range.start).take(range.len()) {
                                 div { class: "epc", key: "{ep.id}",
                                     button { class: "thumb", aria_label: "Play", onclick: { let play_at = play_at.clone(); move |_| play_at(i) },
@@ -412,7 +452,24 @@ pub(crate) fn DetailPage(
                     }
                 }
             }
-            if !cast.is_empty() {
+            if let Some(g) = guide_now.as_ref().filter(|g| g.cast.iter().any(|p| p.photo.is_some())) {
+                div { class: "d-sec",
+                    h2 { "Cast" }
+                    div { class: "cast portraits",
+                        for p in g.cast.iter().take(24) {
+                            div { class: "face", key: "{p.name}",
+                                if let Some(photo) = &p.photo {
+                                    img { src: "{photo}", alt: "", loading: "lazy", decoding: "async" }
+                                } else {
+                                    span { class: "initial", "{p.name.chars().next().unwrap_or('?')}" }
+                                }
+                                strong { "{p.name}" }
+                                if let Some(role) = p.role.as_ref().filter(|r| **r != p.name) { small { "{role}" } }
+                            }
+                        }
+                    }
+                }
+            } else if !cast.is_empty() {
                 div { class: "d-sec",
                     h2 { "Cast" }
                     div { class: "cast",
@@ -422,6 +479,12 @@ pub(crate) fn DetailPage(
                             }
                         }
                     }
+                }
+            }
+            // TVmaze's data is CC BY-SA: credited wherever it fills something in.
+            if let Some(g) = &guide_now {
+                p { class: "d-sec credit", "Episode details and cast from "
+                    a { href: "{g.page}", target: "_blank", rel: "noopener noreferrer", "TVmaze" }
                 }
             }
             if let Some(id) = &trailer {

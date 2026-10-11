@@ -226,6 +226,14 @@ svg{width:1.1rem;height:1.1rem}
 .cast{display:flex;flex-wrap:wrap;gap:.55rem}
 .person{padding:.55rem .85rem;border:1px solid var(--hair);border-radius:999px;background:var(--row)}
 .person strong{font-size:.78rem;font-weight:500;line-height:1.3}
+.cast.portraits{gap:1.1rem 1rem}
+.face{display:flex;flex-direction:column;align-items:center;width:6.2rem;text-align:center}
+.face img,.face .initial{width:5.2rem;height:5.2rem;margin-bottom:.5rem;border-radius:50%;object-fit:cover;background:var(--row);box-shadow:0 8px 22px rgba(0,0,0,.4),0 0 0 1px var(--hair)}
+.face .initial{display:grid;place-items:center;color:var(--faint);font-size:1.6rem;font-weight:700}
+.face strong{font-size:.78rem;font-weight:600;line-height:1.25}
+.face small{margin-top:.15rem;color:var(--faint);font-size:.7rem;line-height:1.2}
+.credit{margin:1rem 0 2rem;color:var(--faint);font-size:.7rem}
+.credit a{color:var(--dim)}
 .trailer{position:relative;display:block;width:16rem;color:#fff;aspect-ratio:16/9;overflow:hidden;border-radius:12px;background:var(--row)}
 .trailer img{width:100%;height:100%;object-fit:cover;transition:transform .2s}
 .trailer:hover img{transform:scale(1.04)}

@@ -423,10 +423,20 @@ async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
                 json!({"series_id": 1, "name": "Flower: The Series", "category_id": "20",
                     "plot": "Two seasons of the same five seconds.", "rating": "7.5",
                     "last_modified": "1790000000", "cover": POSTER}),
+                // A real show, listed the way thin panels list it: a tag in front, numbered episode
+                // titles and nothing else, so its pictures, plots and cast come from TVmaze.
+                json!({"series_id": 2, "name": "EN - Martha Bakes", "category_id": "20",
+                    "last_modified": "1780000000"}),
             ];
             all.extend(synthetic_list("series", &poster_url()));
             Value::Array(all)
         }
+        Some("get_series_info") if get("series_id").as_deref() == Some("2") => json!({
+            "info": {"name": "EN - Martha Bakes", "releaseDate": "2011-01-31"},
+            "episodes": {"1": (1..=6).map(|n| json!({"id": 2000 + n, "episode_num": n,
+                "title": format!("Martha Bakes - S01E{n:02}"), "container_extension": "mp4", "info": []}))
+                .collect::<Vec<_>>()}
+        }),
         Some("get_series_info") => json!({
             "info": {"name": "Flower: The Series", "genre": "Drama, Nature", "releaseDate": "2021-03-01",
                      "cover": POSTER, "backdrop_path": [POSTER], "episode_run_time": "45",

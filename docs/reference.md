@@ -149,6 +149,17 @@ except to go to their own provider through the local proxy. Anyone who can read 
 can read them, so use **Delete profile** when an account shouldn't stay. They belong to the address you
 open the app at (`127.0.0.1:3000` and `localhost:3000` keep separate lists).
 
+## Episode pictures and cast photos
+
+Many providers send a series' episodes with no pictures, summaries or names, and the cast as plain
+names. When a series page opens, RIPTV asks [TVmaze](https://www.tvmaze.com)'s free public API
+about the show and fills in only what the provider left out: episode pictures, names, summaries,
+air dates and lengths, and the cast with their photos. What the provider sent always stays. Only
+the show's name goes to TVmaze (through the local proxy), never your logins or what you watch, and
+the answer is used only if TVmaze's name and premiere year match the provider's. The page shows
+the provider's episodes at once and fills the gaps in when TVmaze answers (under a second). TVmaze's
+data is CC BY-SA, so the page credits it. Movies aren't covered: TVmaze lists TV shows only.
+
 ## Add an M3U playlist
 
 Add a profile and choose **M3U / M3U8**, paste an HTTP(S) playlist URL, and select **Save and connect**.

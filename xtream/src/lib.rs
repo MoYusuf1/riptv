@@ -19,6 +19,7 @@ mod playlist;
 pub mod sniff;
 mod stream;
 mod text;
+pub mod tvmaze;
 pub mod updates;
 
 pub use art::{Art, sized as sized_art};
@@ -281,7 +282,7 @@ impl Episode {
 }
 
 /// Whether `text` says which episode it is, like "S01E02" (any case, one or more digits).
-fn has_episode_code(text: &str) -> bool {
+pub(crate) fn has_episode_code(text: &str) -> bool {
     let t = text.as_bytes();
     (0..t.len()).any(|i| {
         let digits = |from: usize| t[from..].iter().take_while(|b| b.is_ascii_digit()).count();
@@ -1011,6 +1012,17 @@ impl Client {
         let resp = checked(resp.map_err(http_error)?)?;
         let body = resp.bytes().await.map_err(http_error)?;
         parse(&body)
+    }
+
+    /// What TVmaze knows about a series (episode pictures and summaries, cast photos), for what
+    /// the provider left out; `None` when it doesn't know the show or can't be reached.
+    pub async fn guide(&self, title: &str, year: Option<u32>) -> Option<tvmaze::Guide> {
+        self.get_with(tvmaze::search_url(title), |b| {
+            Ok(tvmaze::parse(b, title, year))
+        })
+        .await
+        .ok()
+        .flatten()
     }
 
     async fn get_json(&self, url: Url) -> Result<Value> {

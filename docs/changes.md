@@ -17,6 +17,9 @@ How each number was measured is in brackets; live-channel start times are in
 | Season keyed both "02" and "2" | two "Season 2"s, one unreachable | one season, episodes in order |
 | Episode with no picture | empty box | the series' art, dimmed |
 | Layout shift / frames over 50 ms while browsing (30,000-title mock) | 0 / none | 0 / none (motion added without either) |
+| Thin series (mock "EN - Martha Bakes": numbered titles, nothing else), episodes with picture, name, date and summary | 0 of 6 | 6 of 6, from TVmaze |
+| …time to episodes / to TVmaze's details | 67 ms / — | 67 ms / 848 ms (the page doesn't wait) |
+| Cast photos for series | names only | portraits, when TVmaze has them |
 
 ## 0.2.8
 
