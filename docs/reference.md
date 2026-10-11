@@ -158,7 +158,11 @@ air dates and lengths, and the cast with their photos. What the provider sent al
 the show's name goes to TVmaze (through the local proxy), never your logins or what you watch, and
 the answer is used only if TVmaze's name and premiere year match the provider's. The page shows
 the provider's episodes at once and fills the gaps in when TVmaze answers (under a second). TVmaze's
-data is CC BY-SA, so the page credits it. Movies aren't covered: TVmaze lists TV shows only.
+data is CC BY-SA, so the page credits it.
+
+TVmaze lists TV shows only, so a movie's cast photos come from Wikipedia's page summaries: only
+each actor's name is sent (up to 12 per movie, remembered for the session), and a photo is used
+only when the page is about a performer, not a namesake or a list of people with that name.
 
 ## Add an M3U playlist
 

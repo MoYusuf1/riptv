@@ -398,7 +398,11 @@ async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
                     "name": name, "genre": "Documentary, Animation, Short", "releasedate": "2017-05-12",
                     "movie_image": POSTER, "backdrop_path": [POSTER],
                     "duration": "02:53:12", "duration_secs": 10392, "country": "United States of America",
-                    "cast": "Jan Morgenstern, Sacha Goedegebure, Ton Roosendaal, Pablo Vazquez, Aleks Kourbatov",
+                    // Movie 2's cast is real actors, for trying cast photos. "Michael Jordan" is
+                    // the basketball player's page, which is passed over for "Michael Jordan
+                    // (actor)", Michael B. Jordan. The rest are the film's makers.
+                    "cast": if id == "2" { "Tom Hanks, Emma Stone, Chris Evans, Michael Jordan" }
+                            else { "Jan Morgenstern, Sacha Goedegebure, Ton Roosendaal, Pablo Vazquez, Aleks Kourbatov" },
                     "director": "Sacha Goedegebure", "rating": "7.6", "mpaa_rating": "PG",
                     "youtube_trailer": "aqz-KE-bpKQ",
                     "video": {"codec_name": "h264", "width": 1920, "height": 1080},

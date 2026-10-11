@@ -21,6 +21,7 @@ mod stream;
 mod text;
 pub mod tvmaze;
 pub mod updates;
+pub mod wiki;
 
 pub use art::{Art, sized as sized_art};
 use playlist::Playlist;
@@ -1023,6 +1024,16 @@ impl Client {
         .await
         .ok()
         .flatten()
+    }
+
+    /// A performer's photo from Wikipedia (see [`wiki`]); `None` without a page about them.
+    pub async fn portrait(&self, name: &str) -> Option<String> {
+        for url in wiki::summary_urls(name) {
+            if let Ok(Some(photo)) = self.get_with(url, |b| Ok(wiki::photo(b))).await {
+                return Some(photo);
+            }
+        }
+        None
     }
 
     async fn get_json(&self, url: Url) -> Result<Value> {

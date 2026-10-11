@@ -118,6 +118,11 @@ pub(crate) fn episode_name(ep: &Episode, nth: usize) -> String {
     }
 }
 
+thread_local! {
+    /// Performers' photos already asked Wikipedia for this session (`None`: there isn't one).
+    static PORTRAITS: RefCell<HashMap<String, Option<String>>> = RefCell::default();
+}
+
 /// The page for one movie or series: backdrop, title, facts, cast, trailer, and Play or the episodes.
 #[component]
 pub(crate) fn DetailPage(
@@ -172,6 +177,37 @@ pub(crate) fn DetailPage(
         }
     });
     let guide_now = guide.read().clone().flatten();
+    // A movie's cast photos (TVmaze covers series only), each filled in as Wikipedia answers.
+    let mut photos = use_signal(HashMap::<String, String>::new);
+    let (c, target) = (client.clone(), row.target.clone());
+    use_effect(move || {
+        let Target::Movie { .. } = target else { return };
+        let Some(Ok((d, _))) = &*info.read() else {
+            return;
+        };
+        let cast = d.cast.clone().unwrap_or_default();
+        for name in people(&cast).into_iter().take(12).map(str::to_owned) {
+            let known = PORTRAITS.with(|p| p.borrow().get(&name).cloned());
+            match known {
+                Some(Some(photo)) => {
+                    photos.write().insert(name, photo);
+                }
+                Some(None) => {}
+                None => {
+                    let c = c.clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        let photo = c.portrait(&name).await;
+                        PORTRAITS.with(|p| p.borrow_mut().insert(name.clone(), photo.clone()));
+                        if let Some(photo) = photo
+                            && photos.try_peek().is_ok()
+                        {
+                            photos.write().insert(name, photo);
+                        }
+                    });
+                }
+            }
+        }
+    });
 
     let guard = info.read();
     let mut details = match &*guard {
@@ -468,6 +504,25 @@ pub(crate) fn DetailPage(
                             }
                         }
                     }
+                }
+            } else if !photos.read().is_empty() {
+                div { class: "d-sec",
+                    h2 { "Cast" }
+                    div { class: "cast portraits",
+                        for name in people(&cast).into_iter().take(12) {
+                            div { class: "face", key: "{name}",
+                                if let Some(photo) = photos.read().get(name) {
+                                    img { src: "{photo}", alt: "", loading: "lazy", decoding: "async" }
+                                } else {
+                                    span { class: "initial", "{name.chars().next().unwrap_or('?')}" }
+                                }
+                                strong { "{name}" }
+                            }
+                        }
+                    }
+                }
+                p { class: "d-sec credit", "Cast photos from "
+                    a { href: "https://en.wikipedia.org", target: "_blank", rel: "noopener noreferrer", "Wikipedia" }
                 }
             } else if !cast.is_empty() {
                 div { class: "d-sec",

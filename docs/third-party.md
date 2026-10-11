@@ -31,3 +31,6 @@ Rust dependency notices and available license texts are embedded under `licenses
 Series pages fill in what a provider leaves out from [TVmaze](https://www.tvmaze.com), whose data is
 licensed [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/); each page that uses it
 credits TVmaze and links to the show's TVmaze page. Images are loaded from TVmaze's servers.
+
+Movie cast photos come from [Wikipedia](https://en.wikipedia.org) page summaries; the images are
+hosted by Wikimedia Commons under their own free licenses, and the page credits Wikipedia.

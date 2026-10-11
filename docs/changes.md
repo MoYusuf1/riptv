@@ -20,6 +20,7 @@ How each number was measured is in brackets; live-channel start times are in
 | Thin series (mock "EN - Martha Bakes": numbered titles, nothing else), episodes with picture, name, date and summary | 0 of 6 | 6 of 6, from TVmaze |
 | …time to episodes / to TVmaze's details | 67 ms / — | 67 ms / 848 ms (the page doesn't wait) |
 | Cast photos for series | names only | portraits, when TVmaze has them |
+| Cast photos for movies (mock movie with 4 real actors) | names only | 4 of 4, first in 220 ms (Wikipedia, looked up in parallel) |
 
 ## 0.2.8
 
