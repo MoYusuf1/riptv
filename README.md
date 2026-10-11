@@ -41,7 +41,7 @@ There is also an **Experimental player** (in the account menu) built on
 scratch in Rust that unpacks streams and decodes surround sound right inside the browser, with no
 converter at all. It's still being tested.
 
-[Build from source](docs/setup.md) · [How it works](docs/reference.md) ·
+[Build from source](docs/setup.md) · [How it works](docs/reference.md) · [Roadmap](docs/roadmap.md) ·
 [For developers](docs/technical-breakdown.md) · [Bundled software](docs/third-party.md)
 
 ## License
