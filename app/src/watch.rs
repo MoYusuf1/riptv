@@ -239,6 +239,27 @@ pub(crate) fn Watch(
         };
         let Some(video) = watch_video() else { return };
         let (c, url) = (c.clone(), url.clone());
+        // A stall the experimental player doesn't report (it appended data, but no frame is ever
+        // decoded): after 8 s, hand over to the standard player, as for a format it can't play.
+        {
+            let (c, url, this) = (c.clone(), url.clone(), movie.clone());
+            wasm_bindgen_futures::spawn_local(async move {
+                rstreamkit::mse::sleep(Duration::from_secs(8)).await;
+                let still = engine
+                    .try_peek()
+                    .is_ok_and(|e| matches!(&*e, Some(Engine::Rust(m, _)) if Rc::ptr_eq(m, &this)));
+                if still && *load_stage.peek() < 3 {
+                    switch_to_convert(
+                        c,
+                        url,
+                        "the experimental player stalled".into(),
+                        *pos.peek(),
+                        engine,
+                        start,
+                    );
+                }
+            });
+        }
         *handle.borrow_mut() = Some(experimental::movie(
             video,
             movie,

@@ -187,7 +187,12 @@ pub(crate) fn DetailPage(
             return;
         };
         let cast = d.cast.clone().unwrap_or_default();
-        for name in people(&cast).into_iter().take(12).map(str::to_owned) {
+        for (n, name) in people(&cast)
+            .into_iter()
+            .take(12)
+            .map(str::to_owned)
+            .enumerate()
+        {
             let known = PORTRAITS.with(|p| p.borrow().get(&name).cloned());
             match known {
                 Some(Some(photo)) => {
@@ -197,6 +202,9 @@ pub(crate) fn DetailPage(
                 None => {
                     let c = c.clone();
                     wasm_bindgen_futures::spawn_local(async move {
+                        // Staggered, not all at once: Wikipedia limits bursts.
+                        rstreamkit::mse::sleep(std::time::Duration::from_millis(150 * n as u64))
+                            .await;
                         let photo = c.portrait(&name).await;
                         PORTRAITS.with(|p| p.borrow_mut().insert(name.clone(), photo.clone()));
                         if let Some(photo) = photo

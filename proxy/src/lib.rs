@@ -413,6 +413,21 @@ async fn proxy(
         .filter(|v| !v.is_empty())
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static(FALLBACK_UA));
+    // Wikipedia and TVmaze ask apps to say who they are; providers get the browser's own.
+    let ua = match url.host_str() {
+        Some(h)
+            if [".wikipedia.org", ".tvmaze.com"]
+                .iter()
+                .any(|d| h.ends_with(d)) =>
+        {
+            HeaderValue::from_static(concat!(
+                "RIPTV/",
+                env!("CARGO_PKG_VERSION"),
+                " (https://github.com/MoYusuf1/riptv)"
+            ))
+        }
+        _ => ua,
+    };
     // With `--logs`: what this request was for, to say why it failed or crawled.
     let watch = s.logs.is_some().then(|| (url.clone(), Instant::now()));
     let mut req = s.http.get(url).header(header::USER_AGENT, ua);
