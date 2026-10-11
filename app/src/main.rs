@@ -421,8 +421,11 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 @property --sp{syntax:'<percentage>';inherits:true;initial-value:0%}
 @property --sb{syntax:'<percentage>';inherits:true;initial-value:0%}
 .w-seekwrap{position:relative}
-.w-seek{display:block;width:100%;height:1.4rem;margin:0;background:none;cursor:pointer;-webkit-appearance:none;appearance:none;transition:--sp .25s linear,--sb .6s var(--ease)}
-.w-seek.dragging{transition:--sb .6s var(--ease)}
+.w-seek{display:block;width:100%;height:1.4rem;margin:0;background:none;cursor:pointer;-webkit-appearance:none;appearance:none}
+/* Easing only while the controls show: animating a registered property restyles every frame, and
+   the position changes several times a second, so hidden it cost 60 restyles a second for nothing. */
+.watch.active .w-seek,.watch.paused .w-seek{transition:--sp .25s linear,--sb .6s var(--ease)}
+.watch .w-seek.dragging{transition:--sb .6s var(--ease)}
 .w-seek::-webkit-slider-runnable-track{height:5px;border-radius:99px;background:linear-gradient(90deg,var(--accent) var(--sp),rgba(255,255,255,.45) var(--sp) var(--sb),rgba(255,255,255,.18) var(--sb));transition:height .15s var(--ease)}
 .w-seek::-moz-range-track{height:5px;border-radius:99px;background:linear-gradient(90deg,var(--accent) var(--sp),rgba(255,255,255,.45) var(--sp) var(--sb),rgba(255,255,255,.18) var(--sb))}
 .w-seek::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;margin-top:-4.5px;border-radius:50%;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.5);transform:scale(0);transition:transform .15s var(--ease)}

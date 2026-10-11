@@ -292,8 +292,11 @@ pub(crate) fn Watch(
         let known = engine.peek().as_ref().and_then(Engine::duration);
         let converted = matches!(engine.peek().as_ref(), Some(Engine::Converted(..)));
         let offset = if converted { *start.peek() as f64 } else { 0.0 };
-        if !*scrubbing.peek() {
-            pos.set(offset + v.current_time());
+        // Only real changes: `progress` fires for every chunk a converted stream delivers, and
+        // each signal write re-renders the player.
+        let now = offset + v.current_time();
+        if !*scrubbing.peek() && (now - *pos.peek()).abs() >= 0.2 {
+            pos.set(now);
         }
         let known = known
             .filter(|d| d.is_finite() && *d > 0.0)
@@ -305,7 +308,10 @@ pub(crate) fn Watch(
         if length != *total.peek() {
             total.set(length);
         }
-        ahead.set(offset + buffered_end(&v));
+        let end = offset + buffered_end(&v);
+        if (end - *ahead.peek()).abs() >= 0.25 {
+            ahead.set(end);
+        }
     };
     let mut seek_to = move |t: f64| {
         let length = *total.peek();
@@ -481,10 +487,9 @@ pub(crate) fn Watch(
     };
     let (p, b) = {
         let t = total().max(1.0);
-        (
-            (pos() / t * 100.0).clamp(0.0, 100.0),
-            (ahead() / t * 100.0).clamp(0.0, 100.0),
-        )
+        // To 0.1% (1.4 px on a 1440 px bar): the bar's style is rewritten only when it would move.
+        let pct = |x: f64| ((x / t * 1000.0).round() / 10.0).clamp(0.0, 100.0);
+        (pct(pos()), pct(ahead()))
     };
     let shown_volume = if muted() { 0 } else { volume() };
     let class = format!(

@@ -260,6 +260,8 @@ pub async fn stream(
         encoder,
         sniffed.height.unwrap_or(0),
         max_height(),
+        // Deinterlaced unless the stream reader saw a progressive picture.
+        sniffed.interlaced != Some(false),
         audio,
     ));
     let mut child = match Command::new(crate::compat::media_tool("ffmpeg"))

@@ -72,6 +72,9 @@ pub struct CompatQuery {
     /// Whole seconds into a movie or episode to begin at; the page's seek bar restarts the
     /// conversion here, because a converted stream has no index a `<video>` could seek in.
     start: Option<u32>,
+    /// `1` when the page knows the picture is progressive (from the file's index): no
+    /// deinterlacer then, which is over a third of a conversion's processor time.
+    progressive: Option<u8>,
 }
 
 /// What the first video stream is, from ffmpeg's description of its input.
@@ -325,6 +328,8 @@ pub(crate) fn copies(video: &str) -> bool {
 
 /// The ffmpeg command line. `video` is `copy` or `hevc` (leave the video alone) or anything else
 /// (encode H.264, deinterlaced, at most `max_height` tall so the browser can decode it smoothly).
+// ponytail: eight plain facts about one command line; a struct for them would only add code.
+#[allow(clippy::too_many_arguments)]
 fn ffmpeg_args(
     url: &str,
     ua: &str,
@@ -332,6 +337,7 @@ fn ffmpeg_args(
     encoder: Option<&str>,
     height: u32,
     max_height: u32,
+    deinterlace: bool,
     start: u32,
 ) -> Vec<String> {
     let mut a: Vec<String> = [
@@ -377,7 +383,14 @@ fn ffmpeg_args(
         a.extend(["-ss".to_string(), start.to_string()]);
     }
     a.extend(["-threads".into(), threads(), "-i".into(), url.into()]);
-    a.extend(encode_args(video, encoder, height, max_height, "aac"));
+    a.extend(encode_args(
+        video,
+        encoder,
+        height,
+        max_height,
+        deinterlace,
+        "aac",
+    ));
     a
 }
 
@@ -388,6 +401,7 @@ pub(crate) fn encode_args(
     encoder: Option<&str>,
     height: u32,
     max_height: u32,
+    deinterlace: bool,
     audio: &str,
 ) -> Vec<String> {
     let mut a: Vec<String> = ["-map", "0:v:0?", "-map", "0:a:0?"]
@@ -410,9 +424,14 @@ pub(crate) fn encode_args(
             1000.. => (10, 20),
             _ => (5, 10),
         };
-        let filter = format!(
-            "yadif=mode=send_field:deint=interlaced,scale=-2:'min({max_height},ih)',format=yuv420p"
-        );
+        // The deinterlacer only when the picture may be interlaced: it costs over a third of the
+        // processor time even on progressive frames (6.0 s against 3.9 s for 20 s of 1080p).
+        let deint = if deinterlace {
+            "yadif=mode=send_field:deint=interlaced,"
+        } else {
+            ""
+        };
+        let filter = format!("{deint}scale=-2:'min({max_height},ih)',format=yuv420p");
         a.extend(["-vf", &filter].map(String::from));
         a.extend(encoder_args(encoder));
         a.extend(["-threads".into(), threads()]);
@@ -577,14 +596,14 @@ pub async fn stream(
     };
     let ua = agent(&headers);
     let input = one_variant(&s, &url, &ua).await;
-    let (mode, height) = match q.video.as_deref() {
-        Some("copy") => ("copy", 0),
-        Some("hevc") => ("hevc", 0),
+    let (mode, height, deinterlace) = match q.video.as_deref() {
+        Some("copy") => ("copy", 0, false),
+        Some("hevc") => ("hevc", 0, false),
         // The scaler caps the height itself; probing just to learn it cost ~2 s.
-        Some("transcode") => ("transcode", 0),
+        Some("transcode") => ("transcode", 0, q.progressive != Some(1)),
         _ => match probe(input.as_str(), &ua).await {
-            Ok(Some(p)) if !p.can_copy() => ("transcode", p.height),
-            Ok(_) => ("copy", 0),
+            Ok(Some(p)) if !p.can_copy() => ("transcode", p.height, p.field_order != "progressive"),
+            Ok(_) => ("copy", 0, false),
             Err(f) => return failure(&s, &url, f),
         },
     };
@@ -601,6 +620,7 @@ pub async fn stream(
         encoder,
         height,
         max_height,
+        deinterlace,
         q.start.unwrap_or(0),
     );
     // With `--logs`, ffmpeg reports its speed every few seconds (on stderr, even at
@@ -992,7 +1012,7 @@ mod tests {
 
     #[test]
     fn the_command_line_copies_or_encodes_as_asked() {
-        let copy = ffmpeg_args("http://h/x.ts", "UA", "copy", None, 0, 1080, 0);
+        let copy = ffmpeg_args("http://h/x.ts", "UA", "copy", None, 0, 1080, true, 0);
         assert!(
             has(&copy, ["-c:v", "copy"]) && !copy.iter().any(|a| a == "-hwaccel" || a == "-vf")
         );
@@ -1004,14 +1024,23 @@ mod tests {
 
         // A seek goes before the input (so nothing earlier is read); no seek, no flag.
         assert!(!copy.iter().any(|a| a == "-ss"));
-        let seek = ffmpeg_args("http://h/x.mp4", "UA", "copy", None, 0, 1080, 754);
+        let seek = ffmpeg_args("http://h/x.mp4", "UA", "copy", None, 0, 1080, true, 754);
         let at = |flag: &str| seek.iter().position(|a| a == flag).unwrap();
         assert!(at("-ss") < at("-i") && seek[at("-ss") + 1] == "754");
         // A copied picture starts at a keyframe: the sound must start there too, never trimmed
         // to the exact second (it would run ahead), and never stretched by `first_pts`.
         assert!(at("-noaccurate_seek") < at("-ss"));
         assert!(!seek.iter().any(|a| a.contains("first_pts")));
-        let exact = ffmpeg_args("http://h/x.mp4", "UA", "transcode", None, 0, 1080, 754);
+        let exact = ffmpeg_args(
+            "http://h/x.mp4",
+            "UA",
+            "transcode",
+            None,
+            0,
+            1080,
+            true,
+            754,
+        );
         assert!(
             !exact.iter().any(|a| a == "-noaccurate_seek"),
             "a re-encode cuts exactly"
@@ -1024,6 +1053,7 @@ mod tests {
             Some("h264_nvenc"),
             2160,
             1080,
+            true,
             0,
         );
         assert!(has(&gpu, ["-c:v", "h264_nvenc"]) && has(&gpu, ["-hwaccel", "auto"]));
@@ -1036,7 +1066,16 @@ mod tests {
                 .any(|a| a.contains("min(1080,ih)") && a.contains("yadif"))
         );
 
-        let cpu = ffmpeg_args("http://h/x.ts", "UA", "transcode", None, 2160, 2160, 0);
+        let cpu = ffmpeg_args(
+            "http://h/x.ts",
+            "UA",
+            "transcode",
+            None,
+            2160,
+            2160,
+            true,
+            0,
+        );
         assert!(has(&cpu, ["-c:v", "libx264"]) && has(&cpu, ["-b:v", "20M"]));
         assert_eq!(cpu.last().map(String::as_str), Some("pipe:1"));
         // Threads capped on both sides of a conversion: one per core costs memory, not speed.
@@ -1049,7 +1088,7 @@ mod tests {
         assert!(capped(&cpu) && capped(&copy));
 
         // HEVC for a browser that decodes it: copied, tagged the way Safari needs, cut like a copy.
-        let hevc = ffmpeg_args("http://h/x.mkv", "UA", "hevc", None, 0, 1080, 754);
+        let hevc = ffmpeg_args("http://h/x.mkv", "UA", "hevc", None, 0, 1080, true, 754);
         assert!(has(&hevc, ["-c:v", "copy"]) && has(&hevc, ["-tag:v", "hvc1"]));
         assert!(hevc.iter().any(|a| a == "-noaccurate_seek"));
         assert!(!hevc.iter().any(|a| a == "-hwaccel" || a == "-vf"));
@@ -1063,6 +1102,7 @@ mod tests {
             Some("h264_videotoolbox"),
             1080,
             1080,
+            true,
             0,
         );
         assert!(has(&mac, ["-c:v", "h264_videotoolbox"]) && has(&mac, ["-realtime", "1"]));
@@ -1073,6 +1113,7 @@ mod tests {
             Some("h264_mf"),
             1080,
             1080,
+            true,
             0,
         );
         assert!(has(&win, ["-c:v", "h264_mf"]) && has(&win, ["-hw_encoding", "1"]));
@@ -1080,5 +1121,22 @@ mod tests {
             !win.iter().any(|a| a == "-preset"),
             "x264's settings stay with x264"
         );
+
+        // A picture known to be progressive skips the deinterlacer; one that may not be keeps it.
+        let film = ffmpeg_args(
+            "http://h/x.mp4",
+            "UA",
+            "transcode",
+            None,
+            1080,
+            1080,
+            false,
+            0,
+        );
+        assert!(
+            film.iter().any(|a| a.starts_with("scale="))
+                && !film.iter().any(|a| a.contains("yadif"))
+        );
+        assert!(cpu.iter().any(|a| a.contains("yadif")));
     }
 }

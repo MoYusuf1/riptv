@@ -861,11 +861,14 @@ impl Client {
     /// index: no check in front, so it starts a round trip and an ffmpeg run sooner. `video` is
     /// `copy` (8-bit progressive H.264, which every browser plays), `hevc` (copied, for a browser
     /// that decodes it) or `transcode`.
+    /// `progressive` when the index says the picture isn't interlaced: the conversion then skips
+    /// its deinterlacer.
     pub fn convert_known(
         &self,
         media: &Url,
         video: &str,
         duration: Option<u64>,
+        progressive: bool,
     ) -> Result<Converted> {
         let Some(proxy) = &self.proxy else {
             return Err(Error::Proxy("there is no proxy to convert it".into()));
@@ -876,6 +879,9 @@ impl Client {
         url.query_pairs_mut()
             .append_pair("url", self.upstream(media).as_str())
             .append_pair("video", video);
+        if progressive {
+            url.query_pairs_mut().append_pair("progressive", "1");
+        }
         Ok(Converted { url, duration })
     }
 

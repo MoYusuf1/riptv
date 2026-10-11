@@ -50,6 +50,8 @@ fn known(c: &Client, media: &xtream::Url, movie: &rstreamkit::vod::Movie, why: S
     // (0 unknown, 1 interlaced), so ffmpeg-made MKVs look interlaced and a real one (1) doesn't.
     // Ignored for MKV until rstreamkit reads it as `== 1`; trusted for MP4.
     let interlaced = video.interlaced && movie.container != rstreamkit::vod::Container::Matroska;
+    // Known progressive only from an MP4's index (Matroska's flag is the one read backwards).
+    let progressive = movie.container == rstreamkit::vod::Container::Mp4 && !video.interlaced;
     let mode = if interlaced {
         "transcode"
     } else if matches!(video.avcc.get(1), Some(66 | 77 | 88 | 100)) {
@@ -61,7 +63,7 @@ fn known(c: &Client, media: &xtream::Url, movie: &rstreamkit::vod::Movie, why: S
     };
     let duration =
         (movie.duration.is_finite() && movie.duration > 0.0).then_some(movie.duration as u64);
-    match c.convert_known(media, mode, duration) {
+    match c.convert_known(media, mode, duration, progressive) {
         Ok(converted) => Engine::Converted(converted, why),
         Err(e) => Engine::Failed(format!(
             "This has {why}, which your browser can't play: {e}"
