@@ -2,6 +2,7 @@
 
 What's next, in order, and what "done" means for each. Each item is a GitHub issue, grouped by
 milestone: [0.2.9 – desktop polish](https://github.com/MoYusuf1/riptv/milestone/1),
+[0.3 – profile home](https://github.com/MoYusuf1/riptv/milestone/4),
 [Hosted RIPTV](https://github.com/MoYusuf1/riptv/milestone/2),
 [Phone](https://github.com/MoYusuf1/riptv/milestone/3). Finished work moves to
 [changes.md](changes.md) with its numbers. One rule throughout: **one app, one look**. The
@@ -20,6 +21,13 @@ download, the hosted site and the phone are the same RIPTV; only the edges diffe
   "ON NOW · PROVIDER GUIDE" label on channel previews, the "Converted by ffmpeg because…" note
   in the movie settings menu).
 - Done when: 0.2.9 is out, #1 has measurements, and the review list is empty.
+
+## 1b. Profile home (0.3)
+
+Each profile opens on its own rows, like Netflix's home, built from what that profile watches:
+Continue watching (landscape stills with progress), My List, Watch it again, new on your provider,
+then a row per category. Desktop first; the phone gets the same rows in its own arrangement.
+Issues #25, #26.
 
 ## 2. Hosted RIPTV (a website with sign-in, on a VPS with Supabase)
 
@@ -63,6 +71,9 @@ serve the app, relay the provider, convert what browsers can't play.
   subscriptions, invite-only, and make sure your buddy is comfortable with that.
 - **Security:** today the server trusts that only its own computer can reach it. Hosted, every
   route needs the sign-in check, rate limits and a review of the relay before it goes live.
+
+**The first visit** gets more steps than today (sign in, add your provider, choose a profile,
+home); it should feel like one flow, designed and agreed before it's built (#27).
 
 **Steps:** (a) the VPS checks above; (b) hosted mode behind a setting, with the sign-in check
 and limits; (c) a sign-in screen in front of "Who's watching?"; (d) per-user sync of progress
