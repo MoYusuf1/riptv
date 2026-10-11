@@ -522,6 +522,17 @@ body{font-size:.875rem}
 .w-seek::-webkit-slider-thumb{width:17px;height:17px;margin-top:-5.5px}
 .w-seek:hover::-webkit-slider-thumb,.w-seek:focus-visible::-webkit-slider-thumb,.w-seek.dragging::-webkit-slider-thumb{margin-top:-4px}
 .w-tip{font-size:.9rem;padding:.3rem .65rem}
+/* One back button, the same on a title's page and in the player: size, look and place. */
+.icon-btn.back,.w-top .icon-btn.back{width:2.9rem;height:2.9rem;background:rgba(10,7,9,.45);backdrop-filter:blur(12px)}
+.icon-btn.back:hover,.w-top .icon-btn.back:hover{background:rgba(255,255,255,.18)}
+.icon-btn.back svg{width:1.4rem;height:1.4rem}
+.detail-return{top:1.2rem;left:2rem}
+/* The facts card: readable, with the values leading and the lines inset. */
+.d-facts{width:21rem;padding:.3rem 0;border:1px solid rgba(255,255,255,.08);border-radius:16px;background:rgba(20,14,17,.62);box-shadow:0 18px 50px rgba(0,0,0,.35);backdrop-filter:blur(22px) saturate(140%)}
+.d-facts div{align-items:baseline;margin:0 1.1rem;padding:.72rem 0;font-size:.86rem}
+.d-facts div+div{border-top:1px solid rgba(255,255,255,.07)}
+.d-facts dt{color:var(--dim);font-weight:500}
+.d-facts dd{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}
 /* The live player's controls, a step up too (it sits in a narrower pane). */
 .controls .ctl{width:3rem;height:3rem}
 .controls .ctl svg{width:1.55rem;height:1.55rem}

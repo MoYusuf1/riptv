@@ -387,7 +387,7 @@ pub(crate) fn DetailPage(
                 button { class: "scrim", aria_label: "Close menu", onclick: move |_| seasons_open.set(false) }
             }
             div { class: "detail-return",
-                button { class: "icon-btn", aria_label: "Back", onclick: move |_| onback.call(()), Icon { d: BACK } }
+                button { class: "icon-btn back", aria_label: "Back", title: "Back (Esc)", onclick: move |_| onback.call(()), Icon { d: BACK } }
             }
             div { class: if backdrop_src.is_none() && poster_src.is_none() { "d-hero no-art" } else { "d-hero" },
                 if let Some(src) = backdrop_src {

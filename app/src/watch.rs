@@ -656,7 +656,7 @@ pub(crate) fn Watch(
                 }
             }
             div { class: "w-top",
-                div { button { class: "icon-btn", aria_label: "Back", title: "Back (Esc)", onclick: move |_| onclose.call(()), Icon { d: BACK } } }
+                div { button { class: "icon-btn back", aria_label: "Back", title: "Back (Esc)", onclick: move |_| onclose.call(()), Icon { d: BACK } } }
                 div { class: "w-title",
                     if engine_now {
                         strong { "{play.title}" }
