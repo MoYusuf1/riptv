@@ -25,12 +25,15 @@ pub struct Checker {
 impl Default for Checker {
     fn default() -> Self {
         Self {
-            http: reqwest::Client::builder()
-                .user_agent(concat!("RIPTV/", env!("CARGO_PKG_VERSION")))
-                .timeout(Duration::from_secs(8))
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .expect("update client"),
+            http: {
+                crate::tls();
+                reqwest::Client::builder()
+            }
+            .user_agent(concat!("RIPTV/", env!("CARGO_PKG_VERSION")))
+            .timeout(Duration::from_secs(8))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("update client"),
             cache: Arc::new(Mutex::new(None)),
         }
     }
@@ -236,6 +239,7 @@ mod tests {
         let url = format!("http://{}/updates", listener.local_addr().unwrap());
         let task =
             tokio::spawn(async move { axum::serve(listener, crate::router(state)).await.unwrap() });
+        crate::tls();
         let client = reqwest::Client::new();
         for method in [reqwest::Method::GET, reqwest::Method::POST] {
             let response = client.request(method.clone(), &url).send().await.unwrap();

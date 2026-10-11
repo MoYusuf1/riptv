@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use tower_http::services::ServeFile;
 
 async fn serve(app: Router) -> u16 {
+    riptv::tls();
     let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = l.local_addr().unwrap().port();
     tokio::spawn(async move { axum::serve(l, app).await.unwrap() });

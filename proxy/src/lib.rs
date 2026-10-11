@@ -109,6 +109,7 @@ impl AppState {
     pub fn new() -> Self {
         let approved = Approved::default();
         let a = approved.clone();
+        tls();
         let http = reqwest::Client::builder()
             .dns_resolver(Arc::new(PublicOnly(approved.clone())))
             .redirect(Policy::custom(move |att| {
@@ -244,6 +245,14 @@ impl Resolve for PublicOnly {
 /// network through it), and neither may a page that made its own hostname point at 127.0.0.1
 /// (DNS rebinding), which is why the `Host` header is checked too. Browsers label every request
 /// with `Sec-Fetch-Site`; clients that don't (curl) send no `Origin` either.
+/// HTTPS uses rustls with ring (see Cargo.toml), installed once, before the first client is built.
+pub fn tls() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
+}
+
 pub(crate) fn from_app(h: &HeaderMap) -> bool {
     let host = h
         .get(header::HOST)

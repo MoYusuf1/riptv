@@ -25,6 +25,7 @@ How each number was measured is in brackets; live-channel start times are in
 | …same on the processor (x264), the fallback without a GPU | 966 MB | 462 MB, same speed |
 | …x264 from a 4K source | 1,583 MB | 750 MB, same speed (5.4x real time) |
 | RIPTV server's own memory while streaming | 7–8 MB | 7–8 MB |
+| Server program (Linux, before the bundled files) | 3.41 MB | 2.66 MB (TLS on ring instead of the aws-lc C library) |
 
 ## 0.2.8
 

@@ -746,7 +746,10 @@ mod tests {
         ))
         .await;
         let s = AppState {
-            http: reqwest::Client::new(),
+            http: {
+                crate::tls();
+                reqwest::Client::new()
+            },
             ..AppState::new()
         };
         let media = Media::parse("#EXTM3U\n#EXTINF:1,\nsegment\n#EXT-X-ENDLIST\n", &base);
@@ -783,7 +786,10 @@ mod tests {
         ))
         .await;
         let s = AppState {
-            http: reqwest::Client::new(),
+            http: {
+                crate::tls();
+                reqwest::Client::new()
+            },
             ..AppState::new()
         };
         let media = Media::parse("#EXTM3U\n#EXT-X-TARGETDURATION:1\n", &base);
@@ -841,7 +847,10 @@ mod tests {
         ))
         .await;
         let s = AppState {
-            http: reqwest::Client::new(),
+            http: {
+                crate::tls();
+                reqwest::Client::new()
+            },
             ..AppState::new()
         };
         let media = Media::parse("#EXTM3U\n#EXTINF:1,\nsegment\n#EXT-X-ENDLIST\n", &base);
