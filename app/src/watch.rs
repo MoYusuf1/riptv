@@ -107,6 +107,7 @@ pub(crate) fn Watch(
     // to play it, the request, then each second buffered (3 s is plenty to start), the first
     // frame, playing.
     let mut ready = use_signal(|| 0_u32);
+    let ring_from = use_hook(|| Rc::new(Cell::new(u64::MAX)));
     // A moment after a start, to let the ring land on 100% instead of vanishing short of it.
     let mut landing = use_signal(|| false);
     use_effect(move || {
@@ -118,11 +119,14 @@ pub(crate) fn Watch(
             3 => 92,
             _ => 100,
         };
-        // A new stream (a seek in a converted title) starts again from the bottom.
+        // A seek in a converted title (a new start position) starts again from the bottom; a
+        // switch of player (the experimental one stalling) carries on from where the ring was.
+        let from = start();
         let now = *ready.peek();
-        if target > now || load_stage() <= 1 && target < now {
+        if target > now || from != ring_from.get() && target < now {
             ready.set(target);
         }
+        ring_from.set(from);
     });
     let mut muted = use_signal(move || saved_volume == 0);
     let mut volume = use_signal(move || saved_volume);

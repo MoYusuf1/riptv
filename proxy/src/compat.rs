@@ -203,6 +203,36 @@ async fn probe(url: &str, ua: &str) -> Result<Option<Probe>, Failure> {
     Ok(Probe::parse(&err))
 }
 
+/// ffmpeg's own description of a source, for the `--logs` trace: the container, its length and
+/// start, and each track's codec, profile, picture format, rate and sound layout. Only the lines
+/// that describe; the caller removes the address.
+pub(crate) async fn describe(url: &str, ua: &str) -> Option<String> {
+    let run = Command::new(media_tool("ffmpeg"))
+        .args(["-hide_banner", "-nostdin", "-user_agent", ua])
+        .args(["-protocol_whitelist", PROTOCOLS, "-rw_timeout", "15000000"])
+        .args([
+            "-analyzeduration",
+            "5000000",
+            "-probesize",
+            "10000000",
+            "-i",
+            url,
+        ])
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let out = timeout(Duration::from_secs(30), run).await.ok()?.ok()?;
+    let err = String::from_utf8_lossy(&out.stderr);
+    let lines: Vec<&str> = err
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            l.starts_with("Input #") || l.starts_with("Duration:") || l.starts_with("Stream #")
+        })
+        .collect();
+    (!lines.is_empty()).then(|| lines.join(" | "))
+}
+
 /// The hardware H.264 encoders the bundled ffmpeg has, tried in this order: NVIDIA's (Linux and
 /// Windows), Apple's VideoToolbox, then Windows' Media Foundation (Intel, AMD and NVIDIA).
 const HARDWARE: [&str; 3] = ["h264_nvenc", "h264_videotoolbox", "h264_mf"];

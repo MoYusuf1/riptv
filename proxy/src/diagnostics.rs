@@ -321,6 +321,33 @@ pub async fn event(
         };
         let probe_now =
             TROUBLE.contains(&name) && session.probed.is_none_or(|at| at.elapsed() >= PROBE_GAP);
+        // The experimental player gave up on a file: say what the file is, for its engine's
+        // report (that player has let go; the standard one asks the same provider anyway).
+        let stalled = name == "engine"
+            && input
+                .get("why")
+                .and_then(Value::as_str)
+                .is_some_and(|w| w.contains("experimental player stalled"));
+        if stalled {
+            let (state, id, url, agent) = (
+                state.clone(),
+                id.clone(),
+                session.url.clone(),
+                session.agent.clone(),
+            );
+            tokio::spawn(async move {
+                if let Some(what) = crate::compat::describe(url.as_str(), &agent).await {
+                    note(
+                        &state,
+                        &format!(
+                            "[{}] describe {}",
+                            short(&id),
+                            redact(&what, Some(&url), 2000)
+                        ),
+                    );
+                }
+            });
+        }
         if probe_now {
             session.probed = Some(Instant::now());
         }
