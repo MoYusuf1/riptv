@@ -79,7 +79,6 @@ pub(crate) fn use_preview(id: Option<u64>, anchor: String) -> Preview {
             span {
                 id: "{anchor}-guide", class: "channel-preview", role: "tooltip",
                 style: "left:{position.0}px;top:{position.1}px",
-                span { class: "preview-label", "ON NOW · PROVIDER GUIDE" }
                 if let Some(slot) = listing {
                     strong { if slot.listing.title.trim().is_empty() { "Untitled program" } else { "{slot.listing.title}" } }
                     time { "{clock(slot.start)} – {clock(slot.end)}" }

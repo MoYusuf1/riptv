@@ -425,23 +425,6 @@ pub(crate) fn Watch(
         Some(Engine::Converted(c, _)) => (true, "converted", Some(c.at(start()).to_string())),
         _ => (false, "", None),
     };
-    let about = match engine() {
-        Some(Engine::Native(..)) => "Played by your browser.".to_string(),
-        Some(Engine::Rust(m, _)) => format!(
-            "Played in Rust{}: nothing is converted, so nothing waits.",
-            m.audio
-                .as_ref()
-                .filter(|a| a.codec.is_empty() || a.name == "AC-3" || a.name == "E-AC-3")
-                .map_or(String::new(), |a| format!(
-                    ", with {} sound decoded here",
-                    a.name
-                ))
-        ),
-        Some(Engine::Converted(_, why)) => {
-            format!("Converted by ffmpeg because of {why}. A seek takes a moment.")
-        }
-        _ => String::new(),
-    };
     let (p, b) = {
         let t = total().max(1.0);
         (
@@ -617,7 +600,6 @@ pub(crate) fn Watch(
                 if menu() {
                     button { class: "scrim", aria_label: "Close menu", onclick: move |_| menu.set(false) }
                     div { class: "w-menu",
-                        h5 { "Speed" }
                         for r in [0.5_f64, 0.75, 1.0, 1.25, 1.5, 2.0] {
                             button {
                                 key: "{r}",
@@ -631,8 +613,6 @@ pub(crate) fn Watch(
                                 if rate() == r { Icon { d: CHECK } }
                             }
                         }
-                        h5 { "Playback" }
-                        p { "{about}" }
                     }
                 }
                 if let Some(t) = resumed() {
