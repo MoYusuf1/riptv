@@ -663,9 +663,8 @@ pub(crate) fn Watch(
                         if let Some(sub) = &play.subtitle { small { "{sub}" } }
                     }
                 }
-                div { class: "end",
-                    if engine_now { Download { title: play.file.clone(), url: native_url } }
-                }
+                // Kept empty so the title stays centred; downloading is in the bottom row.
+                div { class: "end" }
             }
             if engine_now {
                 if menu() {
@@ -787,6 +786,16 @@ pub(crate) fn Watch(
                         if has_next {
                             button { class: "next-btn", title: "Next episode (N)", onclick: move |_| onnext.call(()),
                                 Icon { d: NEXT } "Next"
+                            }
+                        }
+                        if engine_now {
+                            a {
+                                class: "ctl",
+                                href: "{native_url}",
+                                download: "{file_name(&play.file, &native_url)}",
+                                title: "Download",
+                                aria_label: "Download",
+                                Icon { d: DOWNLOAD }
                             }
                         }
                         button { class: "ctl", aria_label: "Settings", title: "Settings", onclick: move |_| menu.set(!menu()), Icon { d: GEAR } }

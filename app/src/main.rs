@@ -340,15 +340,8 @@ svg{width:1.1rem;height:1.1rem}
 .loader-pct{display:flex;align-items:baseline;color:#fff;font-size:1.05rem;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
 .loader-pct::before{counter-reset:p var(--p);content:counter(p)}
 .loader-pct small{margin-left:.05em;font-size:.6em;font-weight:500;opacity:.55}
-/* The ring's face: a frosted disc so it reads on any picture, a heavier line, a soft glow. */
-.loader{width:5.4rem;height:5.4rem;border-radius:50%;background:rgba(14,10,12,.5);box-shadow:0 12px 40px rgba(0,0,0,.45),inset 0 0 0 1px rgba(255,255,255,.07);backdrop-filter:blur(14px) saturate(140%)}
-.loader svg{inset:.35rem;width:calc(100% - .7rem);height:calc(100% - .7rem);animation-duration:2.4s}
-.loader circle{stroke-width:2.8}
-.ring-track{stroke:rgba(255,255,255,.09)}
-.ring-fill{filter:drop-shadow(0 0 5px rgba(255,125,146,.55))}
 /* A percentage grows from twelve o'clock and holds still; only the logo ring turns. */
 .loader.pct svg{animation:none;transform:rotate(-90deg)}
-.loader-pct{font-size:1.25rem;font-weight:650;letter-spacing:-.03em;text-shadow:0 1px 8px rgba(0,0,0,.4)}
 .hud.landing{animation:landing 1.1s var(--ease) forwards;pointer-events:none}
 .hud.landing .loader.pct{transition-duration:.55s}
 @keyframes landing{0%,55%{opacity:1;transform:none}100%{opacity:0;transform:scale(1.08)}}
