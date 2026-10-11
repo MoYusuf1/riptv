@@ -239,6 +239,11 @@ svg{width:1.1rem;height:1.1rem}
 .face small{margin-top:.15rem;color:var(--faint);font-size:.7rem;line-height:1.2}
 .credit{margin:1rem 0 2rem;color:var(--faint);font-size:.7rem}
 .credit a{color:var(--dim)}
+a.face,a.person{color:inherit;text-decoration:none}
+a.face img,a.face .initial{transition:box-shadow .2s var(--ease),transform .25s var(--ease)}
+a.face:hover img,a.face:hover .initial{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--accent);transform:translateY(-2px)}
+a.person{transition:background .2s var(--ease),border-color .2s}
+a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 .trailer{position:relative;display:block;width:16rem;color:#fff;aspect-ratio:16/9;overflow:hidden;border-radius:12px;background:var(--row)}
 .trailer img{width:100%;height:100%;object-fit:cover;transition:transform .2s}
 .trailer:hover img{transform:scale(1.04)}

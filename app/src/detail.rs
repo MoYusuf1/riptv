@@ -119,8 +119,8 @@ pub(crate) fn episode_name(ep: &Episode, nth: usize) -> String {
 }
 
 thread_local! {
-    /// Performers' photos already asked Wikipedia for this session (`None`: there isn't one).
-    static PORTRAITS: RefCell<HashMap<String, Option<String>>> = RefCell::default();
+    /// Performers already asked Wikipedia about this session (`None`: no page about them).
+    static PORTRAITS: RefCell<HashMap<String, Option<xtream::wiki::Performer>>> = RefCell::default();
 }
 
 /// The page for one movie or series: backdrop, title, facts, cast, trailer, and Play or the episodes.
@@ -179,7 +179,15 @@ pub(crate) fn DetailPage(
     });
     let guide_now = guide.read().clone().flatten();
     // A movie's cast photos (TVmaze covers series only), each filled in as Wikipedia answers.
-    let mut photos = use_signal(HashMap::<String, String>::new);
+    let mut photos = use_signal(HashMap::<String, xtream::wiki::Performer>::new);
+    // Each actor's IMDb profile when Wikidata knows it, otherwise IMDb's search for their name.
+    let imdb = move |name: &str| {
+        photos
+            .read()
+            .get(name)
+            .and_then(|p| p.imdb.clone())
+            .unwrap_or_else(|| xtream::wiki::imdb_search(name))
+    };
     let (c, target) = (client.clone(), row.target.clone());
     use_effect(move || {
         let Target::Movie { .. } = target else { return };
@@ -195,8 +203,8 @@ pub(crate) fn DetailPage(
         {
             let known = PORTRAITS.with(|p| p.borrow().get(&name).cloned());
             match known {
-                Some(Some(photo)) => {
-                    photos.write().insert(name, photo);
+                Some(Some(found)) => {
+                    photos.write().insert(name, found);
                 }
                 Some(None) => {}
                 None => {
@@ -205,12 +213,12 @@ pub(crate) fn DetailPage(
                         // Staggered, not all at once: Wikipedia limits bursts.
                         rstreamkit::mse::sleep(std::time::Duration::from_millis(150 * n as u64))
                             .await;
-                        let photo = c.portrait(&name).await;
-                        PORTRAITS.with(|p| p.borrow_mut().insert(name.clone(), photo.clone()));
-                        if let Some(photo) = photo
+                        let found = c.performer(&name).await;
+                        PORTRAITS.with(|p| p.borrow_mut().insert(name.clone(), found.clone()));
+                        if let Some(found) = found
                             && photos.try_peek().is_ok()
                         {
-                            photos.write().insert(name, photo);
+                            photos.write().insert(name, found);
                         }
                     });
                 }
@@ -524,7 +532,7 @@ pub(crate) fn DetailPage(
                     h2 { "Cast" }
                     div { class: "cast portraits",
                         for p in g.cast.iter().take(24) {
-                            div { class: "face", key: "{p.name}",
+                            a { class: "face", key: "{p.name}", href: "{xtream::wiki::imdb_search(&p.name)}", target: "_blank", rel: "noopener noreferrer", title: "{p.name} on IMDb",
                                 if let Some(photo) = &p.photo {
                                     img { src: "{photo}", alt: "", loading: "lazy", decoding: "async" }
                                 } else {
@@ -536,13 +544,13 @@ pub(crate) fn DetailPage(
                         }
                     }
                 }
-            } else if !photos.read().is_empty() {
+            } else if photos.read().values().any(|p| p.photo.is_some()) {
                 div { class: "d-sec",
                     h2 { "Cast" }
                     div { class: "cast portraits",
                         for name in people(&cast).into_iter().take(12) {
-                            div { class: "face", key: "{name}",
-                                if let Some(photo) = photos.read().get(name) {
+                            a { class: "face", key: "{name}", href: "{imdb(name)}", target: "_blank", rel: "noopener noreferrer", title: "{name} on IMDb",
+                                if let Some(photo) = photos.read().get(name).and_then(|p| p.photo.clone()) {
                                     img { src: "{photo}", alt: "", loading: "lazy", decoding: "async" }
                                 } else {
                                     span { class: "initial", "{name.chars().next().unwrap_or('?')}" }
@@ -560,7 +568,7 @@ pub(crate) fn DetailPage(
                     h2 { "Cast" }
                     div { class: "cast",
                         for name in people(&cast) {
-                            div { class: "person", key: "{name}",
+                            a { class: "person", key: "{name}", href: "{imdb(name)}", target: "_blank", rel: "noopener noreferrer", title: "{name} on IMDb",
                                 strong { "{name}" }
                             }
                         }

@@ -1026,11 +1026,19 @@ impl Client {
         .flatten()
     }
 
-    /// A performer's photo from Wikipedia (see [`wiki`]); `None` without a page about them.
-    pub async fn portrait(&self, name: &str) -> Option<String> {
+    /// A performer's photo from Wikipedia and IMDb profile from Wikidata (see [`wiki`]); `None`
+    /// without a Wikipedia page about them.
+    pub async fn performer(&self, name: &str) -> Option<wiki::Performer> {
         for url in wiki::summary_urls(name) {
-            if let Ok(Some(photo)) = self.get_with(url, |b| Ok(wiki::photo(b))).await {
-                return Some(photo);
+            if let Ok(Some(mut found)) = self.get_with(url, |b| Ok(wiki::performer(b))).await {
+                if let Some(item) = &found.wikidata {
+                    found.imdb = self
+                        .get_with(wiki::imdb_claims_url(item), |b| Ok(wiki::imdb_profile(b)))
+                        .await
+                        .ok()
+                        .flatten();
+                }
+                return Some(found);
             }
         }
         None

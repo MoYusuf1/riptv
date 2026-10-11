@@ -413,10 +413,10 @@ async fn proxy(
         .filter(|v| !v.is_empty())
         .cloned()
         .unwrap_or_else(|| HeaderValue::from_static(FALLBACK_UA));
-    // Wikipedia and TVmaze ask apps to say who they are; providers get the browser's own.
+    // Wikipedia, Wikidata and TVmaze ask apps to say who they are; providers get the browser's own.
     let ua = match url.host_str() {
         Some(h)
-            if [".wikipedia.org", ".tvmaze.com"]
+            if [".wikipedia.org", ".wikidata.org", ".tvmaze.com"]
                 .iter()
                 .any(|d| h.ends_with(d)) =>
         {
