@@ -502,6 +502,16 @@ body{font-size:.875rem}
 .row strong{font-weight:600}
 .d-sec h2{font-size:1.35rem;font-weight:700}
 .topbar.detail-mode .who{padding:.25rem}
+/* The account button wears the profile's own avatar: its colour as a gradient, a fine bright
+   edge, an accent ring while hovered or open; on a title's page, the size of the back button. */
+.who{gap:.6rem;height:2.7rem;padding:0 1rem 0 .32rem;border:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.05);font-size:.9rem;font-weight:600;transition:background .2s var(--ease)}
+.who:hover,.who[aria-expanded=true]{background:rgba(255,255,255,.1)}
+.who i{width:2.05rem;height:2.05rem;background:linear-gradient(150deg,color-mix(in srgb,var(--c) 82%,#fff),color-mix(in srgb,var(--c) 70%,#000));box-shadow:inset 0 0 0 1px rgba(255,255,255,.22),0 4px 12px color-mix(in srgb,var(--c) 35%,transparent);font-size:.9rem;transition:box-shadow .2s var(--ease)}
+.who:hover i,.who[aria-expanded=true] i{box-shadow:inset 0 0 0 1px rgba(255,255,255,.22),0 0 0 2px var(--bg),0 0 0 3.5px var(--accent)}
+.topbar.detail-mode{inset:1.2rem 2rem auto auto;height:auto;padding:0;border:0;background:transparent;box-shadow:none;backdrop-filter:none}
+.topbar.detail-mode .who{height:auto;padding:0;border:0;background:transparent}
+.topbar.detail-mode .who i{width:2.9rem;height:2.9rem;font-size:1.15rem;box-shadow:inset 0 0 0 1px rgba(255,255,255,.25),0 8px 24px rgba(0,0,0,.45)}
+.topbar.detail-mode .who:hover i,.topbar.detail-mode .who[aria-expanded=true] i{box-shadow:inset 0 0 0 1px rgba(255,255,255,.25),0 0 0 2px rgba(0,0,0,.5),0 0 0 3.5px var(--accent)}
 /* The full-page player at Netflix's proportions: big, legible controls (phones keep theirs). */
 .w-bottom{padding:4rem 2rem 1.2rem}
 .w-row{gap:.55rem}
@@ -912,12 +922,17 @@ fn storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok()?
 }
 
+/// The signed-in profile's avatar colour, for the account button.
+#[derive(Clone, Copy)]
+pub(crate) struct ProfileColor(pub(crate) Signal<&'static str>);
+
 #[component]
 fn App() -> Element {
     let session = use_context_provider(|| Signal::new(None::<Client>));
     let quit = quit::use_quit_state();
     updates::use_updates();
     use_context_provider(|| Signal::new(String::new())); // the account name, if any
+    use_context_provider(|| ProfileColor(Signal::new("#e11d48"))); // its avatar's colour
     // The browser/ffmpeg path is the stable default; Rust playback is opt-in.
     use_context_provider(|| {
         Signal::new(
@@ -1652,6 +1667,7 @@ fn Browse() -> Element {
     // Shown only if the user gave the account a name; otherwise just the avatar, so the server
     // isn't on screen.
     let account_name = playlist();
+    let profile_color = use_context::<ProfileColor>().0();
     let initial = account_name.chars().next();
     rsx! {
         header { class: if open().is_some() { "topbar detail-mode" } else { "topbar" },
@@ -1671,6 +1687,7 @@ fn Browse() -> Element {
                 onkeydown: move |e| if e.key() == Key::Escape { account_open.set(false) },
                 button {
                     class: if initial.is_some() { "who" } else { "who solo" },
+                    style: "--c:{profile_color}",
                     aria_label: "Account",
                     aria_expanded: account_open(),
                     onclick: move |_| account_open.set(!account_open()),

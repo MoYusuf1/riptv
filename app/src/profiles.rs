@@ -110,6 +110,7 @@ enum Screen {
 pub fn Login() -> Element {
     let mut session = use_context::<Signal<Option<Client>>>();
     let mut account = use_context::<Signal<String>>();
+    let mut profile_color = use_context::<crate::ProfileColor>();
     let mut profiles = use_signal(load);
     let mut screen = use_signal(|| Screen::Choose);
     let mut managing = use_signal(|| false);
@@ -134,6 +135,7 @@ pub fn Login() -> Element {
                     }
                     busy.set(None);
                     account.set(p.name.clone());
+                    profile_color.0.set(p.color());
                     crate::shelves::set_scope(&p.id);
                     session.set(Some(client));
                 }
