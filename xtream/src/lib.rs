@@ -26,7 +26,7 @@ pub mod wiki;
 pub use art::{Art, sized as sized_art};
 use playlist::Playlist;
 pub use sniff::Sniff;
-pub use text::contains_lowercase;
+pub use text::{contains_lowercase, display_title};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

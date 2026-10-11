@@ -166,6 +166,11 @@ svg{width:1.1rem;height:1.1rem}
 .sort-btn{display:inline-flex;align-items:center;gap:.4rem;padding:.4rem .8rem;border-radius:999px;background:var(--row);font-size:.8rem;color:var(--dim)}
 .sort-btn:hover{color:var(--text)}
 .sort-menu{min-width:11rem}
+.season-btn{color:var(--text)}
+.season-btn svg{width:.9rem;height:.9rem;transition:transform .2s var(--ease)}
+.season-btn[aria-expanded=true] svg{transform:rotate(180deg)}
+.season-menu{min-width:10rem;max-height:18rem;overflow-y:auto}
+.d-sec.raised{z-index:36;content-visibility:visible}
 .menu button.on{color:var(--accent);font-weight:600}
 .menu:has(.setting){min-width:15rem}
 .menu .setting{display:flex;align-items:center;justify-content:space-between;gap:1rem}
@@ -245,8 +250,6 @@ svg{width:1.1rem;height:1.1rem}
 .ep-heading{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1rem}
 .ep-heading h2{margin:0}
 .ep-tools{display:flex;align-items:center;gap:.6rem;color:var(--dim);font-size:.78rem}
-.season-select{max-width:10rem;padding:.5rem 1.8rem .5rem .8rem;border:1px solid var(--hair);border-radius:999px;background:var(--row);color:var(--text);outline:0;cursor:pointer}
-.season-select:focus-visible{outline:2px solid var(--accent)}
 .eps{display:flex;gap:1.15rem;overflow-x:auto;padding:.15rem .1rem 1rem;scrollbar-width:thin;scroll-snap-type:x proximity}
 .epc{flex:0 0 clamp(14rem,13vw,18rem);min-width:0;scroll-snap-align:start}
 .thumb{position:relative;display:grid;place-items:center;width:100%;aspect-ratio:16/9;overflow:hidden;border-radius:12px;background:var(--row);color:var(--faint);font-size:1.4rem;font-weight:700}
@@ -281,7 +284,6 @@ svg{width:1.1rem;height:1.1rem}
 .channel-preview{position:fixed;z-index:45;display:flex;flex-direction:column;gap:.5rem;width:min(320px,calc(100vw - 24px));padding:1rem 1.1rem;border:1px solid rgba(255,125,146,.22);border-radius:16px;background:#22171e;box-shadow:0 16px 48px rgba(0,0,0,.5);text-align:left;pointer-events:none;animation:fade .16s var(--ease)}
 /* A hover card: a touch screen has no hover to end it, so it would stay over the list. */
 @media(hover:none){.channel-preview{display:none}}
-.channel-preview .preview-label{color:var(--accent);font-size:.61rem;font-weight:700;letter-spacing:.09em}
 .channel-preview strong{font-size:.98rem;line-height:1.35;white-space:normal}
 .channel-preview time{font-size:.75rem;color:var(--dim);font-variant-numeric:tabular-nums}
 .channel-preview .preview-description{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:4;font-size:.8rem;color:var(--dim);line-height:1.5}
@@ -531,6 +533,7 @@ const PIP: &str = "M4 5h16a1 1 0 011 1v7M3 6v11a1 1 0 001 1h6M13 14h7a1 1 0 011 
 const PIN: &str = "M9 3h6M10 3v6l-4 4v2h12v-2l-4-4V3M12 15v6";
 const SORT: &str = "M3 6h11M3 12h7M3 18h4M17 6v12m0 0l-3-3m3 3l3-3";
 const CHECK: &str = "M5 12l5 5 9-10";
+const CHEVRON: &str = "M6 9l6 6 6-6";
 const INFO: &str = "M12 3a9 9 0 100 18 9 9 0 000-18zM12 8h.01M11 12h1v5h1";
 const HEART: &str =
     "M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0112 7.3a4.3 4.3 0 017.5 2.5C19.5 15.4 12 20 12 20z";
@@ -1107,7 +1110,7 @@ fn rows(
                     .unwrap_or("mp4");
                 Row {
                     key: s.stream_id,
-                    title: s.name.clone(),
+                    title: xtream::display_title(&s.name).to_owned(),
                     icon: s.stream_icon.clone(),
                     category: s.category_id,
                     score: score(&s.rating),
@@ -1124,7 +1127,7 @@ fn rows(
             |s| (&s.name, s.category_id),
             |s| Row {
                 key: s.series_id,
-                title: s.name.clone(),
+                title: xtream::display_title(&s.name).to_owned(),
                 icon: s.cover.clone(),
                 category: s.category_id,
                 score: score(&s.rating),

@@ -134,6 +134,7 @@ pub(crate) fn DetailPage(
     let client = use_hook(|| session.read().clone().expect("logged in"));
     let mut expanded = use_signal(|| false);
     let mut chosen = use_signal(|| None::<u64>);
+    let mut seasons_open = use_signal(|| false);
     let mut listed = use_signal(|| {
         let (kind, id) = identity(&row);
         shelves::is_mine(kind, id)
@@ -231,7 +232,7 @@ pub(crate) fn DetailPage(
     let title = if details.name.is_empty() {
         row.title.clone()
     } else {
-        details.name.clone()
+        xtream::display_title(&details.name).to_owned()
     };
     let poster = details.poster.clone().or_else(|| row.icon.clone());
     let real_backdrop = details.backdrop.clone();
@@ -373,6 +374,10 @@ pub(crate) fn DetailPage(
 
     rsx! {
         section { class: "detail",
+            // At the page's root: inside a section, content-visibility would confine it to that section.
+            if seasons_open() {
+                button { class: "scrim", aria_label: "Close menu", onclick: move |_| seasons_open.set(false) }
+            }
             div { class: "detail-return",
                 button { class: "icon-btn", aria_label: "Back", onclick: move |_| onback.call(()), Icon { d: BACK } }
             }
@@ -439,21 +444,39 @@ pub(crate) fn DetailPage(
                 }
             }
             if !spans.is_empty() {
-                div { class: "d-sec",
+                // Raised above the page's scrim while the season menu is open, so it stays clickable.
+                div { class: if seasons_open() { "d-sec raised" } else { "d-sec" },
                     div { class: "ep-heading",
                         h2 { "Episodes" }
                         div { class: "ep-tools",
                             span { "{spans.iter().find(|s| Some(s.0) == season_now).map_or(0, |s| s.1.len())} episodes" }
                             if spans.len() > 1 {
-                                select {
-                                    class: "season-select",
-                                    aria_label: "Season",
-                                    value: "{season_now.unwrap_or_default()}",
-                                    onchange: move |e| {
-                                        if let Ok(n) = e.value().parse::<u64>() { chosen.set(Some(n)); }
-                                    },
-                                    for (number, _) in spans.iter() {
-                                        option { key: "{number}", value: "{number}", "Season {number}" }
+                                // The app's own menu, not the browser's dropdown.
+                                div { class: "sortwrap",
+                                    onkeydown: move |e| if e.key() == Key::Escape { seasons_open.set(false) },
+                                    button {
+                                        class: "sort-btn season-btn",
+                                        aria_label: "Season",
+                                        aria_haspopup: "menu",
+                                        aria_expanded: seasons_open(),
+                                        onclick: move |_| seasons_open.set(!seasons_open()),
+                                        "Season {season_now.unwrap_or_default()}"
+                                        Icon { d: CHEVRON }
+                                    }
+                                    if seasons_open() {
+                                        div { class: "menu season-menu", role: "menu",
+                                            for (number, _) in spans.iter().cloned() {
+                                                button {
+                                                    key: "{number}",
+                                                    role: "menuitemradio",
+                                                    aria_checked: Some(number) == season_now,
+                                                    class: if Some(number) == season_now { "on" } else { "" },
+                                                    onclick: move |_| { chosen.set(Some(number)); seasons_open.set(false); },
+                                                    span { "Season {number}" }
+                                                    if Some(number) == season_now { Icon { d: CHECK } }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
