@@ -12,6 +12,10 @@ download, the hosted site and the phone are the same RIPTV; only the edges diffe
   nothing until the numbers say where the time goes.
 - **UI review on a real account:** you go through the app on your provider and list anything
   that still looks rough. Polish so far was checked on the mock provider and in screenshots.
+- **Known rough spots:** the plain browser dropdown for seasons; provider tags in titles
+  ("EN - Martha Bakes"); two places with explanatory text against the no-eyebrows rule (the
+  "ON NOW · PROVIDER GUIDE" label on channel previews, the "Converted by ffmpeg because…" note
+  in the movie settings menu).
 - Done when: 0.2.9 is out, #1 has measurements, and the review list is empty.
 
 ## 2. Hosted RIPTV (a website with sign-in, on a VPS with Supabase)
@@ -64,15 +68,25 @@ Done when your buddy can deploy it from the guide and two accounts can't see eac
 
 ## 3. Phone (the hosted site on a phone)
 
-Same design, tuned for touch. The app already switches to a phone layout (the tab bar) and is
-installable (it has a manifest and service worker); hosting gives it the HTTPS that iPhone needs
-to install it to the Home Screen.
+Same design language (colours, type, cards, motion); a phone arrangement inspired by Netflix's.
+The desktop keeps the layout it has.
 
-- Touch: bigger tap targets, swipe between seasons and channels, no hover-only features.
-- iPhone specifics: the notch and home bar (safe areas), Safari's own fullscreen video,
-  playback continuing in Picture in Picture.
-- Checked the same way as desktop: Playwright on phone-sized screens, plus a real iPhone and
-  Android phone.
+- **No bottom tab bar.** On iPhone, Safari's own toolbar sits at the bottom; a second bar there
+  fights it. Instead, a top header with media-type chips: **Shows · Movies · Live TV · My List**,
+  pinned, shrinking as you scroll.
+- **A featured title** at the top of Shows and Movies: big artwork, title, genres, **Play** and
+  **My List**. Chosen from what you're partway through, then the newest titles *with good art*
+  (provider posters vary; TVmaze fills series art; TMDB could add title logos).
+- **Rows by category**, scrolling sideways: Continue watching, My List, then the provider's
+  categories.
+- **Live TV is its own thing**, about what's on now, not posters: a channel list with logo, the
+  current programme and a thin progress bar, favourites first; tapping a channel docks the
+  player at the top while the list scrolls under it; in fullscreen, swipe up or down to change
+  channel.
+- Installable to the Home Screen (manifest and service worker exist; hosting provides the HTTPS
+  iPhone needs). Touch-sized targets, safe areas for the notch and home bar, Safari's own
+  fullscreen video, Picture in Picture.
+- Checked with Playwright on phone-sized screens and on a real iPhone and Android phone.
 - Done when the phone review list is empty on both.
 
 ## 4. Later
