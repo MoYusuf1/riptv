@@ -8,16 +8,21 @@ Your browser opens automatically. No Rust or FFmpeg setup.
 
 ## What improved
 
-| Since 0.2.7 | Before | Now |
+| Since 0.2.8 | Before | Now |
 |---|---|---|
-| 4K HEVC movies on a Mac | re-encoded | played as they are: starts in half the time |
-| Converting on Mac and Windows | processor | graphics hardware |
-| An offline channel | "keeps dropping" after 4 tries | "This channel is offline", at once |
-| Stream info button | blank for a second | instant |
-| Account menu | stayed open, see-through | closes when you click away, solid |
+| Shows your provider describes thinly | numbered episodes, no pictures | episode pictures, names, summaries and dates from TVmaze |
+| Cast | names only | photos, and a link to each actor's IMDb profile |
+| Movie and episode start | a spinning dot | the real percentage, filling to 100% as it plays |
+| Seeking | spinner or a false 100% | counts up honestly; a time bubble while you drag |
+| On a big screen | small, far away | scales with the window; Netflix-sized player controls |
+| Converting video | up to 966 MB of memory | 462 MB, just as fast |
+| Downloads | 5.5–8.1 MB | 5.3–7.3 MB |
 
-Also: grid cards line up, ratings read the same everywhere, and channel previews no longer get
-stuck open on phones. Every release's numbers: [What changed, in numbers](https://github.com/MoYusuf1/riptv/blob/main/docs/changes.md).
+Also: a polished account button in your profile's colour, matching back buttons, a cleaner facts
+card, the season picker as a proper menu, titles without provider tags (EN -, |US|), channels
+with no sound that now play, offline channels that say so at once, and the Experimental player
+handing over to the standard one when it stalls. Every release's numbers:
+[What changed, in numbers](https://github.com/MoYusuf1/riptv/blob/main/docs/changes.md).
 
 Apps are unsigned, so your computer may show a security warning.
 The checksums and FFmpeg source download are for verification, not for running the app.

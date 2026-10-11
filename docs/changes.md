@@ -5,9 +5,9 @@ release's notes (`docs/release-notes.md`), and the published release also lists 
 How each number was measured is in brackets; live-channel start times are in
 [live-playback.md](live-playback.md).
 
-## Unreleased
+## 0.2.9
 
-| What | 0.2.8 | Next |
+| What | 0.2.8 | 0.2.9 |
 |---|---|---|
 | Live channel with no sound track, converted (mock 576i interlaced) | never played; 8 provider requests in 2 s, then gave up | first picture in 0.77 s, 1 request |
 | Same, 150 ms provider delay | never played | 1.02 s |
@@ -27,6 +27,15 @@ How each number was measured is in brackets; live-channel start times are in
 | RIPTV server's own memory while streaming | 7–8 MB | 7–8 MB |
 | Server program (Linux, before the bundled files) | 3.41 MB | 2.66 MB (TLS on ring instead of the aws-lc C library) |
 | Downloads (Windows / Linux / Mac Apple Silicon / Mac Intel) | 7.5 / 8.1 / 5.5 / 6.1 MB | 7.1 / 7.3 / 5.3 / 5.8 MB |
+| Cast members linked to IMDb (mock movie with 4 real actors) | none | 4 of 4 to their exact profile (Wikidata); others to IMDb's search |
+| Experimental player stalling on a real movie (A Carol for Two) | stuck at 72% for good | standard player takes over after 8 s; playing at 15.2 s |
+| Movie and episode start | a ring with a dot | a ring with the real percentage, sweeping to 100% as the picture starts |
+| Seeking in a converted movie (300 ms provider) | spinner, or a false 100% | counts up from 8%; picture and 100% at 1.25–1.65 s |
+| Root text size at 1440 / 2000 px wide | 16 / 16 px | 16.2 / 19 px (the whole UI scales with the window) |
+| Player controls (icons) | 1.25rem | 2rem, with 3.4rem buttons |
+| Back button, title page vs player | 2rem dark vs 2.9rem light, different places | the same 55 px button in the same place |
+| Account button on a title page | 41×34 px oval | 55 px circle in the profile's colour, mirroring the back button |
+| Section names | Live TV · Movies · TV Shows | Live · Movies · Shows |
 
 ## 0.2.8
 
