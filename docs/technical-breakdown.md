@@ -332,9 +332,24 @@ drag while the controls are fading.
 
 ---
 
-## 7. Starting work: a checklist for the next AI
+## 7. Working on GitHub: issues, labels, milestones
 
-1. Read `docs/reference.md` (architecture) and `docs/live-playback.md` (measurements). Then skim
+Every piece of planned work is a GitHub issue; the [roadmap](roadmap.md) is the overview and
+links to the milestones.
+
+- **One issue per task**, with a short "Done when:" line that says how to tell it's finished.
+- **Milestones** group issues into the roadmap's stages: `0.2.9 – desktop polish`,
+  `Hosted RIPTV`, `Phone`. Unscheduled work has no milestone.
+- **Labels** say the area: `desktop`, `phone`, `hosted`, `playback`. `decision` means the owner
+  has to choose something before work starts: ask, don't assume.
+- **Commits** reference their issue: `Fixes #7` in the message closes it when pushed to main.
+  Work found along the way gets its own issue rather than growing the current one.
+- **Measurements** go in the issue as comments while working, and in `docs/changes.md` when
+  released.
+
+## 8. Starting work: a checklist for the next AI
+
+1. Read `docs/roadmap.md` and the open issues of the current milestone. Then read `docs/reference.md` (architecture) and `docs/live-playback.md` (measurements). Then skim
    `proxy/src/lib.rs`, `proxy/src/live.rs`, `proxy/src/compat.rs`, `app/src/standard.rs` and
    `app/src/playback.rs`.
 2. Run `./scripts/setup.sh`, then `cargo riptv --logs`, and open a Public TV channel. Watch

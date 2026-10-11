@@ -1,6 +1,9 @@
 # Roadmap
 
-What's next, in order, and what "done" means for each. Finished work moves to
+What's next, in order, and what "done" means for each. Each item is a GitHub issue, grouped by
+milestone: [0.2.9 – desktop polish](https://github.com/MoYusuf1/riptv/milestone/1),
+[Hosted RIPTV](https://github.com/MoYusuf1/riptv/milestone/2),
+[Phone](https://github.com/MoYusuf1/riptv/milestone/3). Finished work moves to
 [changes.md](changes.md) with its numbers. One rule throughout: **one app, one look**. The
 download, the hosted site and the phone are the same RIPTV; only the edges differ.
 
