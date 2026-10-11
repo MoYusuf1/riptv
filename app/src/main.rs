@@ -333,6 +333,16 @@ svg{width:1.1rem;height:1.1rem}
 @starting-style{.ring-fill{stroke-dashoffset:138.23}}
 .loader-logo{width:54%;height:54%;object-fit:contain;animation:breathe 2.4s ease-in-out infinite}
 .loader-dot{width:.5rem;height:.5rem;border-radius:50%;background:#fff;animation:breathe 1.6s ease-in-out infinite}
+@property --p{syntax:'<integer>';inherits:true;initial-value:0}
+.loader.pct{transition:--p .9s var(--ease)}
+.loader.pct svg{animation-duration:3.2s}
+.loader.pct .ring-fill{stroke-dashoffset:calc(138.23 * (100 - var(--p)) / 100);transition:none}
+.loader-pct{display:flex;align-items:baseline;color:#fff;font-size:1.05rem;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.loader-pct::before{counter-reset:p var(--p);content:counter(p)}
+.loader-pct small{margin-left:.05em;font-size:.6em;font-weight:500;opacity:.55}
+.hud.landing{animation:landing 1.1s var(--ease) forwards;pointer-events:none}
+.hud.landing .loader.pct{transition-duration:.55s}
+@keyframes landing{0%,55%{opacity:1;transform:none}100%{opacity:0;transform:scale(1.08)}}
 @keyframes breathe{50%{opacity:.55;transform:scale(.92)}}
 .spinner{width:2.6rem;height:2.6rem;border:2.5px solid rgba(255,255,255,.18);border-top-color:#fff;border-radius:50%;animation:spin .9s linear infinite}
 @keyframes spin{to{transform:rotate(1turn)}}

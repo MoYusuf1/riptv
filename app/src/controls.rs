@@ -81,14 +81,20 @@ pub fn Skip(back: bool) -> Element {
 /// decoded, 4 playing. Between stages it eases toward the next mark. With `icon` (a channel logo),
 /// the logo sits inside. All motion is CSS (compositor-only transforms): no timers, no re-renders.
 #[component]
-pub fn LoadRing(stage: u8, icon: Option<String>) -> Element {
+pub fn LoadRing(stage: u8, icon: Option<String>, percent: Option<u32>) -> Element {
     // Circumference of r = 22.
     const LENGTH: f64 = 138.23;
     let filled = [0.12, 0.45, 0.68, 0.88, 1.0][usize::from(stage.min(4))];
     let offset = LENGTH * (1.0 - filled);
     let logo = icon.filter(|src| src.starts_with("http"));
+    // With a percentage, the ring and the number are both drawn from one animated `--p`, so
+    // they count up together, smoothly, with no script running per frame.
+    let (class, style, now) = match percent {
+        Some(p) => ("loader pct", format!("--p:{}", p.min(100)), p.min(100)),
+        None => ("loader", String::new(), (filled * 100.0) as u32),
+    };
     rsx! {
-        div { class: "loader", role: "progressbar", "aria-label": "Loading", "aria-valuenow": "{(filled * 100.0) as u32}",
+        div { class, style, role: "progressbar", "aria-label": "Loading", "aria-valuenow": "{now}",
             svg { view_box: "0 0 50 50",
                 defs {
                     linearGradient { id: "ring-grad", x1: "0", y1: "0", x2: "1", y2: "1",
@@ -97,9 +103,15 @@ pub fn LoadRing(stage: u8, icon: Option<String>) -> Element {
                     }
                 }
                 circle { class: "ring-track", cx: "25", cy: "25", r: "22" }
-                circle { class: "ring-fill", cx: "25", cy: "25", r: "22", style: "stroke-dashoffset:{offset:.1}" }
+                if percent.is_some() {
+                    circle { class: "ring-fill", cx: "25", cy: "25", r: "22" }
+                } else {
+                    circle { class: "ring-fill", cx: "25", cy: "25", r: "22", style: "stroke-dashoffset:{offset:.1}" }
+                }
             }
-            if let Some(src) = logo {
+            if percent.is_some() {
+                span { class: "loader-pct", small { "%" } }
+            } else if let Some(src) = logo {
                 img { class: "loader-logo", src: "{src}", alt: "", decoding: "async" }
             } else {
                 i { class: "loader-dot" }

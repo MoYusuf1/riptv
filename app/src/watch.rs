@@ -103,6 +103,27 @@ pub(crate) fn Watch(
     let mut waiting = use_signal(|| true);
     // How far the current source has got with starting, for the progress ring.
     let mut load_stage = use_signal(|| 0_u8);
+    // How close the title is to playing, as a percentage that only moves forward: deciding how
+    // to play it, the request, then each second buffered (3 s is plenty to start), the first
+    // frame, playing.
+    let mut ready = use_signal(|| 0_u32);
+    // A moment after a start, to let the ring land on 100% instead of vanishing short of it.
+    let mut landing = use_signal(|| false);
+    use_effect(move || {
+        let buffered = (ahead() - pos()).max(0.0);
+        let target = match load_stage() {
+            0 => 8,
+            1 => 25,
+            2 => 45 + ((buffered / 3.0).min(1.0) * 45.0) as u32,
+            3 => 92,
+            _ => 100,
+        };
+        // A new stream (a seek in a converted title) starts again from the bottom.
+        let now = *ready.peek();
+        if target > now || load_stage() <= 1 && target < now {
+            ready.set(target);
+        }
+    });
     let mut muted = use_signal(move || saved_volume == 0);
     let mut volume = use_signal(move || saved_volume);
     let mut rate = use_signal(move || saved_speed);
@@ -464,7 +485,7 @@ pub(crate) fn Watch(
                         p { "{why}" }
                     }
                 } else {
-                    div { class: "w-load", LoadRing { stage: 0 } }
+                    div { class: "w-load", LoadRing { stage: 0, percent: Some(8) } }
                 }
             } else {
                 video {
@@ -486,7 +507,18 @@ pub(crate) fn Watch(
                     // A new source (its own element) starts the ring over.
                     onloadstart: move |_| load_stage.set(1),
                     onloadeddata: move |_| if *load_stage.peek() < 3 { load_stage.set(3) },
-                    onplaying: move |_| { load_stage.set(4); waiting.set(false); paused.set(false); },
+                    onplaying: move |_| {
+                        if *load_stage.peek() < 4 && *ready.peek() < 100 {
+                            landing.set(true);
+                            spawn(async move {
+                                rstreamkit::mse::sleep(Duration::from_millis(1100)).await;
+                                landing.set(false);
+                            });
+                        }
+                        load_stage.set(4);
+                        waiting.set(false);
+                        paused.set(false);
+                    },
                     oncanplay: move |_| waiting.set(false),
                     onloadedmetadata: move |_| {
                         if *load_stage.peek() < 2 {
@@ -575,10 +607,16 @@ pub(crate) fn Watch(
                         }
                     },
                 }
-                if waiting() && !paused() {
-                    div { class: "hud",
-                        if load_stage() < 4 { LoadRing { stage: load_stage() } } else { i { class: "spinner" } }
+                // One ring from the start to the picture: when it's ready the same ring sweeps on to
+                // 100% and fades (a new element would have nothing to animate from).
+                // Until it plays: `canplay` clears `waiting` a moment before `playing`, which would
+                // drop the ring for an instant and bring back a new one.
+                if (load_stage() < 4 && !paused()) || landing() {
+                    div { class: if landing() { "hud landing" } else { "hud" },
+                        LoadRing { stage: load_stage(), percent: Some(if landing() { 100 } else { ready() }) }
                     }
+                } else if waiting() && !paused() {
+                    div { class: "hud", i { class: "spinner" } }
                 }
                 if paused() && !waiting() && up_next().is_none() {
                     button { class: "bigplay", aria_label: "Play", onclick: move |_| toggle_watch(), Icon { d: PLAY } }
