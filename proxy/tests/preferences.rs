@@ -5,6 +5,7 @@ use std::{cell::RefCell, collections::HashMap};
 thread_local! {
     static ITEMS: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
     static PROFILE: RefCell<String> = RefCell::new("test-a".into());
+    static WRITES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 struct MemoryStorage;
@@ -13,6 +14,7 @@ impl MemoryStorage {
         Ok(ITEMS.with(|items| items.borrow().get(name).cloned()))
     }
     fn set_item(&self, name: &str, value: &str) -> Result<(), ()> {
+        WRITES.with(|n| n.set(n.get() + 1));
         ITEMS.with(|items| items.borrow_mut().insert(name.into(), value.into()));
         Ok(())
     }
@@ -27,6 +29,16 @@ mod shelves {
 }
 #[path = "../../app/src/preferences.rs"]
 mod preferences;
+
+#[test]
+fn unchanged_preferences_do_not_write_to_storage() {
+    preferences::update(|p| p.volume = 37);
+    let before = WRITES.with(|n| n.get());
+    preferences::update(|p| p.volume = 37);
+    assert_eq!(WRITES.with(|n| n.get()), before);
+    preferences::update(|p| p.volume = 38);
+    assert_eq!(WRITES.with(|n| n.get()), before + 1);
+}
 
 #[test]
 fn old_preferences_default_to_no_pins() {
@@ -85,4 +97,29 @@ fn pin_limit_still_allows_unpinning() {
     preferences::toggle_pin(&mut pins, 200);
     assert_eq!(pins.len(), 100);
     assert!(pins.contains(&200));
+}
+
+#[test]
+fn live_modes_and_approved_backups_persist_without_storing_urls() {
+    assert!(!preferences::load().smoother_live);
+    preferences::update(|p| {
+        p.smoother_live = true;
+        preferences::set_backup(p, 1, Some(2));
+    });
+    assert!(preferences::load().smoother_live);
+    assert_eq!(preferences::load().live_backups, vec![(1, 2)]);
+    preferences::update(|p| preferences::set_backup(p, 1, Some(3)));
+    assert_eq!(preferences::load().live_backups, vec![(1, 3)]);
+    preferences::update(|p| preferences::set_backup(p, 1, Some(1)));
+    assert!(preferences::load().live_backups.is_empty());
+    preferences::update(|p| {
+        for id in 0..100 {
+            preferences::set_backup(p, id, Some(id + 100));
+        }
+    });
+    assert_eq!(preferences::load().live_backups.len(), 64);
+    preferences::update(|p| preferences::set_backup(p, 0, None));
+    assert_eq!(preferences::load().live_backups.len(), 63);
+    PROFILE.with(|profile| *profile.borrow_mut() = "test-backup-other".into());
+    assert!(preferences::load().live_backups.is_empty());
 }

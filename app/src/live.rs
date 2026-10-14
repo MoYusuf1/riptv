@@ -11,6 +11,7 @@ const LIVE_MEDIA_ACTIONS: &[(&str, media_session::Action)] = &[
 
 /// Shown, with the progress ring, while a dropped live stream is opened again.
 pub(crate) const RECONNECTING: &str = "Reconnecting…";
+const RECOVERING: &str = "Provider interrupted; recovering…";
 
 /// Shown, with the spinner, when a channel takes unusually long to start.
 /// Whether a status means "on its way" (the ring), as opposed to playing or having given up.
@@ -23,6 +24,7 @@ pub(crate) fn starting(status: &str) -> bool {
             | "Trying a compatible stream…"
             | "Re-encoding the video…"
             | RECONNECTING
+            | RECOVERING
             | STILL_STARTING
     )
 }
@@ -50,6 +52,7 @@ pub(crate) fn LivePlayer(
     url: String,
     /// The channel's logo, shown while it starts and for radio.
     icon: Option<String>,
+    catalog: Snapshot<Library>,
     onchannel: EventHandler<ChannelAction>,
 ) -> Element {
     let mut paused = use_signal(|| false);
@@ -57,10 +60,14 @@ pub(crate) fn LivePlayer(
     let session = use_context::<Signal<Option<Client>>>();
     let rust_sound = use_context::<Signal<bool>>();
     let client = use_hook(|| session.read().clone().expect("logged in"));
+    let mut selected_id = use_signal(|| id);
+    let mut selected_title = use_signal(|| title.clone());
+    let mut selected_url = use_signal(|| url.clone());
+    let mut selected_icon = use_signal(|| icon.clone());
     let media = use_hook(|| Rc::new(RefCell::new(None::<media_session::Session>)));
     let media_for_install = media.clone();
-    let media_title = title.clone();
     use_effect(move || {
+        let media_title = selected_title();
         let installed = media_session::Session::install(
             &media_title,
             "Live · RIPTV",
@@ -91,7 +98,8 @@ pub(crate) fn LivePlayer(
     use_drop(move || {
         media.borrow_mut().take();
     });
-    let saved_volume = u32::from(use_hook(preferences::load).volume);
+    let saved = use_hook(preferences::load);
+    let saved_volume = u32::from(saved.volume);
     let mut status = use_signal(|| "Starting playback…".to_string());
     let mut picture_ready = use_signal(|| false);
     // How far the current start has got, for the progress ring (see `LoadRing`).
@@ -100,6 +108,43 @@ pub(crate) fn LivePlayer(
     let mut muted = use_signal(move || saved_volume == 0);
     let mut volume = use_signal(move || saved_volume);
     let mut buffering = use_signal(|| false);
+    let mut smoother = use_signal(|| saved.smoother_live);
+    let mut backup = use_signal(|| {
+        saved
+            .live_backups
+            .iter()
+            .find(|(primary, _)| *primary == id)
+            .map(|(_, backup)| *backup)
+    });
+    let mut settings_open = use_signal(|| false);
+    let dismissal = use_hook(|| Rc::new(RefCell::new(None::<controls::OutsideClick>)));
+    {
+        let listener = dismissal.clone();
+        use_effect(move || {
+            listener.borrow_mut().take();
+            if settings_open() {
+                *listener.borrow_mut() =
+                    controls::OutsideClick::new(".live-settings,.settings-toggle", move || {
+                        settings_open.set(false)
+                    });
+            }
+        });
+        use_drop(move || {
+            dismissal.borrow_mut().take();
+        });
+    }
+    let options = use_context::<playback_options::Options>();
+    use_effect(move || {
+        let _ = (options.changed)();
+        backup.set(
+            preferences::load()
+                .live_backups
+                .iter()
+                .find(|(primary, _)| *primary == id)
+                .map(|(_, target)| *target),
+        );
+    });
+    let mut ladder = use_signal(recovery::Ladder::default);
     // A user pause cancels automatic buffer recovery; controls must always win.
     let mut toggle_play = move || {
         if *holding.peek() {
@@ -155,50 +200,227 @@ pub(crate) fn LivePlayer(
         }
     });
     // Reconnections in a row (a live stream that drops is reopened, a few times).
-    let mut reconnects = use_signal(|| 0_u32);
+    let mut recovery = use_signal(recovery::Recovery::default);
+    let mut retry_until = use_signal(|| 0_u64);
     let mut reconnect = move || {
-        let tries = *reconnects.peek() + 1;
-        let current = feed.peek().clone();
-        let Feed::Converted(src) = current else {
-            return;
-        };
-        if tries > 3 {
-            status.set("This channel keeps dropping".into());
+        if *paused.peek() || !matches!(&*feed.peek(), Feed::Converted(_)) {
             return;
         }
-        reconnects.set(tries);
-        status.set(RECONNECTING.into());
-        // A new address (same stream) so the player opens it afresh.
-        let base = src.split("&again=").next().unwrap_or(&src).to_owned();
-        feed.set(Feed::Converted(format!("{base}&again={tries}")));
+        if recovery.write().request(
+            standard::clock(),
+            (js_sys::Math::random() * 250.0) as u64,
+            retry_until.peek().saturating_sub(standard::clock()),
+        ) {
+            status.set(RECOVERING.into());
+        }
     };
     {
         let trace = trace.clone();
         let live_stream = live_stream.clone();
-        use_future(move || {
+        let recovery_client = client.clone();
+        let recovery_catalog = catalog.clone();
+        use_resource(move || {
+            let running = !paused();
             let trace = trace.clone();
             let live_stream = live_stream.clone();
+            let recovery_client = recovery_client.clone();
+            let recovery_catalog = recovery_catalog.clone();
             async move {
-                let mut held_since = None::<f64>;
-                let mut healthy_since = None::<f64>;
+                if !running {
+                    recovery.write().poll(standard::clock(), true, 0.0);
+                    if let Some(video) = video_el() {
+                        let _ = video.pause();
+                    }
+                    return;
+                }
+                let mut held_since = None::<u64>;
                 let mut source = String::new();
+                let mut monitor = recovery::Monitor::new(standard::clock());
+                let mut interrupted_since = None::<u64>;
                 loop {
                     rstreamkit::mse::sleep(Duration::from_millis(250)).await;
-                    let Feed::Converted(current) = feed.peek().clone() else {
-                        continue;
+                    let changed = {
+                        let selected = feed.peek();
+                        let Feed::Converted(current) = &*selected else {
+                            continue;
+                        };
+                        if current == &source {
+                            false
+                        } else {
+                            source.clone_from(current);
+                            true
+                        }
                     };
-                    if current != source {
-                        source = current;
+                    if changed {
                         held_since = None;
-                        healthy_since = None;
+                        monitor = recovery::Monitor::new(standard::clock());
                     }
                     let Some(video) = video_el() else {
                         continue;
                     };
-                    let now = js_sys::Date::now();
+                    let now = standard::clock();
                     let ahead = buffer_ahead(&video);
+                    if *holding.peek() && !*paused.peek() && ahead < 0.5 {
+                        let ranges = video.buffered();
+                        let target = (0..ranges.length()).find_map(|index| {
+                            recovery::gap_target(
+                                video.current_time(),
+                                ranges.start(index).ok()?,
+                                ranges.end(index).ok()?,
+                            )
+                        });
+                        if let Some(target) = target
+                            && ladder.write().skip_gap()
+                        {
+                            trace.event(
+                                "recovery_gap_jump",
+                                serde_json::json!({"seconds": target - video.current_time()}),
+                            );
+                            video.set_current_time(target);
+                            held_since = None;
+                            continue;
+                        }
+                    }
+                    // Browser autoplay/background policies must not look like a broken provider.
+                    if video.paused() && !video.ended() && !*holding.peek() && !*paused.peek() {
+                        paused.set(true);
+                        continue;
+                    }
+                    let progress = live_stream
+                        .borrow()
+                        .as_ref()
+                        .map(standard::Stream::progress);
+                    if let Some(p) = progress {
+                        if p.terminal && !recovery.peek().manual() {
+                            holding.set(false);
+                            paused.set(true);
+                            recovery.write().poll(now, true, ahead);
+                            let _ = video.pause();
+                            continue;
+                        }
+                        // A paused reader is deliberate backpressure, not a failed provider.
+                        let health = monitor.observe(recovery::Sample {
+                            now,
+                            position: video.current_time(),
+                            frames: u64::from(
+                                video.get_video_playback_quality().total_video_frames(),
+                            ),
+                            has_video: video.video_width() > 0,
+                            visible: web_sys::window()
+                                .and_then(|w| w.document())
+                                .is_none_or(|d| !d.hidden()),
+                            ahead,
+                            paused: *paused.peek(),
+                            holding: *holding.peek(),
+                            transport: p,
+                        });
+                        recovery.write().healthy(now, health.healthy);
+                        if health.healthy
+                            && let Some(since) = interrupted_since.take()
+                        {
+                            trace.event("recovery_success", serde_json::json!({"ms": now.saturating_sub(since), "ahead_s": ahead, "channel": *selected_id.peek()}));
+                        }
+                        if health.healthy && status.peek().as_str() == RECOVERING {
+                            status.set(
+                                if *audio_only.peek() {
+                                    "Audio only"
+                                } else {
+                                    "Live"
+                                }
+                                .into(),
+                            );
+                        }
+                        if !*paused.peek() && (p.finished || health.stalled || health.stuck) {
+                            interrupted_since.get_or_insert(now);
+                            if health.stuck && ladder.write().repair() {
+                                // Seek within already buffered media to ask the decoder for a
+                                // fresh frame. No parallel fetch, fragment cache, or new buffer.
+                                video.set_current_time(
+                                    video.current_time() + (ahead - 1.0).clamp(0.1, 1.0),
+                                );
+                                monitor = recovery::Monitor::new(now);
+                                trace.event(
+                                    "recovery_local_repair",
+                                    serde_json::json!({"ahead_s": ahead}),
+                                );
+                                continue;
+                            }
+                            if !recovery.peek().pending() {
+                                trace.event("recovery_detected", serde_json::json!({"reason": if health.stuck { "decoder_stuck" } else if p.finished { "stream_ended" } else { "no_incoming_data" }, "ahead_s": ahead, "bytes": p.received}));
+                            }
+                            reconnect();
+                            if health.stuck {
+                                recovery.write().decoder_stuck();
+                            }
+                        }
+                    }
+                    let decision = recovery.write().poll(now, *paused.peek(), ahead);
+                    match decision {
+                        recovery::Step::Retry { serial, attempt } => {
+                            holding.set(true);
+                            buffering.set(true);
+                            // Abort the old fetch before the effect can open the replacement.
+                            live_stream.borrow_mut().take();
+                            status.set(RECONNECTING.into());
+                            let approved = backup.peek().and_then(|backup| {
+                                let Items::Live(channels) = &recovery_catalog.items else {
+                                    return None;
+                                };
+                                channels
+                                    .iter()
+                                    .find(|c| c.stream_id == backup && backup != id)
+                            });
+                            let route = ladder.write().route(
+                                attempt,
+                                !recovery_client.is_playlist(),
+                                approved.is_some(),
+                            );
+                            let transcode = source.contains("video=transcode");
+                            let replacement = match route {
+                                recovery::Route::Alternate => {
+                                    let alternate = recovery_client
+                                        .live_url(*selected_id.peek(), "ts")
+                                        .to_string();
+                                    selected_url.set(alternate.clone());
+                                    standard::live(&recovery_client, &alternate, transcode)
+                                }
+                                recovery::Route::Backup => approved.and_then(|channel| {
+                                    let backup_url = recovery_client
+                                        .live_url(channel.stream_id, "m3u8")
+                                        .to_string();
+                                    selected_id.set(channel.stream_id);
+                                    selected_title.set(channel.name.clone());
+                                    selected_icon.set(channel.stream_icon.clone());
+                                    selected_url.set(backup_url.clone());
+                                    standard::live(&recovery_client, &backup_url, transcode)
+                                }),
+                                recovery::Route::Reconnect => None,
+                            };
+                            let base = replacement.as_deref().unwrap_or_else(|| {
+                                source.split("&again=").next().unwrap_or(&source)
+                            });
+                            feed.set(Feed::Converted(format!("{base}&again={serial}")));
+                            trace.event("recovery_retry", serde_json::json!({"attempt": attempt, "route": format!("{route:?}"), "channel": *selected_id.peek(), "reserve_s": recovery.peek().reserve_for(*smoother.peek()), "ahead_s": ahead}));
+                            continue;
+                        }
+                        recovery::Step::GiveUp => {
+                            trace.event(
+                                "recovery_give_up",
+                                serde_json::json!({"channel": *selected_id.peek()}),
+                            );
+                            holding.set(false);
+                            buffering.set(false);
+                            paused.set(true);
+                            live_stream.borrow_mut().take();
+                            let _ = video.pause();
+                            status.set(
+                                "This channel keeps dropping. Retry or choose another feed.".into(),
+                            );
+                            continue;
+                        }
+                        recovery::Step::Wait => {}
+                    }
                     if *holding.peek() && !*paused.peek() {
-                        healthy_since = None;
                         let since = *held_since.get_or_insert(now);
                         if !video.paused() {
                             let _ = video.pause();
@@ -210,33 +432,23 @@ pub(crate) fn LivePlayer(
                             .borrow()
                             .as_ref()
                             .is_some_and(standard::Stream::ended);
-                        if ahead >= 6.0
+                        if ahead >= recovery.peek().reserve_for(*smoother.peek())
                             || (ended && ahead > 0.0)
-                            || (now - since >= 15_000.0 && ahead >= 1.0)
+                            || (now.saturating_sub(since) >= 15_000 && ahead >= 3.0)
                         {
                             holding.set(false);
                             buffering.set(false);
                             held_since = None;
                             trace.event(
                                 "buffer_resume",
-                                serde_json::json!({"ahead_s": ahead, "wait_ms": now - since}),
+                                serde_json::json!({"ahead_s": ahead, "wait_ms": now.saturating_sub(since)}),
                             );
                             let _ = video.play();
-                        } else if now - since >= 20_000.0 {
-                            holding.set(false);
-                            held_since = None;
+                        } else if now.saturating_sub(since) >= 20_000 {
                             reconnect();
                         }
                     } else {
                         held_since = None;
-                        if !*paused.peek() && ahead >= 2.0 && video.ready_state() >= 3 {
-                            let since = *healthy_since.get_or_insert(now);
-                            if now - since >= 60_000.0 && *reconnects.peek() != 0 {
-                                reconnects.set(0);
-                            }
-                        } else {
-                            healthy_since = None;
-                        }
                     }
                 }
             }
@@ -384,7 +596,6 @@ pub(crate) fn LivePlayer(
         }
     });
     let watchdog_client = client.clone();
-    let watchdog_url = url.clone();
     let player_video = use_hook(|| Rc::new(RefCell::new(None::<web_sys::HtmlVideoElement>)));
     {
         let player_video = player_video.clone();
@@ -400,7 +611,7 @@ pub(crate) fn LivePlayer(
             status.set(STILL_STARTING.into());
         }
     });
-    let (sound_client, sound_url) = (client.clone(), url.clone());
+    let sound_client = client.clone();
     let trace_for_player = trace.clone();
     use_effect(move || {
         let Some(video) = video_el() else {
@@ -409,6 +620,9 @@ pub(crate) fn LivePlayer(
         };
         *player_video.borrow_mut() = Some(video.clone());
         load_stage.set(0); // a new source starts over
+        picture_ready.set(false);
+        audio_only.set(false);
+        silent.set(false);
         trace_for_player.follow(&video);
         video.set_volume(f64::from(*volume.peek()) / 100.0);
         video.set_muted(*muted.peek());
@@ -429,12 +643,17 @@ pub(crate) fn LivePlayer(
                 holding.set(true);
                 buffering.set(true);
                 let fallback_client = client.clone();
-                let fallback_url = url.clone();
-                let stream = standard::start(video, src, move |why| {
-                    if why.starts_with("browser:") {
+                let stream = standard::start(video, src, move |why, progress| {
+                    retry_until.set(standard::clock().saturating_add(progress.retry_after));
+                    if progress.terminal {
+                        holding.set(false);
+                        paused.set(true);
+                        status.set(channel_trouble(&xtream::Error::Proxy(why)));
+                    } else if why.starts_with("browser:") {
                         let already_transcoding = matches!(&*feed.peek(), Feed::Converted(src) if src.contains("video=transcode"));
                         if !already_transcoding
-                            && let Some(src) = standard::live(&fallback_client, &fallback_url, true)
+                            && let Some(src) =
+                                standard::live(&fallback_client, &selected_url.peek(), true)
                         {
                             status.set("Re-encoding the video…".into());
                             feed.set(Feed::Converted(src));
@@ -443,7 +662,7 @@ pub(crate) fn LivePlayer(
                             paused.set(true);
                             status.set(why);
                         }
-                    } else if ["404", "410", "401", "403"]
+                    } else if ["401", "403"]
                         .iter()
                         .any(|c| why.contains(&format!("returned {c}")))
                     {
@@ -510,9 +729,9 @@ pub(crate) fn LivePlayer(
     // Some providers append data successfully but never deliver a decodable picture. In that
     // case MSE can say "Playing" while the screen stays black. Watch only until the first frame;
     // each fallback gets one chance, so a broken upstream does not loop forever.
-    use_future(move || {
+    use_resource(move || {
+        let _ = feed(); // Each replacement needs its own first-picture check.
         let client = watchdog_client.clone();
-        let url = watchdog_url.clone();
         async move {
             let mut mode = None::<Feed>;
             let mut since = js_sys::Date::now();
@@ -567,7 +786,7 @@ pub(crate) fn LivePlayer(
                             break;
                         }
                         match (!src.contains("video=transcode"))
-                            .then(|| standard::live(&client, &url, true))
+                            .then(|| standard::live(&client, &selected_url.peek(), true))
                             .flatten()
                         {
                             Some(again) => {
@@ -603,6 +822,21 @@ pub(crate) fn LivePlayer(
         let epoch = epoch_for_keys.clone();
         let on_key =
             Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
+                if options.menu.peek().is_some() {
+                    if e.key() == "Escape" {
+                        e.prevent_default();
+                        let mut menu = options.menu;
+                        menu.set(None);
+                    }
+                    return;
+                }
+                if *settings_open.peek() {
+                    if e.key() == "Escape" {
+                        e.prevent_default();
+                        settings_open.set(false);
+                    }
+                    return;
+                }
                 if e.alt_key() || e.ctrl_key() || e.meta_key() {
                     return;
                 }
@@ -709,7 +943,7 @@ pub(crate) fn LivePlayer(
     // Only a channel that gave up says so; everything on its way is the ring (the words go to
     // the `--logs` trace).
     let failed = !starting(&status()) && !matches!(status().as_str(), "Live" | "Audio only");
-    let logo = icon.clone().filter(|src| src.starts_with("http"));
+    let logo = selected_icon().filter(|src| src.starts_with("http"));
     rsx! {
         div { class: "live-stage",
             div {
@@ -726,7 +960,7 @@ pub(crate) fn LivePlayer(
                         if let Some(s) = media_on_play.borrow().as_ref() { s.playing(true); }
                     },
                     onpause: move |_| {
-                        if !*holding.peek() {
+                        if !*holding.peek() && !video_el().is_some_and(|v| v.ended()) {
                             paused.set(true);
                             if let Some(s) = media_on_pause.borrow().as_ref() { s.playing(false); }
                         }
@@ -764,7 +998,7 @@ pub(crate) fn LivePlayer(
                         }
                     },
                     onerror: {
-                        let (client, url) = (sound_client.clone(), sound_url.clone());
+                        let client = sound_client.clone();
                         move |_| {
                             // MEDIA_ERR_DECODE: the browser's decoder rejects this picture: have
                             // the proxy re-encode it, once.
@@ -779,7 +1013,7 @@ pub(crate) fn LivePlayer(
                             let current = feed.peek().clone();
                             match current {
                                 Feed::Converted(src) if decode_error && !src.contains("video=transcode") => {
-                                    if let Some(again) = standard::live(&client, &url, true) {
+                                    if let Some(again) = standard::live(&client, &selected_url.peek(), true) {
                                         status.set("Re-encoding the video…".into());
                                         feed.set(Feed::Converted(again));
                                     }
@@ -832,10 +1066,6 @@ pub(crate) fn LivePlayer(
                                 status.set("Live".into());
                             }
                         }
-                        // Playing steadily again: the next drop gets its full set of retries.
-                        if v.current_time() > 15.0 && *reconnects.peek() > 0 {
-                            reconnects.set(0);
-                        }
                         // Chrome's decoded-byte count lags a little: give it a few seconds. Clears
                         // itself once sound arrives.
                         let quiet = no_audio_decoded(&v, 5.0);
@@ -843,7 +1073,7 @@ pub(crate) fn LivePlayer(
                             silent.set(quiet);
                         }
                     },
-                    onclick: move |_| toggle_play(),
+                    onclick: move |_| { if settings_open() { settings_open.set(false); } else { toggle_play(); } },
                     ondoubleclick: move |_| toggle_fullscreen("live-player", expanded),
                 }
                 if show_stats() {
@@ -857,7 +1087,7 @@ pub(crate) fn LivePlayer(
                         div { class: "radio-art",
                             if let Some(src) = &logo { img { src: "{src}", alt: "" } } else { Icon { d: MUSIC } }
                         }
-                        strong { "{title}" }
+                        strong { "{selected_title}" }
                         div { class: "eq", i {} i {} i {} i {} i {} }
                     }
                 }
@@ -865,18 +1095,27 @@ pub(crate) fn LivePlayer(
                 if note().is_some() || silent() {
                     div { class: "sound-note", title: note().unwrap_or_default(), Icon { d: MUTED } "No sound" }
                 }
-                if starting(&status()) {
+                if status() == RECOVERING && !holding() && !buffering() {
+                    div { class: "recovery-note", role: "status", "Provider interrupted · recovering" }
+                } else if starting(&status()) {
                     div { class: "hud", LoadRing { stage: load_stage(), icon: logo.clone() } }
                 } else if failed {
                     div { class: "hud fail",
                         p { "{status}" }
-                        button { class: "retry", onclick: move |_| { reconnects.set(0); reconnect(); }, "Try again" }
+                        button { class: "retry", onclick: move |_| { paused.set(false); let now = standard::clock(); recovery.write().retry_now(now, retry_until.peek().saturating_sub(now)); status.set(RECONNECTING.into()); }, "Retry now" }
                     }
                 } else if buffering() && !paused() && !audio_only() {
                     div { class: "hud", LoadRing { stage: 2 } }
                 }
                 if paused() && !failed && !starting(&status()) {
                     button { class: "bigplay", aria_label: "Play", onclick: move |_| toggle_play(), Icon { d: PLAY } }
+                }
+                if settings_open() {
+                    crate::live_settings::LiveSettings {
+                        catalog: catalog.clone(), smoother: smoother(), backup: backup(),
+                        onmode: move |on| { smoother.set(on); preferences::update(|p| p.smoother_live = on); },
+                        onbackup: move |target| { backup.set(target); preferences::update(|p| preferences::set_backup(p, id, target)); },
+                    }
                 }
                 div { class: "controls",
                     button { class: "ctl", aria_label: "Play or pause", onclick: move |_| toggle_play(),
@@ -910,13 +1149,15 @@ pub(crate) fn LivePlayer(
                         }
                     }
                     button { class: "live-pill", title: "Jump to live", onclick: move |_| { go_live(); if paused() { toggle_play(); } }, "LIVE" }
+                    if selected_id() != id { span { class: "backup-label", "Backup · {selected_title}" } }
                     span { class: "grow" }
                     button { class: "ctl", aria_label: "Stream info", title: "Stream info (I)", onclick: move |_| show_stats.set(!show_stats()), Icon { d: INFO } }
+                    button { class: "ctl settings-toggle", aria_label: "Live playback settings", aria_expanded: settings_open(), aria_controls: "live-settings", title: "Live playback settings", onclick: move |_| settings_open.set(!settings_open()), Icon { d: GEAR } }
                     button { class: "ctl", aria_label: "Picture in picture", title: "Picture in picture", onclick: move |_| toggle_pip(video_el()), Icon { d: PIP } }
                     button { class: "ctl", aria_label: "Fullscreen", title: "Fullscreen (F)", onclick: move |_| toggle_fullscreen("live-player", expanded), Icon { d: FULLSCREEN } }
                 }
             }
-            Guide { id, playing: picture_ready() && !failed }
+            Guide { key: "{selected_id}", id: selected_id(), playing: picture_ready() && !failed }
         }
     }
 }
@@ -936,6 +1177,31 @@ fn buffer_ahead(video: &web_sys::HtmlVideoElement) -> f64 {
 /// It scrolls to now on load and moves the marker every 30 seconds.
 #[component]
 fn Guide(id: u64, playing: bool) -> Element {
+    let mut peek = use_signal(|| None::<u64>);
+    let mut hovering = use_signal(|| None::<u64>);
+    // One cancellable timer for the guide, not one timer per program.
+    use_resource(move || {
+        let target = hovering();
+        peek.set(None);
+        async move {
+            if let Some(target) = target {
+                rstreamkit::mse::sleep(Duration::from_secs(2)).await;
+                if *hovering.peek() == Some(target) {
+                    peek.set(Some(target));
+                }
+            }
+        }
+    });
+    let mut dismiss = move || {
+        hovering.set(None);
+        peek.set(None);
+    };
+    let mut reveal = move |start| {
+        if *hovering.peek() != Some(start) {
+            peek.set(None);
+            hovering.set(Some(start));
+        }
+    };
     let session = use_context::<Signal<Option<Client>>>();
     let client = use_hook(|| session.read().clone().expect("logged in"));
     let mut tick = use_signal(|| 0_u32);
@@ -1018,10 +1284,24 @@ fn Guide(id: u64, playing: bool) -> Element {
                 if visible.is_empty() {
                     return rsx! {};
                 } else {
+                    let preview = peek().and_then(|selected| {
+                        visible.iter().find(|(start, ..)| *start == selected).map(
+                            |(start, end, listing, _)| {
+                                channel_preview::program_peek(
+                                    &format!("guide-{id}-{start}"),
+                                    &listing.title,
+                                    &listing.description,
+                                    *start,
+                                    *end,
+                                )
+                            },
+                        )
+                    });
                     rsx! {
                         div {
                             class: "timeline",
                             id: "timeline",
+                            onscroll: move |_| dismiss(),
                             div { class: "tl", style: "width:{width}px", "data-now": "{here}",
                                 for hour in (lo..hi).step_by(3600) {
                                     span { class: "tick", key: "{hour}", style: "left:{px(hour)}px", "{clock(hour)}" }
@@ -1029,9 +1309,16 @@ fn Guide(id: u64, playing: bool) -> Element {
                                 for (start, end, l, block_width) in visible {
                                     div {
                                         key: "{start}",
+                                        id: "guide-{id}-{start}",
+                                        tabindex: "0",
+                                        aria_describedby: if peek() == Some(start) { Some(format!("guide-{id}-{start}-peek")) } else { None },
+                                        onmouseenter: move |_| reveal(start),
+                                        onmouseleave: move |_| dismiss(),
+                                        onfocus: move |_| reveal(start),
+                                        onblur: move |_| dismiss(),
+                                        onkeydown: move |e| if e.key() == Key::Escape { dismiss(); },
                                         class: if start <= now && now < end { if block_width < 90 { "block now compact" } else { "block now" } } else if block_width < 90 { "block compact" } else { "block" },
                                         style: "left:{px(start)}px;width:{block_width}px",
-                                        title: "{clock(start)} – {clock(end)} · {l.title} · {l.description}",
                                         div { class: "txt",
                                             time { "{clock(start)} – {clock(end)}" }
                                             strong { if l.title.is_empty() { "Untitled program" } else { "{l.title}" } }
@@ -1045,6 +1332,7 @@ fn Guide(id: u64, playing: bool) -> Element {
                                 div { class: "now-line", style: "left:{here}px", span { "{clock(now)}" } }
                             }
                         }
+                        {preview}
                     }
                 }
             }

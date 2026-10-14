@@ -842,16 +842,17 @@ async fn live_streams_copy_what_plays_and_convert_the_rest() {
 
     // A channel the provider doesn't have: refused with the provider's answer, for the app to show.
     let res = live("/live/u/p/9.m3u8", "").await;
-    assert_eq!(res.status(), 502);
+    assert_eq!(res.status(), 404);
     assert!(
         res.headers()["x-riptv-error"]
             .to_str()
             .unwrap()
             .contains("404")
     );
-    // The browser sees the gateway's 502, while diagnostics retain the actual upstream 509.
+    // Connection-limit refusals become a browser-visible cooldown, retaining the upstream 509.
     let res = live("/live/u/p/refused.m3u8", "").await;
-    assert_eq!(res.status(), 502);
+    assert_eq!(res.status(), 429);
+    assert!(res.headers().contains_key("retry-after"));
     assert!(
         res.headers()["x-riptv-error"]
             .to_str()

@@ -3,6 +3,38 @@
 use dioxus::prelude::*;
 use std::{cell::Cell, rc::Rc, time::Duration};
 use web_sys::js_sys;
+use web_sys::wasm_bindgen::{JsCast, closure::Closure};
+
+/// A scoped outside-click listener: removed when the dropdown closes or its player unmounts.
+pub(crate) struct OutsideClick {
+    document: web_sys::Document,
+    callback: Closure<dyn FnMut(web_sys::Event)>,
+}
+impl OutsideClick {
+    pub(crate) fn new(inside: &'static str, mut close: impl FnMut() + 'static) -> Option<Self> {
+        let document = web_sys::window()?.document()?;
+        let callback = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+            let internal = event
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+                .is_some_and(|el| el.closest(inside).ok().flatten().is_some());
+            if !internal {
+                close();
+            }
+        });
+        document
+            .add_event_listener_with_callback("click", callback.as_ref().unchecked_ref())
+            .ok()?;
+        Some(Self { document, callback })
+    }
+}
+impl Drop for OutsideClick {
+    fn drop(&mut self) {
+        let _ = self
+            .document
+            .remove_event_listener_with_callback("click", self.callback.as_ref().unchecked_ref());
+    }
+}
 
 /// Shows a player's controls on activity and hides them after `delay_ms` without any. At most one
 /// timer runs, and none while the controls are hidden or nothing is happening, so an idle player

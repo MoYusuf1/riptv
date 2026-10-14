@@ -5,19 +5,22 @@
 //! Everything is keyed by the signed-in profile, so two providers that both have a "movie 12" don't
 //! share progress.
 
-use std::cell::RefCell;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use serde::{Deserialize, Serialize};
 
 use crate::storage;
+type ShelfCache = HashMap<String, (String, Rc<Vec<Entry>>)>;
 
 thread_local! {
     static SCOPE: RefCell<String> = const { RefCell::new(String::new()) };
+    static CACHE: RefCell<ShelfCache> = RefCell::default();
 }
 
 /// Whose data this is: the profile just signed in. (One thread, so a global is enough.)
 pub fn set_scope(profile: &str) {
     SCOPE.with(|s| *s.borrow_mut() = profile.to_owned());
+    CACHE.with(|c| c.borrow_mut().clear());
 }
 
 fn name(what: &str) -> String {
@@ -68,11 +71,22 @@ impl Entry {
 const RECENT: usize = 24;
 const LIST: usize = 200;
 
-fn load(list: &str) -> Vec<Entry> {
-    storage()
+fn load(list: &str) -> Rc<Vec<Entry>> {
+    // Read the current string so edits in another tab remain visible; decode only changes.
+    let json = storage()
         .and_then(|s| s.get_item(&name(list)).ok().flatten())
-        .and_then(|json| serde_json::from_str(&json).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some((old, entries)) = cache.get(list)
+            && old == &json
+        {
+            return entries.clone();
+        }
+        let entries = Rc::new(serde_json::from_str::<Vec<Entry>>(&json).unwrap_or_default());
+        cache.insert(list.to_owned(), (json, entries.clone()));
+        entries
+    })
 }
 
 fn store(list: &str, entries: &[Entry]) {
@@ -85,7 +99,7 @@ fn store(list: &str, entries: &[Entry]) {
 
 /// Puts `entry` first in `list` (replacing an earlier one of the same title).
 fn promote(list: &str, entry: Entry, keep: usize) {
-    let mut all = load(list);
+    let mut all = load(list).as_ref().clone();
     all.retain(|e| !(e.kind == entry.kind && e.id == entry.id));
     all.insert(0, entry);
     all.truncate(keep);
@@ -93,7 +107,7 @@ fn promote(list: &str, entry: Entry, keep: usize) {
 }
 
 fn remove(list: &str, kind: Title, id: u64) {
-    let mut all = load(list);
+    let mut all = load(list).as_ref().clone();
     let before = all.len();
     all.retain(|e| !(e.kind == kind && e.id == id));
     if all.len() != before {
@@ -102,12 +116,12 @@ fn remove(list: &str, kind: Title, id: u64) {
 }
 
 /// The titles started and not finished, latest first.
-pub fn recent() -> Vec<Entry> {
+pub fn recent() -> Rc<Vec<Entry>> {
     load("recent")
 }
 
 /// The titles saved to My List, latest first.
-pub fn mine() -> Vec<Entry> {
+pub fn mine() -> Rc<Vec<Entry>> {
     load("list")
 }
 

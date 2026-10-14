@@ -160,17 +160,17 @@ pub(crate) fn redact(text: &str, url: Option<&Url>, max: usize) -> String {
 /// The same stream: equal but for the last segment's extension (the proxy's converter reads a
 /// live `.m3u8` channel as its `.ts` form).
 fn same_stream(a: &Url, b: &Url) -> bool {
-    let stem = |u: &Url| {
+    fn stem(u: &Url) -> (Option<&str>, Option<u16>, &str) {
         let path = u.path();
         let cut = path
             .rfind('.')
             .filter(|&dot| dot > path.rfind('/').unwrap_or(0));
         (
-            u.host_str().map(str::to_owned),
+            u.host_str(),
             u.port_or_known_default(),
-            path[..cut.unwrap_or(path.len())].to_owned(),
+            &path[..cut.unwrap_or(path.len())],
         )
-    };
+    }
     stem(a) == stem(b)
 }
 

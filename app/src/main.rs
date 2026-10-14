@@ -14,6 +14,7 @@ use std::{
     time::Duration,
 };
 
+mod catalog;
 mod categories;
 mod channel_preview;
 mod controls;
@@ -23,13 +24,17 @@ mod experimental;
 mod fetch;
 mod frame_stats;
 mod live;
+mod live_settings;
 mod media_session;
 mod navigation;
 mod playback;
+mod playback_options;
 mod preferences;
 mod profiles;
 mod quit;
+mod recovery;
 mod shelves;
+mod snapshot;
 mod standard;
 mod timeline;
 mod updates;
@@ -41,6 +46,7 @@ use controls::{IdleHide, LoadRing, Skip};
 use fetch::Proxied;
 use playback::{Engine, choose, switch_to_convert};
 use profiles::Login;
+use snapshot::Snapshot;
 use web_sys::{
     js_sys,
     wasm_bindgen::{JsCast, JsValue, closure::Closure},
@@ -289,7 +295,8 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 .channel-preview{position:fixed;z-index:45;display:flex;flex-direction:column;gap:.5rem;width:min(320px,calc(100vw - 24px));padding:1rem 1.1rem;border:1px solid rgba(255,125,146,.22);border-radius:16px;background:#22171e;box-shadow:0 16px 48px rgba(0,0,0,.5);text-align:left;pointer-events:none;animation:fade .16s var(--ease)}
 /* A hover card: a touch screen has no hover to end it, so it would stay over the list. */
 @media(hover:none){.channel-preview{display:none}}
-.channel-preview strong{font-size:.98rem;line-height:1.35;white-space:normal}
+.channel-preview strong{font-size:.98rem;line-height:1.35;white-space:normal;overflow-wrap:anywhere}
+.channel-preview{max-height:min(240px,calc(100dvh - 24px));overflow:hidden}
 .channel-preview time{font-size:.75rem;color:var(--dim);font-variant-numeric:tabular-nums}
 .channel-preview .preview-description{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:4;font-size:.8rem;color:var(--dim);line-height:1.5}
 .stage{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg)}
@@ -323,6 +330,32 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 @keyframes eq{0%,100%{transform:scaleY(.2)}50%{transform:scaleY(1)}}
 .sound-note{position:absolute;top:1rem;left:1rem;display:flex;align-items:center;gap:.4rem;padding:.35rem .7rem;border-radius:999px;background:rgba(0,0,0,.55);color:#fff;font-size:.75rem;backdrop-filter:blur(14px);animation:rise .3s var(--ease)}
 .sound-note svg{width:.95rem;height:.95rem}
+.recovery-note{position:absolute;top:1rem;right:1rem;padding:.35rem .7rem;border-radius:999px;background:rgba(0,0,0,.65);color:#fff;font-size:.75rem;pointer-events:none}
+.backup-label{font-size:.75rem;max-width:35%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim)}
+.live-settings{position:absolute;z-index:12;right:clamp(1rem,5.75rem,calc(100% - 20rem));bottom:4.3rem;width:min(300px,calc(100% - 2rem));max-height:calc(100% - 5.3rem);overflow-y:auto;border:1px solid rgba(255,125,146,.16);border-radius:16px;background:linear-gradient(145deg,rgba(40,28,35,.98),rgba(22,15,19,.98));box-shadow:0 16px 48px #0008,inset 0 1px 0 #ffffff06;text-align:left;animation:fade .16s var(--ease)}
+.settings-toggle[aria-expanded=true]{color:var(--accent);background:var(--soft);border-radius:50%}
+.player:has(.live-settings) .controls{opacity:1;transform:none;z-index:11}
+.context-dismiss{position:fixed;z-index:70;inset:0}
+.playback-context{position:fixed;z-index:71;width:min(248px,calc(100vw - 16px));padding:.45rem;border:1px solid var(--hair);border-radius:12px;background:#22171e;box-shadow:0 12px 40px #0008}
+.playback-context button{display:block;width:100%;padding:.7rem;border-radius:8px;text-align:left;font-size:.85rem}
+.playback-context button:hover,.playback-context button:focus-visible{background:var(--soft)}
+.live-settings .sheet-body{display:flex;flex-direction:column;gap:1rem;padding:1rem}
+.settings-section h3{margin:0 0 .65rem;color:var(--dim);font-size:.72rem;font-weight:600;line-height:1.3;letter-spacing:.02em}
+.playback-modes{display:grid;grid-template-columns:1fr 1fr;gap:.25rem;padding:.25rem;border:1px solid var(--hair);border-radius:11px;background:#0003}
+.playback-modes .mode{padding:.55rem .75rem;border:1px solid transparent;border-radius:8px;color:var(--dim);font-size:.8rem;font-weight:500;line-height:1.35;transition:color .15s,background .15s}
+.playback-modes .mode:hover{color:var(--text);background:#ffffff06}
+.playback-modes .mode.selected{border-color:#ff7d9226;background:var(--soft);color:var(--accent);box-shadow:0 2px 6px #0002}
+.playback-modes .mode:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.backup-section{padding-top:1rem;border-top:1px solid var(--hair)}
+.playback-option-row{display:flex;align-items:center;gap:.6rem}
+.backup-art{display:grid;place-items:center;flex:none;width:2rem;height:2rem;border-radius:8px;background:var(--soft);color:var(--accent)}
+.backup-art svg{width:1rem;height:1rem}
+.playback-option-row span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.8rem;line-height:1.4}
+.option-remove{display:grid;place-items:center;flex:none;width:2rem;height:2rem;border-radius:.5rem;color:var(--dim);transition:color .15s,background .15s}
+.option-remove svg{width:1rem;height:1rem}
+.option-remove:hover,.option-remove:focus-visible{background:var(--soft);color:var(--accent)}
+.option-remove:focus-visible,.settings-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media(prefers-reduced-motion:reduce){.live-settings,.channel-preview{animation:none}.playback-modes .mode,.option-remove{transition:none}}
 .stats{position:absolute;top:.8rem;left:.8rem;padding:.3rem .7rem;border-radius:8px;background:rgba(0,0,0,.66);color:#fff;font:600 .72rem ui-monospace,monospace;backdrop-filter:blur(8px)}
 .channel-dial{position:absolute;top:1rem;right:1rem;min-width:3rem;padding:.45rem .75rem;border-radius:12px;background:rgba(0,0,0,.6);color:#fff;text-align:center;font-weight:700;font-variant-numeric:tabular-nums;backdrop-filter:blur(14px)}
 .hud{position:absolute;inset:0;display:grid;place-items:center;color:#fff;pointer-events:none;animation:fade .3s var(--ease)}
@@ -372,21 +405,23 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 .player:not(.paused) .live-pill::before{animation:pulse 1.8s ease-in-out infinite}
 .player.paused .live-pill{background:rgba(255,255,255,.16)}
 @media(prefers-reduced-motion:reduce){.loader svg,.loader-logo,.loader-dot,.eq i,.live-pill::before{animation:none!important}}
-.guide{display:flex;flex-direction:column;gap:.8rem;min-width:0;padding:1rem;border-top:1px solid var(--hair);background:var(--panel);animation:fade .3s var(--ease)}
+.guide{position:relative;display:flex;flex-direction:column;gap:.8rem;min-width:0;padding:1rem;border-top:1px solid var(--hair);background:var(--panel);animation:fade .3s var(--ease)}
+.guide-preview{position:absolute;top:3.2rem;width:min(320px,calc(100% - 24px));max-height:calc(100% - 4rem)}
 .guide-heading{display:flex;align-items:center;justify-content:space-between;gap:.75rem}
 .guide-heading strong{font-size:.8rem;font-weight:600}
 .guide-heading small{color:var(--faint);font-size:.68rem}
 .tl-skeleton{display:flex;gap:.4rem;height:6.4rem;padding-top:1.5rem}
 .tl-skeleton i{flex:1;border-radius:10px;background:var(--row);animation:pulse 1.4s ease-in-out infinite}
 .tl-skeleton i:first-child{flex:.6}
-.timeline{flex:1;min-height:0;overflow-x:auto;padding-bottom:.4rem;scrollbar-width:thin}
+.timeline{flex:1;min-height:0;overflow-x:auto;overflow-y:hidden;padding-bottom:.4rem;scrollbar-width:thin}
 .tl{position:relative;height:100%;min-height:6.4rem}
 .tick{position:absolute;top:0;height:100%;padding-left:.4rem;border-left:1px solid var(--hair);color:var(--faint);font-size:.7rem}
-.block{position:absolute;top:1.5rem;bottom:0;padding:.5rem .7rem;border-right:3px solid var(--panel);border-radius:10px;background:var(--row)}
+.block{position:absolute;top:1.5rem;bottom:0;min-width:0;overflow:clip;padding:.5rem 0;border-right:3px solid var(--panel);border-radius:10px;background:var(--row)}
 .block.now{background:var(--soft);outline:1px solid rgba(255,125,146,.45);outline-offset:-1px}
-.block .txt{position:sticky;left:.7rem;max-width:min(100%,18rem);overflow:hidden}
-.block.compact{padding:.5rem .35rem}.block.compact time,.block.compact p{display:none}.block.compact strong{font-size:.72rem}
-.block time{display:block;color:var(--dim);font-size:.7rem}
+.block .txt{position:sticky;left:.7rem;margin-inline:.7rem;max-width:18rem;max-height:100%;overflow:hidden;overflow-wrap:anywhere}
+.block.compact .txt{left:.35rem;margin-inline:.35rem}.block.compact time,.block.compact p{display:none}.block.compact strong{font-size:.72rem}
+.block time{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim);font-size:.7rem}
+.block:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .block strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .block p{display:-webkit-box;margin:.5rem 0 0;overflow:hidden;color:var(--dim);font-size:.8rem;line-height:1.55;-webkit-box-orient:vertical;-webkit-line-clamp:5}
 .prog{position:absolute;bottom:0;left:0;height:3px;background:var(--accent)}
@@ -1071,24 +1106,28 @@ struct Library {
     kind: Kind,
     items: Items,
     counts: HashMap<u64, usize>,
+    orders: catalog::OrderCache,
 }
 
 impl Library {
     /// Positions in the list, in the order `sort` asks for. The list itself stays as the provider
     /// sent it; sorting 30,000 titles by name takes a few milliseconds, once per change of sort.
-    fn order(&self, sort: Sort) -> Vec<u32> {
-        // Sort an index, not the catalogue; normalize each title only once.
-        let mut order: Vec<u32> = (0..self.len() as u32).collect();
-        let name = |i: u32| match &self.items {
-            Items::Live(v) => v[i as usize].name.as_str(),
-            Items::Movies(v) => v[i as usize].name.as_str(),
-            Items::Series(v) => v[i as usize].name.as_str(),
+    fn order(&self, sort: Sort) -> Rc<Vec<u32>> {
+        self.orders
+            .get(self.len(), sort == Sort::ZA, |i: u32| match &self.items {
+                Items::Live(v) => v[i as usize].name.as_str(),
+                Items::Movies(v) => v[i as usize].name.as_str(),
+                Items::Series(v) => v[i as usize].name.as_str(),
+            })
+    }
+
+    fn matches(&self, index: u32, category: Option<u64>, query: &str) -> bool {
+        let (name, cat) = match &self.items {
+            Items::Live(v) => (&v[index as usize].name, v[index as usize].category_id),
+            Items::Movies(v) => (&v[index as usize].name, v[index as usize].category_id),
+            Items::Series(v) => (&v[index as usize].name, v[index as usize].category_id),
         };
-        order.sort_by_cached_key(|&i| name(i).to_lowercase());
-        if sort == Sort::ZA {
-            order.reverse();
-        }
-        order
+        category.is_none_or(|id| cat == Some(id)) && xtream::contains_lowercase(name, query)
     }
 
     fn len(&self) -> usize {
@@ -1130,6 +1169,7 @@ async fn load(c: &Client, kind: Kind) -> xtream::Result<Library> {
         kind,
         items,
         counts,
+        orders: Default::default(),
     })
 }
 
@@ -1151,6 +1191,13 @@ fn rows(
         info: impl Fn(&T) -> (&str, Option<u64>),
         row: impl Fn(&T) -> Row,
     ) -> (Vec<Row>, usize) {
+        if cat.is_none() && q.is_empty() {
+            let shown = catalog::page(order, skip, limit)
+                .iter()
+                .map(|&i| row(&list[i as usize]))
+                .collect();
+            return (shown, order.len());
+        }
         let mut hits = order.iter().map(|&i| &list[i as usize]).filter(|t| {
             let (title, category) = info(t);
             (cat.is_none() || category == cat) && xtream::contains_lowercase(title, q)
@@ -1276,6 +1323,7 @@ fn channel_target<'a>(
 
 #[component]
 fn Browse() -> Element {
+    use_context_provider(|| channel_preview::Cache::default());
     let mut session = use_context::<Signal<Option<Client>>>();
     let playlist = use_context::<Signal<String>>();
     let mut rust_sound = use_context::<Signal<bool>>();
@@ -1293,8 +1341,20 @@ fn Browse() -> Element {
     let mut category_search = use_signal(String::new);
     let mut pinned_categories = use_signal(|| remembered.pinned_categories.clone());
     let mut playing = use_signal(|| None::<Play>);
-    let mut queue = use_signal(Vec::<Play>::new); // the episodes after the one playing
+    let mut queue = use_signal(|| None::<(Rc<Vec<Play>>, usize)>);
     let mut live = use_signal(|| None::<(u64, String, String, Option<String>)>); // (id, title, playlist url, logo)
+    let watching = use_signal(|| None::<u64>);
+    let changed = use_signal(|| 0_u64);
+    let menu = use_signal(|| None::<(u64, f64, f64)>);
+    let mut options = use_context_provider(move || playback_options::Options {
+        watching,
+        changed,
+        menu,
+    });
+    use_effect(move || {
+        options.watching.set(live().map(|(id, ..)| id));
+        options.menu.set(None);
+    });
     let mut open = use_signal(|| None::<Row>); // the movie or series page
     let mut sort = use_signal(|| Sort::restored(Kind::Live, remembered.sorts[0]));
     let mut sort_open = use_signal(|| false);
@@ -1364,6 +1424,31 @@ fn Browse() -> Element {
             .and_then(|r| r.as_ref().ok())
             .filter(|l| l.kind == kind())
             .map(|l| l.order(sort()))
+    });
+    // Filtering belongs to the query/category, not redraws or the current page.
+    let matches = use_memo(move || {
+        let library = library.read();
+        let order = order();
+        let q = search().to_lowercase();
+        let cat = category();
+        library
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .filter(|l| l.kind == kind())
+            .zip(order)
+            .map(|(lib, order)| {
+                if cat.is_none() && q.is_empty() {
+                    order
+                } else {
+                    Rc::new(
+                        order
+                            .iter()
+                            .copied()
+                            .filter(|&i| lib.matches(i, cat, &q))
+                            .collect(),
+                    )
+                }
+            })
     });
 
     // Live TV shows a tile grid until a category (or a channel) is picked, then list + player.
@@ -1466,20 +1551,16 @@ fn Browse() -> Element {
     let body = match &*library.read() {
         Some(Err(e)) => rsx! { p { class: "err", "{e}" } },
         Some(Ok(lib)) if lib.kind == kind() => {
-            let order = order.read();
-            let order = order
-                .as_deref()
-                .filter(|o| o.len() == lib.len())
-                .unwrap_or(&[]);
+            let order = matches.read();
+            let order = order.as_deref().map(|o| o.as_slice()).unwrap_or(&[]);
             let size = if three_pane { PAGE_LIST } else { PAGE_GRID };
             let q = search().to_lowercase();
-            let (mut shown, total) =
-                rows(lib, order, &client, category(), &q, (page() * size, size));
+            let (mut shown, total) = rows(lib, order, &client, None, "", (page() * size, size));
             let pages = total.div_ceil(size).max(1);
             let now = page().min(pages - 1);
             // A refresh can leave the page asked for past the end: show the last one instead.
             if now != page() {
-                shown = rows(lib, order, &client, category(), &q, (now * size, size)).0;
+                shown = rows(lib, order, &client, None, "", (now * size, size)).0;
             }
             let list = if shown.is_empty() {
                 rsx! { div { class: "empty", "Nothing matches." } }
@@ -1516,8 +1597,9 @@ fn Browse() -> Element {
                         ("My List", shelves::mine()),
                     ]
                     .into_iter()
-                    .map(|(name, mut entries)| {
-                        entries.retain(|e| e.kind == what);
+                    .map(|(name, entries)| {
+                        let entries: Vec<_> =
+                            entries.iter().filter(|e| e.kind == what).cloned().collect();
                         (name, entries)
                     })
                     .filter(|(_, entries)| !entries.is_empty())
@@ -1558,9 +1640,10 @@ fn Browse() -> Element {
     };
 
     let player = playing().map(|play| {
-        let next = queue()
-            .first()
-            .map(|p| p.subtitle.clone().unwrap_or_else(|| p.title.clone()));
+        let next = queue().and_then(|(all, at)| {
+            all.get(at)
+                .map(|p| p.subtitle.clone().unwrap_or_else(|| p.title.clone()))
+        });
         rsx! {
             Watch {
                 key: "{play.url}",
@@ -1568,13 +1651,14 @@ fn Browse() -> Element {
                 next,
                 onclose: move |_| {
                     playing.set(None);
-                    queue.set(vec![]);
+                    queue.set(None);
                 },
                 onnext: move |_| {
-                    let mut rest = queue();
-                    if !rest.is_empty() {
-                        playing.set(Some(rest.remove(0)));
-                        queue.set(rest);
+                    if let Some((all, at)) = queue() {
+                        if let Some(next) = all.get(at).cloned() {
+                            playing.set(Some(next));
+                            queue.set(Some((all, at + 1)));
+                        }
                     }
                 },
             }
@@ -1583,20 +1667,23 @@ fn Browse() -> Element {
     let channel_client = client.clone();
     let live_panel = live().map(|(id, title, url, icon)| {
         let player_key = format!("{url}-{}", player_revision());
+        let catalog = library.read().as_ref().and_then(|r| r.as_ref().ok()).cloned().map(Snapshot::from_rc);
         rsx! {
+            if let Some(catalog) = catalog {
             live::LivePlayer {
                 key: "{player_key}",
                 id,
                 title,
                 url,
                 icon,
+                catalog,
                 onchannel: move |action| {
                     let selected = {
                         let library = library.read();
                         let order = order.read();
                         library.as_ref()
                             .and_then(|r| r.as_ref().ok())
-                            .zip(order.as_deref())
+                            .zip(order.as_deref().map(|o| o.as_slice()))
                             .and_then(|(lib, order)| channel_target(
                                 lib, order, category(), &search().to_lowercase(), id, action,
                             ))
@@ -1614,6 +1701,7 @@ fn Browse() -> Element {
                         live.set(Some((next_id, name, channel_client.live_url(next_id, "m3u8").to_string(), icon)));
                     }
                 },
+            }
             }
         }
     });
@@ -1795,13 +1883,14 @@ fn Browse() -> Element {
                 key: "{row.key}",
                 row,
                 onback: move |_| open.set(None),
-                onplay: move |(play, rest): (Play, Vec<Play>)| {
-                    playing.set(Some(play));
-                    queue.set(rest);
+                onplay: move |(all, at): (Rc<Vec<Play>>, usize)| {
+                    playing.set(all.get(at).cloned());
+                    queue.set(Some((all, at + 1)));
                 },
             }
         }
         {player}
+        playback_options::Menu {}
     }
 }
 
@@ -1885,6 +1974,8 @@ fn Download(title: String, url: String) -> Element {
 #[component]
 fn ChannelRow(row: Row, active: bool, onpick: EventHandler<Row>) -> Element {
     let r = row.clone();
+    let options = use_context::<playback_options::Options>();
+    let target = row.key;
     let anchor = format!("channel-{}", row.key);
     let channel_preview::Preview {
         mut pointer,
@@ -1904,6 +1995,7 @@ fn ChannelRow(row: Row, active: bool, onpick: EventHandler<Row>) -> Element {
             onblur: move |_| focused.set(false),
             onkeydown: move |e| { if e.key() == Key::Escape { escaped.set(true); } },
             onclick: move |_| onpick.call(r.clone()),
+            oncontextmenu: move |e| { if playback_options::open(options, Some(target), e) { escaped.set(true); } },
             span { class: "logo",
                 span { class: "ph", "TV" }
                 if let Some(src) = row.icon.as_deref().filter(|s| s.starts_with("http")) {
@@ -1921,6 +2013,7 @@ fn ChannelRow(row: Row, active: bool, onpick: EventHandler<Row>) -> Element {
 #[component]
 fn Card(row: Row, onpick: EventHandler<Row>) -> Element {
     let r = row.clone();
+    let options = use_context::<playback_options::Options>();
     let id = match row.target {
         Target::Live { id, .. } => Some(id),
         _ => None,
@@ -1955,6 +2048,7 @@ fn Card(row: Row, onpick: EventHandler<Row>) -> Element {
             onblur: move |_| focused.set(false),
             onkeydown: move |e| { if e.key() == Key::Escape { escaped.set(true); } },
             onclick: move |_| onpick.call(r.clone()),
+            oncontextmenu: move |e| { if playback_options::open(options, id, e) { escaped.set(true); } },
             span { class: "art",
                 span { class: "ph", "{fallback}" }
                 if let Some(src) = row.icon.as_deref().filter(|s| s.starts_with("http")) {

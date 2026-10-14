@@ -33,17 +33,24 @@ impl Splitter {
     /// record is in it, or of `carry` when it was split across chunks. `Err` if it isn't an array.
     fn feed(&mut self, chunk: &[u8], emit: &mut dyn FnMut(&[u8])) -> Result<()> {
         let mut start = if self.in_record { Some(0) } else { None };
-        let mut finish = |this: &mut Splitter, start: &mut Option<usize>, end: usize| {
-            let from = start.take().unwrap_or(0);
-            if this.carry.is_empty() {
-                emit(&chunk[from..end]);
-            } else {
-                this.carry.extend_from_slice(&chunk[from..end]);
-                emit(&this.carry);
-                this.carry.clear();
-            }
-            this.in_record = false;
-        };
+        let mut finish =
+            |this: &mut Splitter, start: &mut Option<usize>, end: usize| -> Result<()> {
+                let from = start.take().unwrap_or(0);
+                if this.carry.len() + end - from > MAX_RECORD {
+                    return Err(Error::Json(serde::de::Error::custom(
+                        "a record is too large",
+                    )));
+                }
+                if this.carry.is_empty() {
+                    emit(&chunk[from..end]);
+                } else {
+                    this.carry.extend_from_slice(&chunk[from..end]);
+                    emit(&this.carry);
+                    this.carry.clear();
+                }
+                this.in_record = false;
+                Ok(())
+            };
         for (i, &b) in chunk.iter().enumerate() {
             if self.done {
                 break;
@@ -83,19 +90,19 @@ impl Splitter {
                 b'}' | b']' if self.depth > 0 => {
                     self.depth -= 1;
                     if self.depth == 0 {
-                        finish(self, &mut start, i + 1);
+                        finish(self, &mut start, i + 1)?;
                     }
                 }
                 // The end of the list, or of a record that is a bare value (a number, `null`).
                 b']' => {
                     if self.in_record {
-                        finish(self, &mut start, i);
+                        finish(self, &mut start, i)?;
                     }
                     self.done = true;
                 }
                 b',' if self.depth == 0 => {
                     if self.in_record {
-                        finish(self, &mut start, i);
+                        finish(self, &mut start, i)?;
                     }
                 }
                 // A comma inside a record is part of it.
@@ -297,5 +304,18 @@ mod tests {
         let chunk = vec![b'x'; 1 << 16];
         let refused = (0..32).any(|_| reader.feed(&chunk).is_err());
         assert!(refused);
+    }
+    #[test]
+    fn complete_oversized_records_are_also_refused() {
+        let json = format!("[{{\"id\":1,\"name\":\"{}\"}}]", "x".repeat(MAX_RECORD));
+        for size in [json.len(), 4096] {
+            let mut reader = ListReader::<Rec>::new();
+            assert!(
+                json.as_bytes()
+                    .chunks(size)
+                    .try_for_each(|c| reader.feed(c))
+                    .is_err()
+            );
+        }
     }
 }

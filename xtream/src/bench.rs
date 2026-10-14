@@ -12,6 +12,42 @@ use std::{
 
 use crate::{Series, VodStream, stream::ListReader, vec_from_slice};
 
+#[test]
+#[ignore = "synthetic performance measurement, not a timing assertion"]
+fn guide_cost() {
+    let entries: Vec<_> = (0..1000)
+        .rev()
+        .map(|i| crate::EpgListing {
+            title: format!("Program {i}"),
+            description: String::new(),
+            start: String::new(),
+            end: String::new(),
+            start_ts: Some(i * 1800),
+            end_ts: Some((i + 1) * 1800 + 300),
+        })
+        .collect();
+    let queries: Vec<_> = (0..1000).map(|i| i * 1800 + 100).collect();
+    let before = Instant::now();
+    let reference: Vec<_> = queries
+        .iter()
+        .map(|&now| {
+            crate::guide::normalize(&entries)
+                .into_iter()
+                .find(|s| s.start <= now && now < s.end)
+                .map(|s| (s.start, s.end))
+        })
+        .collect();
+    let sorted = before.elapsed();
+    let before = Instant::now();
+    let optimized: Vec<_> = queries
+        .iter()
+        .map(|&now| crate::guide::current(&entries, now).map(|s| (s.start, s.end)))
+        .collect();
+    let direct = before.elapsed();
+    assert_eq!(optimized, reference);
+    println!("1000 current-program lookups / 1000 entries: sorted={sorted:?}; direct={direct:?}");
+}
+
 struct Counting;
 
 static LIVE: AtomicUsize = AtomicUsize::new(0);

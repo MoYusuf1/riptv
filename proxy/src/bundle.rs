@@ -42,13 +42,17 @@ pub fn prepare() -> io::Result<Option<Bundle>> {
             return Err(io::Error::other("invalid embedded resource path"));
         }
         // Packaging stores each file zstd-compressed (`name.zst`): a third of the download.
-        let (relative, bytes) = match relative.strip_suffix(".zst") {
-            Some(name) => (name, unpack(bytes)?),
-            None => (relative, bytes.to_vec()),
-        };
+        let compressed = relative.ends_with(".zst");
+        let relative = relative.strip_suffix(".zst").unwrap_or(relative);
         let path = folder.join(relative);
         fs::create_dir_all(path.parent().unwrap())?;
-        fs::write(&path, bytes)?;
+        let mut file = fs::File::create(&path)?;
+        if compressed {
+            unpack_into(bytes, &mut file)?;
+        } else {
+            use std::io::Write;
+            file.write_all(bytes)?;
+        }
         #[cfg(unix)]
         if relative.starts_with("bin/") {
             use std::os::unix::fs::PermissionsExt;
@@ -60,13 +64,11 @@ pub fn prepare() -> io::Result<Option<Bundle>> {
     Ok(Some(bundle))
 }
 
-fn unpack(compressed: &[u8]) -> io::Result<Vec<u8>> {
-    use std::io::Read;
-    let mut out = Vec::new();
-    ruzstd::decoding::StreamingDecoder::new(compressed)
-        .map_err(io::Error::other)?
-        .read_to_end(&mut out)?;
-    Ok(out)
+fn unpack_into(compressed: &[u8], out: &mut impl io::Write) -> io::Result<()> {
+    let mut decoder =
+        ruzstd::decoding::StreamingDecoder::new(compressed).map_err(io::Error::other)?;
+    io::copy(&mut decoder, out)?;
+    Ok(())
 }
 
 fn safe_path(path: &str) -> bool {
@@ -94,7 +96,9 @@ mod tests {
         let packed = [
             40, 181, 47, 253, 32, 24, 109, 0, 0, 56, 82, 73, 80, 84, 86, 32, 82, 1, 0, 153, 139, 17,
         ];
-        assert_eq!(unpack(&packed).unwrap(), b"RIPTV ".repeat(4));
-        assert!(unpack(b"not zstd").is_err());
+        let mut out = Vec::new();
+        unpack_into(&packed, &mut out).unwrap();
+        assert_eq!(out, b"RIPTV ".repeat(4));
+        assert!(unpack_into(b"not zstd", &mut Vec::new()).is_err());
     }
 }

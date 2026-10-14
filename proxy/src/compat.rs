@@ -78,7 +78,7 @@ pub struct CompatQuery {
 }
 
 /// What the first video stream is, from ffmpeg's description of its input.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct Probe {
     codec: String,
     pix_fmt: String,
@@ -86,6 +86,73 @@ struct Probe {
     height: u32,
     /// Seconds, for a movie or episode; live streams have none.
     duration: Option<f64>,
+}
+
+type ProbeSlot = std::sync::Arc<tokio::sync::Mutex<Option<(Instant, Option<Probe>)>>>;
+
+pub(crate) struct ProbeCache {
+    slots: tokio::sync::Mutex<std::collections::HashMap<(String, String), ProbeSlot>>,
+    permits: tokio::sync::Semaphore,
+}
+
+impl Default for ProbeCache {
+    fn default() -> Self {
+        Self {
+            slots: Default::default(),
+            permits: tokio::sync::Semaphore::new(4),
+        }
+    }
+}
+
+async fn cached_probe(state: &AppState, url: &str, ua: &str) -> Result<Option<Probe>, Failure> {
+    state.probes.get(url, ua, probe(url, ua)).await
+}
+
+impl ProbeCache {
+    async fn get(
+        &self,
+        url: &str,
+        ua: &str,
+        load: impl std::future::Future<Output = Result<Option<Probe>, Failure>>,
+    ) -> Result<Option<Probe>, Failure> {
+        let key = (url.to_owned(), ua.to_owned());
+        let slot = {
+            let mut slots = self.slots.lock().await;
+            if !slots.contains_key(&key) && slots.len() >= 64 {
+                if let Some(old) = slots
+                    .iter()
+                    .find(|(_, slot)| std::sync::Arc::strong_count(slot) == 1)
+                    .map(|(key, _)| key.clone())
+                {
+                    slots.remove(&old);
+                } else {
+                    return Err(Failure::Failed(
+                        "too many file checks; try again shortly".into(),
+                    ));
+                }
+            }
+            slots.entry(key).or_default().clone()
+        };
+        // Serialize only identical sources. Vetting still happens before every lookup.
+        let mut saved = slot.lock().await;
+        if let Some((at, result)) = &*saved {
+            let ttl = if result.as_ref().is_some_and(|p| p.duration.is_some()) {
+                30
+            } else {
+                2
+            };
+            if at.elapsed() < Duration::from_secs(ttl) {
+                return Ok(result.clone());
+            }
+        }
+        let _permit = timeout(Duration::from_secs(10), self.permits.acquire())
+            .await
+            .map_err(|_| Failure::Failed("file checks are busy; try again shortly".into()))?
+            .map_err(|_| Failure::Failed("file checks stopped".into()))?;
+        let result = load.await?;
+        *saved = Some((Instant::now(), result.clone()));
+        Ok(result)
+    }
 }
 
 impl Probe {
@@ -156,6 +223,7 @@ impl Probe {
     }
 }
 
+#[derive(Debug)]
 enum Failure {
     Missing,
     Failed(String),
@@ -545,7 +613,7 @@ pub async fn check(
     };
     let ua = agent(&headers);
     let input = one_variant(&s, &url, &ua).await;
-    let probed = match probe(input.as_str(), &ua).await {
+    let probed = match cached_probe(&s, input.as_str(), &ua).await {
         Ok(p) => p,
         Err(f) => return failure(&s, &url, f),
     };
@@ -601,7 +669,7 @@ pub async fn stream(
         Some("hevc") => ("hevc", 0, false),
         // The scaler caps the height itself; probing just to learn it cost ~2 s.
         Some("transcode") => ("transcode", 0, q.progressive != Some(1)),
-        _ => match probe(input.as_str(), &ua).await {
+        _ => match cached_probe(&s, input.as_str(), &ua).await {
             Ok(Some(p)) if !p.can_copy() => ("transcode", p.height, p.field_order != "progressive"),
             Ok(_) => ("copy", 0, false),
             Err(f) => return failure(&s, &url, f),
@@ -907,6 +975,41 @@ impl std::fmt::Display for Progress {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn simultaneous_checks_share_one_probe_and_cache_is_bounded() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let cache = Arc::new(ProbeCache::default());
+        let loads = Arc::new(AtomicUsize::new(0));
+        let mut tasks = Vec::new();
+        for _ in 0..16 {
+            let (cache, loads) = (cache.clone(), loads.clone());
+            tasks.push(tokio::spawn(async move {
+                cache
+                    .get("same", "UA", async {
+                        loads.fetch_add(1, Ordering::Relaxed);
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                        Ok(None)
+                    })
+                    .await
+                    .unwrap();
+            }));
+        }
+        for task in tasks {
+            task.await.unwrap();
+        }
+        assert_eq!(loads.load(Ordering::Relaxed), 1);
+        for i in 0..100 {
+            cache
+                .get(&format!("source-{i}"), "UA", async { Ok(None) })
+                .await
+                .unwrap();
+        }
+        assert_eq!(cache.slots.lock().await.len(), 64);
+        assert_eq!(cache.permits.available_permits(), 4);
+    }
 
     #[test]
     fn only_plain_progressive_h264_is_copied() {

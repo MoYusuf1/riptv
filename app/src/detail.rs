@@ -128,7 +128,7 @@ thread_local! {
 pub(crate) fn DetailPage(
     row: Row,
     onback: EventHandler<()>,
-    onplay: EventHandler<(Play, Vec<Play>)>,
+    onplay: EventHandler<(Rc<Vec<Play>>, usize)>,
 ) -> Element {
     let session = use_context::<Signal<Option<Client>>>();
     let client = use_hook(|| session.read().clone().expect("logged in"));
@@ -174,7 +174,7 @@ pub(crate) fn DetailPage(
         let c = c.clone();
         async move {
             let (name, year) = ask?;
-            c.guide(&name, year).await
+            c.guide(&name, year).await.map(Rc::new)
         }
     });
     let guide_now = guide.read().clone().flatten();
@@ -195,52 +195,58 @@ pub(crate) fn DetailPage(
             return;
         };
         let cast = d.cast.clone().unwrap_or_default();
-        for (n, name) in people(&cast)
-            .into_iter()
-            .take(12)
-            .map(str::to_owned)
-            .enumerate()
-        {
-            let known = PORTRAITS.with(|p| p.borrow().get(&name).cloned());
-            match known {
-                Some(Some(found)) => {
-                    photos.write().insert(name, found);
-                }
-                Some(None) => {}
-                None => {
-                    let c = c.clone();
-                    wasm_bindgen_futures::spawn_local(async move {
-                        // Staggered, not all at once: Wikipedia limits bursts.
-                        rstreamkit::mse::sleep(std::time::Duration::from_millis(150 * n as u64))
-                            .await;
+        let c = c.clone();
+        spawn(async move {
+            for name in people(&cast).into_iter().take(12).map(str::to_owned) {
+                let known = PORTRAITS.with(|p| p.borrow().get(&name).cloned());
+                match known {
+                    Some(Some(found)) => {
+                        photos.write().insert(name, found);
+                    }
+                    Some(None) => {}
+                    None => {
+                        // One lookup at a time, cancelled with this detail page.
                         let found = c.performer(&name).await;
-                        PORTRAITS.with(|p| p.borrow_mut().insert(name.clone(), found.clone()));
+                        PORTRAITS.with(|p| {
+                            let mut cache = p.borrow_mut();
+                            if cache.len() >= 256 {
+                                if let Some(old) = cache.keys().next().cloned() {
+                                    cache.remove(&old);
+                                }
+                            }
+                            cache.insert(name.clone(), found.clone())
+                        });
                         if let Some(found) = found
                             && photos.try_peek().is_ok()
                         {
                             photos.write().insert(name, found);
                         }
-                    });
+                    }
                 }
             }
-        }
+        });
     });
 
+    let seasons = use_memo(move || {
+        let guard = info.read();
+        let guide = guide.read();
+        let mut seasons = guard
+            .as_ref()
+            .and_then(|r| r.as_ref().ok())
+            .map(|(_, s)| s.clone())
+            .unwrap_or_default();
+        if let Some(g) = guide.as_ref().and_then(|g| g.as_ref()) {
+            xtream::tvmaze::fill(&mut seasons, g);
+        }
+        Snapshot::new(seasons)
+    });
+    let seasons = seasons();
     let guard = info.read();
     let mut details = match &*guard {
         Some(Ok((d, _))) => d.clone(),
         _ => Details::default(),
     };
     // The provider's episodes, with the gaps filled in from the guide when it has arrived.
-    let seasons: Vec<Season> = match (&*guard, &guide_now) {
-        (Some(Ok((_, s))), Some(g)) => {
-            let mut s = s.clone();
-            xtream::tvmaze::fill(&mut s, g);
-            s
-        }
-        (Some(Ok((_, s))), None) => s.clone(),
-        _ => vec![],
-    };
     if let Some(g) = &guide_now {
         details.plot = details.plot.take().or_else(|| g.plot.clone());
         details.poster = details.poster.take().or_else(|| g.poster.clone());
@@ -322,57 +328,74 @@ pub(crate) fn DetailPage(
     }
 
     // Everything there is to watch, in order: a movie is one, a series is its episodes.
-    let mut all: Vec<Play> = vec![];
-    let mut spans: Vec<(u64, std::ops::Range<usize>)> = vec![];
-    match &row.target {
-        Target::Movie { id, url } => all.push(Play {
-            key: format!("movie:{id}"),
-            title: title.clone(),
-            subtitle: None,
-            file: title.clone(),
-            url: url.clone(),
-            duration: details.runtime_secs,
-            entry: Some(entry_of(&row, &title, poster.clone(), extension(url), None)),
-        }),
-        Target::Series(_) => {
-            for season in &seasons {
-                let from = all.len();
-                for (n, ep) in season.episodes.iter().enumerate() {
-                    let num = ep.episode_num.unwrap_or(n as u64 + 1);
-                    let ext = ep
-                        .container_extension
-                        .as_deref()
-                        .filter(|e| !e.is_empty())
-                        .unwrap_or("mp4");
-                    let name = match ep.name() {
-                        "" => format!("Episode {num}"),
-                        name => name.to_owned(),
-                    };
-                    all.push(Play {
-                        key: format!("episode:{}", ep.id),
-                        title: title.clone(),
-                        subtitle: Some(format!("S{} E{num} · {name}", season.number)),
-                        file: format!("{title} S{}E{num}: {name}", season.number),
-                        url: client.episode_url(ep.id, ext).to_string(),
-                        duration: ep.info.runtime_secs,
-                        entry: Some(entry_of(
-                            &row,
-                            &title,
-                            poster.clone(),
-                            None,
-                            Some(format!("S{} E{num}", season.number)),
-                        )),
-                    });
+    let runtime = details.runtime_secs;
+    let build_row = row.clone();
+    let build_client = client.clone();
+    let built = use_memo(use_reactive(
+        (&title, &poster, &seasons, &runtime),
+        move |(title, poster, seasons, runtime)| {
+            let row = &build_row;
+            let client = &build_client;
+            let mut all: Vec<Play> = Vec::with_capacity(
+                seasons
+                    .iter()
+                    .map(|s| s.episodes.len())
+                    .sum::<usize>()
+                    .max(1),
+            );
+            let mut spans: Vec<(u64, std::ops::Range<usize>)> = vec![];
+            match &row.target {
+                Target::Movie { id, url } => all.push(Play {
+                    key: format!("movie:{id}"),
+                    title: title.clone(),
+                    subtitle: None,
+                    file: title.clone(),
+                    url: url.clone(),
+                    duration: runtime,
+                    entry: Some(entry_of(&row, &title, poster.clone(), extension(url), None)),
+                }),
+                Target::Series(_) => {
+                    for season in seasons.iter() {
+                        let from = all.len();
+                        for (n, ep) in season.episodes.iter().enumerate() {
+                            let num = ep.episode_num.unwrap_or(n as u64 + 1);
+                            let ext = ep
+                                .container_extension
+                                .as_deref()
+                                .filter(|e| !e.is_empty())
+                                .unwrap_or("mp4");
+                            let name = match ep.name() {
+                                "" => format!("Episode {num}"),
+                                name => name.to_owned(),
+                            };
+                            all.push(Play {
+                                key: format!("episode:{}", ep.id),
+                                title: title.clone(),
+                                subtitle: Some(format!("S{} E{num} · {name}", season.number)),
+                                file: format!("{title} S{}E{num}: {name}", season.number),
+                                url: client.episode_url(ep.id, ext).to_string(),
+                                duration: ep.info.runtime_secs,
+                                entry: Some(entry_of(
+                                    &row,
+                                    &title,
+                                    poster.clone(),
+                                    None,
+                                    Some(format!("S{} E{num}", season.number)),
+                                )),
+                            });
+                        }
+                        spans.push((season.number, from..all.len()));
+                    }
                 }
-                spans.push((season.number, from..all.len()));
+                _ => {}
             }
-        }
-        _ => {}
-    }
-    let all = Rc::new(all);
+            (Rc::new(all), Rc::new(spans))
+        },
+    ));
+    let (all, spans) = built();
     let play_at = {
         let all = all.clone();
-        move |i: usize| onplay.call((all[i].clone(), all[i + 1..].to_vec()))
+        move |i: usize| onplay.call((all.clone(), i))
     };
     // The main button plays the episode last left half watched (or the movie), else the first.
     let (start_at, resume) = all

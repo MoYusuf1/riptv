@@ -42,6 +42,7 @@ pub(crate) fn CategoryList(
     let CategoryData { list, library } = data;
     let mut query = query;
     let q = query().to_lowercase();
+    let pins: std::collections::HashSet<_> = pins.into_iter().collect();
     let matches =
         |c: &&xtream::Category| q.is_empty() || xtream::contains_lowercase(&c.category_name, &q);
     let count = |id: u64| {

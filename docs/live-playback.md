@@ -78,6 +78,9 @@ the stale source so the player can reopen the original URL instead of polling th
 redirect for a minute. Partially delivered segments are never replayed into the decoder.
 Idle reads are bounded, and non-advancing playlists use a 10–20 second inactivity threshold.
 The player replenishes its reconnect budget after a minute of healthy playback.
+The newer recovery ladder, backup controls, buffer choices, and validation limits are in
+[Live recovery](recovery.md). Connection-limit refusals now carry a retry delay to the browser;
+permanent 401/403/404/410 source refusals retain their HTTP status instead of a generic 502.
 
 With `--logs`, each segment records bytes, video duration, total elapsed time,
 `downstream_wait_s` (waiting on the player/conversion pipeline), and `upstream_s` (the

@@ -62,9 +62,37 @@ pub fn placeholder(title: &str) -> bool {
 /// The programme at the requested instant, never a past or upcoming listing.
 /// Use the same overlap rules as the full timeline.
 pub fn current(entries: &[EpgListing], now: u64) -> Option<Slot<'_>> {
-    normalize(entries)
-        .into_iter()
-        .find(|slot| slot.start <= now && now < slot.end)
+    let mut selected: Option<Slot<'_>> = None;
+    for listing in entries {
+        let (Some(start), Some(end)) = (listing.start_ts, listing.end_ts) else {
+            continue;
+        };
+        if start > now || end <= start || placeholder(&listing.title) {
+            continue;
+        }
+        if selected
+            .as_ref()
+            .is_none_or(|s| start > s.start || start == s.start && end > s.end)
+        {
+            selected = Some(Slot {
+                start,
+                end,
+                listing,
+            });
+        }
+    }
+    let mut selected = selected?;
+    for listing in entries {
+        if let (Some(start), Some(end)) = (listing.start_ts, listing.end_ts)
+            && start > selected.start
+            && end > start
+            && start < selected.end
+            && !placeholder(&listing.title)
+        {
+            selected.end = start;
+        }
+    }
+    (now < selected.end).then_some(selected)
 }
 
 /// Short programmes need a closer zoom, while long programmes can use a wider time window.
@@ -77,8 +105,9 @@ pub fn seconds_per_px(slots: &[Slot<'_>], lo: u64, hi: u64) -> u64 {
     if lengths.is_empty() {
         return 20;
     }
-    lengths.sort_unstable();
-    (lengths[lengths.len() / 2] / 140).clamp(8, 40)
+    let middle = lengths.len() / 2;
+    let (_, median, _) = lengths.select_nth_unstable(middle);
+    (*median / 140).clamp(8, 40)
 }
 
 #[cfg(test)]
@@ -143,5 +172,22 @@ mod tests {
         assert!(!has_nearby(std::slice::from_ref(&row), 150));
         assert!(normalize(&[row]).is_empty());
         assert!(!placeholder("NFL: Steelers vs Browns"));
+    }
+    #[test]
+    fn direct_lookup_matches_sorted_timeline() {
+        let mut rows = Vec::new();
+        for i in 0..80 {
+            rows.push(listing((i * 37) % 300, (i * 37) % 300 + i % 100 + 1));
+        }
+        rows.reverse();
+        for now in 0..450 {
+            let reference = normalize(&rows)
+                .into_iter()
+                .find(|s| s.start <= now && now < s.end);
+            assert_eq!(
+                current(&rows, now).map(|s| (s.start, s.end, s.listing.title.clone())),
+                reference.map(|s| (s.start, s.end, s.listing.title.clone()))
+            );
+        }
     }
 }

@@ -92,6 +92,8 @@ pub struct AppState {
     diagnostics: diagnostics::Sessions,
     logs: Option<PathBuf>,
     updates: updates::Checker,
+    probes: Arc<compat::ProbeCache>,
+    live_limits: Arc<live::Limits>,
     /// Signalled by the app's Quit: the server stops as if Ctrl+C had been pressed.
     quit: Arc<tokio::sync::Notify>,
 }
@@ -136,6 +138,8 @@ impl AppState {
             diagnostics: diagnostics::Sessions::default(),
             logs: None,
             updates: updates::Checker::default(),
+            probes: Arc::default(),
+            live_limits: Arc::default(),
             quit: Arc::default(),
         }
     }

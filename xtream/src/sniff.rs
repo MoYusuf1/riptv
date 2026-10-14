@@ -55,6 +55,100 @@ impl Sniff {
     }
 }
 
+/// Inspect a growing startup buffer without re-reading its old transport packets.
+/// Keeps at most one KiB of elementary-stream headers; offsets still refer to the caller's buffer.
+#[derive(Default)]
+pub struct GrowingSniff {
+    found: Sniff,
+    scanned: usize,
+    key_scanned: usize,
+    video: Option<(u16, &'static str)>,
+    start: Option<usize>,
+    es: Vec<u8>,
+}
+
+impl GrowingSniff {
+    pub fn update(&mut self, bytes: &[u8]) -> Sniff {
+        if container(bytes) != "mpeg_ts" {
+            return Sniff::of(bytes);
+        }
+        self.found.container = "mpeg_ts";
+        let complete = bytes.len() / 188 * 188;
+        if complete == self.scanned {
+            return self.found;
+        }
+        let added = &bytes[self.scanned..complete];
+        if self.found.pat_at.is_none() {
+            self.found.pat_at = added
+                .as_chunks::<188>()
+                .0
+                .iter()
+                .position(|p| pid(p) == 0 && unit_start(p).is_some())
+                .map(|n| self.scanned + n * 188);
+        }
+        if self.found.pmt_at.is_none() {
+            let program = program_map(added);
+            self.video = program.video;
+            self.found.video = program.video.map(|v| v.1);
+            self.found.audio = program.audio;
+            self.found.pmt_at = program.at.map(|at| at + self.scanned);
+        }
+        self.scanned = complete;
+        if let Some((video_pid, codec)) = self.video
+            && self.found.keyframe_at.is_none()
+        {
+            for (n, packet) in bytes[self.key_scanned..complete]
+                .as_chunks::<188>()
+                .0
+                .iter()
+                .enumerate()
+            {
+                if pid(packet) != video_pid {
+                    continue;
+                }
+                if let Some(pes) = unit_start(packet) {
+                    if self.capture(codec) {
+                        break;
+                    }
+                    self.start = Some(self.key_scanned + n * 188);
+                    self.es.clear();
+                    if let Some(&length) = pes.get(8) {
+                        self.es
+                            .extend_from_slice(pes.get(9 + length as usize..).unwrap_or_default());
+                    }
+                } else if self.start.is_some() && packet[3] & 0x10 != 0 {
+                    let skip = if packet[3] & 0x20 != 0 {
+                        5 + packet[4] as usize
+                    } else {
+                        4
+                    };
+                    let payload = packet.get(skip..).unwrap_or_default();
+                    let take = payload.len().min(1024_usize.saturating_sub(self.es.len()));
+                    self.es.extend_from_slice(&payload[..take]);
+                }
+            }
+            self.capture(codec);
+            self.key_scanned = complete;
+        }
+        self.found
+    }
+
+    fn capture(&mut self, codec: &str) -> bool {
+        if self.found.keyframe_at.is_some() {
+            return true;
+        }
+        if let Some(sps) = parameter_sets(&self.es, codec) {
+            self.found.keyframe_at = self.start;
+            if let Some(sps) = sps {
+                self.found.interlaced = Some(sps.interlaced);
+                self.found.height = Some(sps.height);
+            }
+            return true;
+        }
+        false
+    }
+}
+
 pub fn container(bytes: &[u8]) -> &'static str {
     if bytes.starts_with(b"#EXTM3U") {
         "hls_or_m3u"
@@ -189,27 +283,33 @@ fn first_keyframe(bytes: &[u8], video_pid: u16, codec: &str) -> Option<(usize, O
                 es.extend_from_slice(next.get(skip..).unwrap_or_default());
             }
         }
-        let header = |w: &[u8]| match codec {
-            "h264" => w[3] & 0x1f == 7,
-            "hevc" => matches!((w[3] >> 1) & 0x3f, 32 | 33),
-            _ => w[3] == 0xb3,
-        };
-        let Some(at) = es.windows(4).position(|w| w[..3] == [0, 0, 1] && header(w)) else {
-            continue;
-        };
-        let sps = (codec == "h264")
-            .then(|| {
-                let from = at + 4;
-                let end = es[from..]
-                    .windows(3)
-                    .position(|w| w == [0, 0, 1])
-                    .map_or(es.len(), |e| from + e);
-                parse_sps(&es[from..end])
-            })
-            .flatten();
-        return Some((index * 188, sps));
+        if let Some(sps) = parameter_sets(&es, codec) {
+            return Some((index * 188, sps));
+        }
     }
     None
+}
+
+fn parameter_sets(es: &[u8], codec: &str) -> Option<Option<Sps>> {
+    let header = |w: &[u8]| match codec {
+        "h264" => w[3] & 0x1f == 7,
+        "hevc" => matches!((w[3] >> 1) & 0x3f, 32 | 33),
+        _ => w[3] == 0xb3,
+    };
+    let at = es
+        .windows(4)
+        .position(|w| w[..3] == [0, 0, 1] && header(w))?;
+    let sps = (codec == "h264")
+        .then(|| {
+            let from = at + 4;
+            let end = es[from..]
+                .windows(3)
+                .position(|w| w == [0, 0, 1])
+                .map_or(es.len(), |e| from + e);
+            parse_sps(&es[from..end])
+        })
+        .flatten();
+    Some(sps)
 }
 
 /// The few fields of an H.264 SPS (after its NAL header) needed here, per ITU-T H.264 7.3.2.1.
@@ -566,5 +666,23 @@ mod tests {
         assert_eq!(plan(&sniffed(None, None), linux_chrome), Plan::Browser);
         assert_eq!(Plan::ConvertSound.video(), "copy");
         assert_eq!(Plan::from_name("convert_video"), Some(Plan::ConvertVideo));
+    }
+    #[test]
+    fn incremental_detection_matches_complete_transport_samples() {
+        for bytes in [
+            include_bytes!("../../proxy/fixtures/h264_ac3.ts").as_slice(),
+            include_bytes!("../../proxy/fixtures/hevc_ac3.ts").as_slice(),
+            include_bytes!("../../proxy/fixtures/interlaced_576i.ts").as_slice(),
+        ] {
+            let expected = Sniff::of(bytes);
+            for step in [1, 187, 188, 1024, 65536] {
+                let mut reader = GrowingSniff::default();
+                for end in (step..bytes.len()).step_by(step) {
+                    reader.update(&bytes[..end]);
+                }
+                assert_eq!(reader.update(bytes), expected, "chunk size {step}");
+                assert!(reader.es.len() <= 1024);
+            }
+        }
     }
 }

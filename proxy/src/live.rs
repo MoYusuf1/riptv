@@ -11,7 +11,12 @@
 //! The browser gets a single response: it never runs an HLS player, never waits for a whole
 //! segment, and starts on the first half-second fragment.
 
-use std::{process::Stdio, time::Duration};
+use std::{
+    collections::HashMap,
+    process::Stdio,
+    sync::Mutex,
+    time::{Duration, SystemTime},
+};
 
 use axum::{
     body::{Body, Bytes},
@@ -25,10 +30,10 @@ use tokio::{
     io::AsyncWriteExt,
     process::Command,
     sync::mpsc,
-    time::{Instant, sleep, timeout},
+    time::{Instant, sleep, timeout, timeout_at},
 };
 use tokio_util::io::ReaderStream;
-use xtream::{Sniff, sniff::Plan};
+use xtream::sniff::Plan;
 
 use crate::{
     AppState,
@@ -55,15 +60,134 @@ pub struct LiveQuery {
 const SNIFF_MAX: usize = 4 * 1024 * 1024;
 /// Chunks in flight between the provider and ffmpeg.
 const QUEUE: usize = 32;
+/// A queue slot owns at most this many bytes (32 slots = 2 MiB, regardless of upstream chunks).
+const QUEUED_BYTES: usize = 64 * 1024;
+
+async fn enqueue(tx: &mpsc::Sender<Bytes>, bytes: Bytes) -> Result<(), ()> {
+    if bytes.len() <= QUEUED_BYTES {
+        return tx.send(bytes).await.map_err(|_| ());
+    }
+    for part in bytes.chunks(QUEUED_BYTES) {
+        // Own the small allocation: slicing alone would retain the large parent buffer.
+        tx.send(Bytes::copy_from_slice(part))
+            .await
+            .map_err(|_| ())?;
+    }
+    Ok(())
+}
 /// A playlist this large is not a playlist.
 const PLAYLIST_MAX: usize = 1024 * 1024;
 const READ_IDLE: Duration = Duration::from_secs(10);
 const REQUEST_WAIT: Duration = Duration::from_secs(10);
 
+/// Provider-wide cooldowns also cover failures after response headers were sent. No URLs,
+/// account names, or passwords are retained. Expired entries are removed on access.
+#[derive(Default)]
+pub(crate) struct Limits(Mutex<LimitState>);
+#[derive(Default)]
+struct LimitState {
+    providers: HashMap<String, Instant>,
+    overflow: Option<Instant>,
+}
+impl Limits {
+    fn remaining(&self, url: &Url) -> u64 {
+        let mut limits = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        limits.providers.retain(|_, until| *until > now);
+        let overflow = limits.overflow.filter(|until| *until > now);
+        if limits.providers.is_empty() && overflow.is_none() {
+            return 0;
+        }
+        limits
+            .providers
+            .get(&url.origin().ascii_serialization())
+            .copied()
+            .into_iter()
+            .chain(overflow)
+            .max()
+            .map_or(0, |until| {
+                until
+                    .saturating_duration_since(Instant::now())
+                    .as_secs()
+                    .saturating_add(1)
+            })
+    }
+    fn set(&self, url: &Url, seconds: u64) {
+        if seconds == 0 {
+            return;
+        }
+        let mut limits = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let now = Instant::now();
+        limits.providers.retain(|_, until| *until > now);
+        let key = url.origin().ascii_serialization();
+        let until = now + Duration::from_secs(seconds.min(7 * 24 * 3600));
+        // At capacity, conservatively wait for all providers. Never drop an active limit.
+        if limits.providers.len() >= 64 && !limits.providers.contains_key(&key) {
+            limits.overflow = Some(limits.overflow.map_or(until, |old| old.max(until)));
+            return;
+        }
+        limits
+            .providers
+            .entry(key)
+            .and_modify(|old| *old = (*old).max(until))
+            .or_insert(until);
+    }
+    fn carry(&self, from: &Url, to: &Url) {
+        self.set(to, self.remaining(from));
+    }
+}
+
+fn retry_seconds(value: &str, now: SystemTime) -> Option<u64> {
+    value
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .or_else(|| {
+            httpdate::parse_http_date(value)
+                .ok()
+                .map(|date| date.duration_since(now).unwrap_or_default().as_secs())
+        })
+        .map(|seconds| seconds.min(7 * 24 * 3600))
+}
+
+fn limited(seconds: u64, code: u16) -> Response {
+    let why = if code > 0 {
+        format!("Server returned {code}. The provider asked us to wait before retrying.")
+    } else {
+        "The provider asked us to wait before retrying.".into()
+    };
+    let mut response = refusal(StatusCode::TOO_MANY_REQUESTS, &why);
+    if let Ok(value) = seconds.to_string().parse() {
+        response.headers_mut().insert(header::RETRY_AFTER, value);
+    }
+    response
+}
+
+fn interrupted(s: &AppState, url: &Url, status: StatusCode, why: &str) -> Response {
+    let wait = s.live_limits.remaining(url);
+    if wait > 0 {
+        limited(wait, 0)
+    } else {
+        refusal(status, why)
+    }
+}
+
 #[derive(Debug)]
 enum FetchError {
     Request(String),
     Status(u16),
+    Limited(u64, u16),
+}
+
+impl From<String> for FetchError {
+    fn from(why: String) -> Self {
+        Self::Request(why)
+    }
+}
+impl From<&str> for FetchError {
+    fn from(why: &str) -> Self {
+        Self::Request(why.into())
+    }
 }
 
 impl FetchError {
@@ -80,6 +204,10 @@ impl std::fmt::Display for FetchError {
         match self {
             Self::Request(why) => f.write_str(why),
             Self::Status(code) => write!(f, "Server returned {code}"),
+            Self::Limited(seconds, code) => write!(
+                f,
+                "Server returned {code}; provider requested a {seconds}s cooldown"
+            ),
         }
     }
 }
@@ -94,6 +222,10 @@ pub async fn stream(
         Err((status, why)) => return refusal(status, why),
     };
     let ua = agent(&headers);
+    let wait = s.live_limits.remaining(&url);
+    if wait > 0 {
+        return limited(wait, 0);
+    }
     let tag = diagnostics::tag(&s, &url);
     let started = Instant::now();
 
@@ -106,8 +238,23 @@ pub async fn stream(
         Ok(source) => source,
         Err(why) => {
             diagnostics::note(&s, &format!("{tag}live could not start: {why}"));
+            let wait = s.live_limits.remaining(&url);
+            if wait > 0 {
+                return limited(
+                    wait,
+                    match &why {
+                        FetchError::Limited(_, code) => *code,
+                        _ => 0,
+                    },
+                );
+            }
             return refusal(
-                StatusCode::BAD_GATEWAY,
+                match &why {
+                    FetchError::Status(code @ (401 | 403 | 404 | 410)) => {
+                        StatusCode::from_u16(*code).unwrap_or(StatusCode::BAD_GATEWAY)
+                    }
+                    _ => StatusCode::BAD_GATEWAY,
+                },
                 &format!("could not read the stream: {why}"),
             );
         }
@@ -127,16 +274,26 @@ pub async fn stream(
             head.extend_from_slice(&chunk);
             started.elapsed()
         }
-        Ok(None) => return refusal(StatusCode::BAD_GATEWAY, "the stream ended before it began"),
+        Ok(None) => {
+            return interrupted(
+                &s,
+                &url,
+                StatusCode::BAD_GATEWAY,
+                "the stream ended before it began",
+            );
+        }
         Err(_) => {
-            return refusal(
+            return interrupted(
+                &s,
+                &url,
                 StatusCode::GATEWAY_TIMEOUT,
                 "the provider sent nothing for 15 s",
             );
         }
     };
+    let mut inspector = xtream::sniff::GrowingSniff::default();
     let sniffed = loop {
-        let found = Sniff::of(&head);
+        let found = inspector.update(&head);
         // Known when it isn't a transport stream, or its map is read and (for a picture) where
         // its first keyframe is.
         let settled = found.container != "mpeg_ts"
@@ -314,7 +471,9 @@ pub async fn stream(
     let first = match timeout(Duration::from_secs(20), futures_next(&mut out)).await {
         Ok(Some(Ok(bytes))) => bytes,
         _ => {
-            return refusal(
+            return interrupted(
+                &s,
+                &url,
                 StatusCode::BAD_GATEWAY,
                 "ffmpeg produced nothing from this stream",
             );
@@ -395,6 +554,7 @@ impl Drop for AbortOnDrop {
 enum Source {
     /// An HLS media playlist, followed from `next` on.
     Hls {
+        original: Url,
         playlist: Url,
         media: Media,
         next: u64,
@@ -417,19 +577,43 @@ impl Source {
         url: &Url,
         ua: &str,
         steps: &mut Vec<String>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, FetchError> {
         let mut current = url.clone();
         for _ in 0..2 {
             let asked = Instant::now();
-            let mut response = get_retry(s, &current, ua, "", "opening stream").await?;
+            let mut response = match get_retry(s, &current, ua, "", "opening stream").await {
+                Ok(response) => response,
+                Err(error) => {
+                    s.live_limits.carry(&current, url);
+                    return Err(error);
+                }
+            };
             let redirected = response.url() != &current;
             let base = response.url().clone();
             let first = response.chunk();
-            let first = timeout(READ_IDLE, first)
+            let mut first = timeout(READ_IDLE, first)
                 .await
                 .map_err(|_| "the provider stopped sending data".to_string())?
                 .map_err(|_| "the connection broke".to_string())?
                 .unwrap_or_default();
+            // HTTP chunks need not contain a full playlist signature. Only accumulate while
+            // the bytes could still be that signature; transport streams start immediately.
+            let deadline = Instant::now() + READ_IDLE;
+            while first.len() < 7 && b"#EXTM3U".starts_with(&first) {
+                let Some(chunk) = timeout_at(deadline, response.chunk())
+                    .await
+                    .map_err(|_| "the provider stopped sending data".to_string())?
+                    .map_err(|_| "the connection broke".to_string())?
+                else {
+                    break;
+                };
+                if first.len().saturating_add(chunk.len()) > PLAYLIST_MAX {
+                    return Err("the playlist is too large".into());
+                }
+                let mut joined = first.to_vec();
+                joined.extend_from_slice(&chunk);
+                first = Bytes::from(joined);
+            }
             if !first.starts_with(b"#EXTM3U") {
                 steps.push(format!("stream {}ms", asked.elapsed().as_millis()));
                 return Ok(Self::Continuous(response, first));
@@ -449,6 +633,7 @@ impl Source {
             let media = Media::parse(&text, &base);
             let next = media.start();
             return Ok(Self::Hls {
+                original: url.clone(),
                 playlist: base,
                 media,
                 next,
@@ -461,23 +646,27 @@ impl Source {
     async fn run(self, s: AppState, ua: String, tag: String, tx: mpsc::Sender<Bytes>) {
         match self {
             Self::Continuous(mut response, first) => {
-                if tx.send(first).await.is_err() {
+                if enqueue(&tx, first).await.is_err() {
                     return;
                 }
                 while let Ok(Ok(Some(chunk))) = timeout(READ_IDLE, response.chunk()).await {
-                    if tx.send(chunk).await.is_err() {
+                    if enqueue(&tx, chunk).await.is_err() {
                         return;
                     }
                 }
                 diagnostics::note(&s, &format!("{tag}live stream ended by the provider"));
             }
             Self::Hls {
-                playlist,
+                original,
+                mut playlist,
                 mut media,
                 mut next,
             } => {
                 let mut quiet_since = Instant::now();
                 let mut refreshed = Instant::now();
+                let mut skipped = 0_u8;
+                let mut renewed = false;
+                let mut changed = true;
                 loop {
                     let from = next;
                     for (seq, segment, length) in
@@ -487,7 +676,19 @@ impl Source {
                         let mut response = match get_retry(&s, segment, &ua, &tag, "segment").await
                         {
                             Ok(response) => response,
+                            Err(FetchError::Status(404 | 410)) if skipped < 2 => {
+                                // Only skip a missing segment before forwarding any of its bytes.
+                                // Two skips per connection, not an unlimited hole in the timeline.
+                                skipped += 1;
+                                next = seq.saturating_add(1);
+                                diagnostics::note(
+                                    &s,
+                                    &format!("{tag}live missing segment {seq}; skipping"),
+                                );
+                                continue;
+                            }
                             Err(why) => {
+                                s.live_limits.carry(segment, &original);
                                 diagnostics::note(
                                     &s,
                                     &format!(
@@ -517,7 +718,7 @@ impl Source {
                             };
                             bytes += chunk.len() as u64;
                             let sending = Instant::now();
-                            if tx.send(chunk).await.is_err() {
+                            if enqueue(&tx, chunk).await.is_err() {
                                 return; // the viewer left
                             }
                             blocked += sending.elapsed();
@@ -540,7 +741,10 @@ impl Source {
                                 ),
                             );
                         }
-                        next = seq + 1;
+                        let Some(after) = seq.checked_add(1) else {
+                            return;
+                        };
+                        next = after;
                         quiet_since = Instant::now();
                     }
                     if media.ended {
@@ -551,8 +755,10 @@ impl Source {
                         diagnostics::note(&s, &format!("{tag}live playlist stopped advancing"));
                         return;
                     }
-                    // Look again after half a segment (sooner never finds anything new).
-                    let wait = Duration::from_secs_f64((media.target / 2.0).max(0.5));
+                    // Changed playlists wait a full target; unchanged ones half (RFC 8216).
+                    let wait = Duration::from_secs_f64(
+                        (media.target / if changed { 1.0 } else { 2.0 }).max(0.5),
+                    );
                     if let Some(left) = wait.checked_sub(refreshed.elapsed()) {
                         sleep(left).await;
                     }
@@ -562,7 +768,13 @@ impl Source {
                     refreshed = Instant::now();
                     match get_retry(&s, &playlist, &ua, &tag, "playlist refresh").await {
                         Ok(response) => match read_rest(response, Bytes::new()).await {
-                            Ok(text) => media = Media::parse(&text, &playlist),
+                            Ok(text) => {
+                                let updated = Media::parse(&text, &playlist);
+                                changed = updated.sequence != media.sequence
+                                    || updated.segments.last().map(|s| s.0)
+                                        != media.segments.last().map(|s| s.0);
+                                media = updated;
+                            }
                             Err(why) => {
                                 diagnostics::note(
                                     &s,
@@ -572,6 +784,27 @@ impl Source {
                             }
                         },
                         Err(why) => {
+                            s.live_limits.carry(&playlist, &original);
+                            // Refresh an expired redirect/master link once, retaining the next
+                            // sequence number so already forwarded segments cannot be replayed.
+                            if !renewed
+                                && matches!(why, FetchError::Status(404 | 410))
+                                && playlist != original
+                            {
+                                renewed = true;
+                                if let Ok(Self::Hls {
+                                    playlist: fresh,
+                                    media: updated,
+                                    ..
+                                }) = Self::open(&s, &original, &ua, &mut vec![]).await
+                                    && updated.continues(&media, next)
+                                {
+                                    playlist = fresh;
+                                    media = updated;
+                                    changed = true;
+                                    continue;
+                                }
+                            }
                             diagnostics::note(
                                 &s,
                                 &format!("{tag}live playlist refresh: {why}; reopening stream"),
@@ -586,6 +819,10 @@ impl Source {
 }
 
 async fn get(s: &AppState, url: &Url, ua: &str) -> Result<reqwest::Response, FetchError> {
+    let wait = s.live_limits.remaining(url);
+    if wait > 0 {
+        return Err(FetchError::Limited(wait, 429));
+    }
     let request = s
         .http
         .get(url.clone())
@@ -603,6 +840,20 @@ async fn get(s: &AppState, url: &Url, ua: &str) -> Result<reqwest::Response, Fet
         })?;
     let status = response.status();
     if !status.is_success() {
+        if let Some(seconds) = response
+            .headers()
+            .get(header::RETRY_AFTER)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| retry_seconds(v, SystemTime::now()))
+            .filter(|s| *s > 0)
+        {
+            s.live_limits.set(url, seconds);
+            return Err(FetchError::Limited(seconds, status.as_u16()));
+        }
+        if matches!(status.as_u16(), 429 | 509) {
+            s.live_limits.set(url, 5);
+            return Err(FetchError::Limited(5, status.as_u16()));
+        }
         return Err(FetchError::Status(status.as_u16()));
     }
     Ok(response)
@@ -616,7 +867,7 @@ async fn get_retry(
     ua: &str,
     tag: &str,
     what: &str,
-) -> Result<reqwest::Response, String> {
+) -> Result<reqwest::Response, FetchError> {
     for attempt in 0..3 {
         match get(s, url, ua).await {
             Ok(response) => return Ok(response),
@@ -627,20 +878,32 @@ async fn get_retry(
                 );
                 sleep(Duration::from_millis(500 * (attempt + 1))).await;
             }
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(error),
         }
     }
     unreachable!()
 }
 
 async fn read_rest(mut response: reqwest::Response, first: Bytes) -> Result<String, String> {
+    if first.len() > PLAYLIST_MAX {
+        return Err("the playlist is too large".into());
+    }
     let mut body = first.to_vec();
+    let deadline = Instant::now() + READ_IDLE;
     while body.len() < PLAYLIST_MAX {
-        match timeout(READ_IDLE, response.chunk()).await {
-            Ok(Ok(Some(chunk))) => body.extend_from_slice(&chunk),
+        match timeout_at(deadline, response.chunk()).await {
+            Ok(Ok(Some(chunk))) => {
+                if body.len().saturating_add(chunk.len()) > PLAYLIST_MAX {
+                    return Err("the playlist is too large".into());
+                }
+                body.extend_from_slice(&chunk);
+            }
             Ok(Ok(None)) => break,
             _ => return Err("the connection broke or stopped sending data".into()),
         }
+    }
+    if body.len() >= PLAYLIST_MAX {
+        return Err("the playlist is too large".into());
     }
     Ok(String::from_utf8_lossy(&body).into_owned())
 }
@@ -661,13 +924,28 @@ struct Media {
 }
 
 impl Media {
+    /// A fresh address may name another timeline. Require an identical overlapping segment
+    /// before continuing the existing decoder; otherwise the browser must start a fresh one.
+    fn continues(&self, old: &Self, next: u64) -> bool {
+        let Some(previous) = next.checked_sub(1) else {
+            return false;
+        };
+        self.segments.iter().any(|(seq, _, _)| *seq == next)
+            && old
+                .segments
+                .iter()
+                .find(|(seq, _, _)| *seq == previous)
+                .zip(self.segments.iter().find(|(seq, _, _)| *seq == previous))
+                .is_some_and(|(old, new)| old.1 == new.1)
+    }
+
     fn parse(text: &str, base: &Url) -> Self {
         let tag = |name: &str| {
             text.lines()
                 .find_map(|l| l.trim().strip_prefix(name))
                 .map(str::trim)
         };
-        let sequence = tag("#EXT-X-MEDIA-SEQUENCE:")
+        let sequence: u64 = tag("#EXT-X-MEDIA-SEQUENCE:")
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
         let mut segments = vec![];
@@ -682,14 +960,15 @@ impl Media {
             } else if !line.starts_with('#')
                 && let Ok(url) = base.join(line)
             {
-                segments.push((sequence + segments.len() as u64, url, seconds));
+                segments.push((sequence.saturating_add(segments.len() as u64), url, seconds));
             }
         }
         Self {
             target: tag("#EXT-X-TARGETDURATION:")
-                .and_then(|v| v.parse().ok())
+                .and_then(|v| v.parse::<f64>().ok())
+                .filter(|v| v.is_finite())
                 .unwrap_or(6.0_f64)
-                .max(1.0),
+                .clamp(1.0, 60.0),
             sequence,
             segments,
             ended: text.contains("#EXT-X-ENDLIST"),
@@ -729,6 +1008,335 @@ mod tests {
         (base, task)
     }
 
+    fn test_state() -> AppState {
+        crate::tls();
+        AppState {
+            http: reqwest::Client::new(),
+            ..AppState::new()
+        }
+    }
+
+    #[test]
+    fn retry_after_accepts_seconds_and_http_dates() {
+        let now = httpdate::parse_http_date("Wed, 21 Oct 2015 07:28:00 GMT").unwrap();
+        assert_eq!(retry_seconds("30", now), Some(30));
+        assert_eq!(
+            retry_seconds("Wed, 21 Oct 2015 07:28:30 GMT", now),
+            Some(30)
+        );
+        assert_eq!(retry_seconds("Wed, 21 Oct 2015 07:27:30 GMT", now), Some(0));
+        assert_eq!(retry_seconds("invalid", now), None);
+    }
+
+    #[test]
+    fn cooldown_storage_is_bounded_and_never_evicts_active_limits() {
+        let limits = Limits::default();
+        for id in 0..100 {
+            limits.set(
+                &Url::parse(&format!("https://provider-{id}.example/")).unwrap(),
+                30,
+            );
+        }
+        assert_eq!(limits.0.lock().unwrap().providers.len(), 64);
+        assert!(limits.remaining(&Url::parse("https://provider-99.example/").unwrap()) >= 29);
+        assert!(limits.remaining(&Url::parse("https://provider-0.example/").unwrap()) >= 29);
+    }
+
+    #[tokio::test]
+    async fn segment_rate_limit_survives_headers_already_sent_to_the_browser() {
+        let (base, task) = provider(Router::new().route(
+            "/segment",
+            route_get(|| async {
+                (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    [(header::RETRY_AFTER, "30")],
+                    "",
+                )
+            }),
+        ))
+        .await;
+        let original = Url::parse("https://original.example/live").unwrap();
+        let state = test_state();
+        let (tx, mut rx) = mpsc::channel(32);
+        Source::Hls {
+            original: original.clone(),
+            playlist: base.clone(),
+            media: Media::parse("#EXTM3U\n#EXTINF:1,\nsegment\n#EXT-X-ENDLIST\n", &base),
+            next: 0,
+        }
+        .run(state.clone(), String::new(), String::new(), tx)
+        .await;
+        assert!(rx.recv().await.is_none());
+        // This returns before DNS or a network request to the original host.
+        assert!(matches!(
+            get(&state, &original, "").await,
+            Err(FetchError::Limited(..))
+        ));
+        assert!(state.live_limits.remaining(&original) >= 29);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn split_playlist_signature_is_not_mistaken_for_video() {
+        struct Split {
+            step: u8,
+            delay: std::pin::Pin<Box<tokio::time::Sleep>>,
+        }
+        impl futures_core::Stream for Split {
+            type Item = std::io::Result<Bytes>;
+            fn poll_next(
+                mut self: std::pin::Pin<&mut Self>,
+                cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Option<Self::Item>> {
+                match self.step {
+                    0 => {
+                        self.step = 1;
+                        std::task::Poll::Ready(Some(Ok(Bytes::from_static(b"#EXT"))))
+                    }
+                    1 => {
+                        if std::future::Future::poll(self.delay.as_mut(), cx).is_pending() {
+                            return std::task::Poll::Pending;
+                        }
+                        self.step = 2;
+                        std::task::Poll::Ready(Some(Ok(Bytes::from_static(
+                            b"M3U\n#EXTINF:1,\nsegment\n#EXT-X-ENDLIST\n",
+                        ))))
+                    }
+                    _ => std::task::Poll::Ready(None),
+                }
+            }
+        }
+        let (base, task) = provider(Router::new().route(
+            "/",
+            route_get(|| async {
+                Body::from_stream(Split {
+                    step: 0,
+                    delay: Box::pin(sleep(Duration::from_millis(50))),
+                })
+            }),
+        ))
+        .await;
+        assert!(matches!(
+            Source::open(&test_state(), &base, "", &mut vec![]).await,
+            Ok(Source::Hls { .. })
+        ));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn retry_after_reaches_the_browser_and_blocks_manual_reopens() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        let (base, task) = provider(Router::new().route(
+            "/",
+            route_get(move || {
+                count.fetch_add(1, Ordering::SeqCst);
+                async {
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        [(header::RETRY_AFTER, "30")],
+                        "wait",
+                    )
+                }
+            }),
+        ))
+        .await;
+        let s = test_state();
+        s.approved.write().unwrap().insert("127.0.0.1".into());
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "127.0.0.1:3000".parse().unwrap());
+        headers.insert("sec-fetch-site", "same-origin".parse().unwrap());
+        for _ in 0..3 {
+            let response = stream(
+                State(s.clone()),
+                Query(LiveQuery {
+                    url: base.to_string(),
+                    can: String::new(),
+                    video: None,
+                }),
+                headers.clone(),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            assert!(
+                response.headers()[header::RETRY_AFTER]
+                    .to_str()
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap()
+                    >= 29
+            );
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn redirected_playlist_cooldown_applies_to_the_original_url() {
+        let (base, task) = provider(
+            Router::new()
+                .route(
+                    "/",
+                    route_get(|| async { "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1000\nvariant\n" }),
+                )
+                .route(
+                    "/variant",
+                    route_get(|| async {
+                        (
+                            StatusCode::TOO_MANY_REQUESTS,
+                            [(header::RETRY_AFTER, "20")],
+                            "",
+                        )
+                    }),
+                ),
+        )
+        .await;
+        let s = test_state();
+        assert!(matches!(
+            Source::open(&s, &base, "", &mut vec![]).await,
+            Err(FetchError::Limited(..))
+        ));
+        assert!(s.live_limits.remaining(&base) >= 19);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn first_segment_cooldown_is_not_hidden_by_a_gateway_error() {
+        let (base, task) = provider(
+            Router::new()
+                .route(
+                    "/",
+                    route_get(|| async { "#EXTM3U\n#EXTINF:1,\nsegment\n#EXT-X-ENDLIST\n" }),
+                )
+                .route(
+                    "/segment",
+                    route_get(|| async {
+                        (
+                            StatusCode::TOO_MANY_REQUESTS,
+                            [(header::RETRY_AFTER, "30")],
+                            "",
+                        )
+                    }),
+                ),
+        )
+        .await;
+        let state = test_state();
+        state.approved.write().unwrap().insert("127.0.0.1".into());
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, "127.0.0.1:3000".parse().unwrap());
+        let response = stream(
+            State(state),
+            Query(LiveQuery {
+                url: base.to_string(),
+                can: String::new(),
+                video: None,
+            }),
+            headers,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(response.headers().contains_key(header::RETRY_AFTER));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn missing_segments_are_skipped_but_only_twice() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        let (base, task) = provider(
+            Router::new()
+                .route(
+                    "/gone",
+                    route_get(move || {
+                        count.fetch_add(1, Ordering::SeqCst);
+                        async { StatusCode::NOT_FOUND }
+                    }),
+                )
+                .route("/good", route_get(|| async { "good" })),
+        )
+        .await;
+        for (playlist, expected) in [
+            (
+                "#EXTM3U\n#EXTINF:1,\ngone\n#EXTINF:1,\ngood\n#EXT-X-ENDLIST\n",
+                b"good".as_slice(),
+            ),
+            (
+                "#EXTM3U\n#EXTINF:1,\ngone\n#EXTINF:1,\ngone\n#EXTINF:1,\ngone\n#EXTINF:1,\ngood\n#EXT-X-ENDLIST\n",
+                b"".as_slice(),
+            ),
+        ] {
+            let (tx, mut rx) = mpsc::channel(32);
+            Source::Hls {
+                original: base.clone(),
+                playlist: base.clone(),
+                media: Media::parse(playlist, &base),
+                next: 0,
+            }
+            .run(test_state(), String::new(), String::new(), tx)
+            .await;
+            let mut data = vec![];
+            while let Some(chunk) = rx.recv().await {
+                data.extend_from_slice(&chunk);
+            }
+            assert_eq!(data, expected);
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn expired_variant_is_renewed_without_replaying_consumed_segments() {
+        let segment_calls = Arc::new(AtomicUsize::new(0));
+        let count = segment_calls.clone();
+        let (base, task) = provider(
+            Router::new()
+                .route(
+                    "/",
+                    route_get(|| async {
+                        "#EXTM3U\n#EXTINF:1,\none\n#EXTINF:1,\ntwo\n#EXT-X-ENDLIST\n"
+                    }),
+                )
+                .route("/expired", route_get(|| async { StatusCode::GONE }))
+                .route(
+                    "/one",
+                    route_get(move || {
+                        count.fetch_add(1, Ordering::SeqCst);
+                        async { "one" }
+                    }),
+                )
+                .route("/two", route_get(|| async { "two" })),
+        )
+        .await;
+        let (tx, mut rx) = mpsc::channel(32);
+        Source::Hls {
+            original: base.clone(),
+            playlist: base.join("expired").unwrap(),
+            media: Media::parse("#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\none\n", &base),
+            next: 0,
+        }
+        .run(test_state(), String::new(), String::new(), tx)
+        .await;
+        let mut data = vec![];
+        while let Some(chunk) = rx.recv().await {
+            data.extend_from_slice(&chunk);
+        }
+        assert_eq!(data, b"onetwo");
+        assert_eq!(segment_calls.load(Ordering::SeqCst), 1);
+        task.abort();
+    }
+
+    #[test]
+    fn renewal_rejects_a_different_timeline_and_invalid_target_duration() {
+        let base = Url::parse("https://example.org/").unwrap();
+        let old = Media::parse("#EXTM3U\n#EXTINF:1,\none\n", &base);
+        let new = Media::parse(
+            "#EXTM3U\n#EXT-X-TARGETDURATION:inf\n#EXTINF:1,\nother\n#EXTINF:1,\ntwo\n",
+            &base,
+        );
+        assert!(!new.continues(&old, 1));
+        assert_eq!(new.target, 6.0);
+    }
+
     #[tokio::test]
     async fn temporary_segment_refusal_is_retried_without_skipping_or_duplicating() {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -757,6 +1365,7 @@ mod tests {
         let media = Media::parse("#EXTM3U\n#EXTINF:1,\nsegment\n#EXT-X-ENDLIST\n", &base);
         let (tx, mut rx) = mpsc::channel(32);
         Source::Hls {
+            original: base.clone(),
             playlist: base,
             media,
             next: 0,
@@ -799,6 +1408,7 @@ mod tests {
         timeout(
             Duration::from_secs(3),
             Source::Hls {
+                original: base.clone(),
                 playlist: base,
                 media,
                 next: 0,
@@ -858,6 +1468,7 @@ mod tests {
         let media = Media::parse("#EXTM3U\n#EXTINF:1,\nsegment\n#EXT-X-ENDLIST\n", &base);
         let (tx, mut rx) = mpsc::channel(32);
         Source::Hls {
+            original: base.clone(),
             playlist: base,
             media,
             next: 0,
@@ -921,5 +1532,22 @@ mod tests {
         // Fewer than that listed: all of them.
         let few = "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:7\n#EXTINF:1,\na.ts\n#EXTINF:1,\nb.ts\n";
         assert_eq!(Media::parse(few, &base).start(), 7);
+    }
+    #[tokio::test]
+    async fn oversized_network_chunks_have_bounded_owned_queue_slots() {
+        let input = Bytes::from(vec![42; QUEUED_BYTES * 3 + 17]);
+        let expected = input.len();
+        let (tx, mut rx) = mpsc::channel(2);
+        let sending = tokio::spawn(async move {
+            enqueue(&tx, input).await.unwrap();
+        });
+        let mut total = 0;
+        while let Some(chunk) = rx.recv().await {
+            assert!(chunk.len() <= QUEUED_BYTES);
+            assert!(chunk.iter().all(|b| *b == 42));
+            total += chunk.len();
+        }
+        sending.await.unwrap();
+        assert_eq!(total, expected);
     }
 }

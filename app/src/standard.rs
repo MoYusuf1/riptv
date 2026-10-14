@@ -2,7 +2,7 @@
 //! its codecs and converts only what this browser can't decode (see `proxy/src/live.rs`). The
 //! experimental (rstreamkit) player never comes here, and this never uses rstreamkit.
 
-use std::time::Duration;
+use std::{cell::Cell, rc::Rc, time::Duration};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{
     AbortController, HtmlVideoElement, MediaSource, MediaSourceReadyState, RequestInit, Response,
@@ -19,9 +19,19 @@ pub struct Stream {
     abort: AbortController,
     object: String,
     media: MediaSource,
+    progress: Rc<Cell<Progress>>,
+}
+
+use crate::recovery::Transport as Progress;
+
+pub(crate) fn clock() -> u64 {
+    js_sys::Date::now() as u64
 }
 
 impl Stream {
+    pub(crate) fn progress(&self) -> Progress {
+        self.progress.get()
+    }
     /// The channel sent all it had (a clip, or a channel that stopped): nothing more is coming.
     pub fn ended(&self) -> bool {
         self.media.ready_state() == MediaSourceReadyState::Ended
@@ -35,10 +45,10 @@ impl Drop for Stream {
     }
 }
 
-pub fn start(
+pub(crate) fn start(
     video: HtmlVideoElement,
     src: String,
-    mut on_error: impl FnMut(String) + 'static,
+    mut on_error: impl FnMut(String, Progress) + 'static,
 ) -> Result<Stream, String> {
     let media = MediaSource::new().map_err(js_error)?;
     let object = web_sys::Url::create_object_url_with_source(&media).map_err(js_error)?;
@@ -47,18 +57,30 @@ pub fn start(
     video.set_src(&object);
     video.load();
     let pumped = media.clone();
+    let progress = Rc::new(Cell::new(Progress {
+        last_data: clock(),
+        waiting_since: clock(),
+        reading: true,
+        ..Default::default()
+    }));
+    let observed = progress.clone();
     spawn_local(async move {
-        let result = pump(&video, &pumped, &src, &signal).await;
+        let result = pump(&video, &pumped, &src, &signal, &observed).await;
+        let mut p = observed.get();
+        p.finished = true;
+        p.reading = false;
+        observed.set(p);
         if !signal.aborted()
             && let Err(why) = result
         {
-            on_error(why);
+            on_error(why, p);
         }
     });
     Ok(Stream {
         abort,
         object,
         media,
+        progress,
     })
 }
 
@@ -153,6 +175,7 @@ async fn pump(
     media: &MediaSource,
     src: &str,
     signal: &web_sys::AbortSignal,
+    progress: &Cell<Progress>,
 ) -> Result<(), String> {
     let options = RequestInit::new();
     options.set_signal(Some(signal));
@@ -163,6 +186,17 @@ async fn pump(
         .dyn_into()
         .map_err(js_error)?;
     if !response.ok() {
+        let mut p = progress.get();
+        p.terminal = matches!(response.status(), 401 | 403);
+        p.retry_after = response
+            .headers()
+            .get("retry-after")
+            .ok()
+            .flatten()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0)
+            .saturating_mul(1000);
+        progress.set(p);
         return Err(response
             .headers()
             .get("x-riptv-error")
@@ -185,6 +219,9 @@ async fn pump(
     let mut init = Vec::new();
     let mut buffer = None::<SourceBuffer>;
     loop {
+        let mut p = progress.get();
+        p.reading = false;
+        progress.set(p);
         if signal.aborted() {
             return Ok(());
         }
@@ -198,6 +235,10 @@ async fn pump(
                 continue;
             }
         }
+        let mut p = progress.get();
+        p.reading = true;
+        p.waiting_since = clock();
+        progress.set(p);
         let result = JsFuture::from(reader.read()).await.map_err(js_error)?;
         if js_sys::Reflect::get(&result, &"done".into())
             .map_err(js_error)?
@@ -215,11 +256,18 @@ async fn pump(
         let bytes = js_sys::Uint8Array::new(
             &js_sys::Reflect::get(&result, &"value".into()).map_err(js_error)?,
         );
+        let mut p = progress.get();
+        p.reading = false;
+        if bytes.length() > 0 {
+            p.last_data = clock();
+            p.received = p.received.saturating_add(u64::from(bytes.length()));
+        }
+        progress.set(p);
         let data = if buffer.is_none() {
-            init.extend(bytes.to_vec());
-            if init.len() > 1024 * 1024 {
+            if init.len().saturating_add(bytes.length() as usize) > 1024 * 1024 {
                 return Err("invalid stream initialization".into());
             }
+            init.extend(bytes.to_vec());
             if !init_complete(&init) {
                 continue;
             }
@@ -236,7 +284,10 @@ async fn pump(
                 .add_source_buffer(&mime(&init, &codec))
                 .map_err(browser_error)?;
             buffer = Some(sb);
-            js_sys::Uint8Array::from(init.as_slice())
+            let data = js_sys::Uint8Array::from(init.as_slice());
+            // The browser owns the initialization bytes now; don't keep a WASM copy all session.
+            init = Vec::new();
+            data
         } else {
             bytes
         };

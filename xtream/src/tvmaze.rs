@@ -142,14 +142,16 @@ pub fn parse(body: &[u8], title: &str, year: Option<u32>) -> Option<Guide> {
 /// Fill in what the provider left out, episode by episode (by season and episode number). What
 /// the provider did send always stays.
 pub fn fill(seasons: &mut [Season], guide: &Guide) {
+    let mut index = std::collections::HashMap::with_capacity(guide.episodes.len());
+    for episode in &guide.episodes {
+        index
+            .entry((episode.season, episode.number))
+            .or_insert(episode);
+    }
     for season in seasons {
         for (n, ep) in season.episodes.iter_mut().enumerate() {
             let number = ep.episode_num.unwrap_or(n as u64 + 1);
-            let Some(g) = guide
-                .episodes
-                .iter()
-                .find(|g| g.season == season.number && g.number == number)
-            else {
+            let Some(g) = index.get(&(season.number, number)) else {
                 continue;
             };
             let info = &mut ep.info;

@@ -255,7 +255,7 @@ pub struct Series {
     pub last_modified: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Episode {
     #[serde(deserialize_with = "flex_id")]
     pub id: u64,
@@ -337,7 +337,7 @@ fn episode_info<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<EpisodeI
     })
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Season {
     pub number: u64,
     pub episodes: Vec<Episode>,
@@ -535,8 +535,8 @@ fn value_string(v: &Value, names: &[&str]) -> String {
         .unwrap_or_default()
 }
 
-fn parse_short_epg(v: Value) -> Result<Vec<EpgListing>> {
-    let entries = v.get("epg_listings").cloned().unwrap_or(v);
+fn parse_short_epg(mut v: Value) -> Result<Vec<EpgListing>> {
+    let entries = v.get_mut("epg_listings").map(Value::take).unwrap_or(v);
     let raw: Vec<Value> = match entries {
         Value::Array(a) => a,
         Value::Object(m) => m.into_values().collect(),
@@ -604,16 +604,16 @@ fn parse_auth(v: Value) -> Result<Auth> {
 
 /// `info` is sometimes `[]`, and `episodes` is an object keyed by season number, a plain
 /// array of seasons (numbered from 1 here), or `false`/`[]` when empty.
-fn parse_series_info(v: Value) -> Result<SeriesInfo> {
-    let groups: Vec<(u64, Value)> = match v.get("episodes") {
+fn parse_series_info(mut v: Value) -> Result<SeriesInfo> {
+    let groups: Vec<(u64, Value)> = match v.get_mut("episodes").map(Value::take) {
         Some(Value::Object(m)) => m
-            .iter()
-            .map(|(k, v)| (k.parse().unwrap_or(0), v.clone()))
+            .into_iter()
+            .map(|(k, v)| (k.parse().unwrap_or(0), v))
             .collect(),
         Some(Value::Array(a)) => a
-            .iter()
+            .into_iter()
             .enumerate()
-            .map(|(i, v)| (i as u64 + 1, v.clone()))
+            .map(|(i, v)| (i as u64 + 1, v))
             .collect(),
         _ => vec![],
     };
