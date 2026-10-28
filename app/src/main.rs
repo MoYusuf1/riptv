@@ -330,9 +330,8 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 @keyframes eq{0%,100%{transform:scaleY(.2)}50%{transform:scaleY(1)}}
 .sound-note{position:absolute;top:1rem;left:1rem;display:flex;align-items:center;gap:.4rem;padding:.35rem .7rem;border-radius:999px;background:rgba(0,0,0,.55);color:#fff;font-size:.75rem;backdrop-filter:blur(14px);animation:rise .3s var(--ease)}
 .sound-note svg{width:.95rem;height:.95rem}
-.recovery-note{position:absolute;top:1rem;right:1rem;padding:.35rem .7rem;border-radius:999px;background:rgba(0,0,0,.65);color:#fff;font-size:.75rem;pointer-events:none}
 .backup-label{font-size:.75rem;max-width:35%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim)}
-.live-settings{position:absolute;z-index:12;right:clamp(1rem,5.75rem,calc(100% - 20rem));bottom:4.3rem;width:min(300px,calc(100% - 2rem));max-height:calc(100% - 5.3rem);overflow-y:auto;border:1px solid rgba(255,125,146,.16);border-radius:16px;background:linear-gradient(145deg,rgba(40,28,35,.98),rgba(22,15,19,.98));box-shadow:0 16px 48px #0008,inset 0 1px 0 #ffffff06;text-align:left;animation:fade .16s var(--ease)}
+.live-settings{position:absolute;z-index:12;right:clamp(1rem,5.75rem,calc(100% - 20rem));bottom:4.3rem;width:min(300px,calc(100% - 2rem));max-height:calc(100% - 5.3rem);overflow-y:auto;border:1px solid rgba(var(--accent-rgb),.16);border-radius:16px;color:var(--text);background:linear-gradient(145deg,var(--popover),var(--panel));box-shadow:0 16px 48px #0008,inset 0 1px 0 #ffffff06;text-align:left;animation:fade .16s var(--ease)}
 .settings-toggle[aria-expanded=true]{color:var(--accent);background:var(--soft);border-radius:50%}
 .player:has(.live-settings) .controls{opacity:1;transform:none;z-index:11}
 .context-dismiss{position:fixed;z-index:70;inset:0}

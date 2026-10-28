@@ -1095,9 +1095,9 @@ pub(crate) fn LivePlayer(
                 if note().is_some() || silent() {
                     div { class: "sound-note", title: note().unwrap_or_default(), Icon { d: MUTED } "No sound" }
                 }
-                if status() == RECOVERING && !holding() && !buffering() {
-                    div { class: "recovery-note", role: "status", "Provider interrupted · recovering" }
-                } else if starting(&status()) {
+                // Recovering while the buffer still plays is silent (it's in the --logs trace);
+                // the ring shows only once the picture actually waits.
+                if starting(&status()) && (status() != RECOVERING || holding() || buffering()) {
                     div { class: "hud", LoadRing { stage: load_stage(), icon: logo.clone() } }
                 } else if failed {
                     div { class: "hud fail",
