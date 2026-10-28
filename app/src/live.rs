@@ -57,6 +57,9 @@ pub(crate) fn LivePlayer(
 ) -> Element {
     let mut paused = use_signal(|| false);
     let mut holding = use_signal(|| false);
+    // The player paused the video itself (holding for buffer): its `pause` event, which can
+    // arrive after holding has ended, isn't the viewer pressing pause.
+    let mut own_pause = use_signal(|| false);
     let session = use_context::<Signal<Option<Client>>>();
     let rust_sound = use_context::<Signal<bool>>();
     let client = use_hook(|| session.read().clone().expect("logged in"));
@@ -423,6 +426,7 @@ pub(crate) fn LivePlayer(
                     if *holding.peek() && !*paused.peek() {
                         let since = *held_since.get_or_insert(now);
                         if !video.paused() {
+                            own_pause.set(true);
                             let _ = video.pause();
                         }
                         // Accumulate a reserve before starting or resuming. A finite wait also
@@ -961,6 +965,10 @@ pub(crate) fn LivePlayer(
                     },
                     onpause: move |_| {
                         if !*holding.peek() && !video_el().is_some_and(|v| v.ended()) {
+                        if *own_pause.peek() {
+                            own_pause.set(false);
+                            return;
+                        }
                             paused.set(true);
                             if let Some(s) = media_on_pause.borrow().as_ref() { s.playing(false); }
                         }
