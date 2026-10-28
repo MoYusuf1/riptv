@@ -46,19 +46,26 @@ converter at all. It's still being tested.
 
 ## Built for difficult providers
 
-Many IPTV providers cut corners: video in long chunks, links that expire after a couple of minutes,
-"slow down" answers. Phone and TV apps quietly ride over this. RIPTV does too, and every technique
-below was measured on a real provider that cut out every two minutes:
+Many IPTV providers cut corners: video in long chunks, stream links that expire after a couple of
+minutes, servers that stop answering or say "slow down". Phone and TV apps quietly ride over this.
+RIPTV now does too. On a real provider whose live channels cut out **every ~2 minutes** on
+desktop, RIPTV played **3.5 hours of sports across 9 channels without a single cut** (Sky Sports
+Football, Premier League, Main Event, TNT Sports, ESPN, CBS Sports Network, FOX Sports 1, NBC
+Sports Network, beIN Sports), while the provider dropped and refused links dozens of times.
 
-| What the provider does | What RIPTV does | Before → after |
-|---|---|---|
-| Sends video in 10-second chunks, silent in between | Starts three chunks behind live, like TV apps, and only calls silence an outage when the buffer can't cover it | "Provider interrupted" 8 times in 100 s → none |
-| Its stream link goes stale every ~2 minutes (refuses, or stops updating) | Fetches a fresh link from your login in the background and carries on | a cut every ~2 min → 13+ minutes unbroken |
-| Answers "too busy, wait 5 s" | Waits it out while the buffer plays | a cut → nothing visible |
-| A chunk arrives late | **Smooth** (in the player's settings) starts 45 s behind live for more room | |
+| What the provider does | What RIPTV does |
+|---|---|
+| Sends video in 10-second chunks, silent in between | Starts three chunks behind live, like TV apps, and only treats silence as a problem when the buffer can't cover it |
+| Its stream link goes stale every ~2 minutes (refuses, or stops updating) | Fetches a fresh link from your login in the background and carries on from the exact same moment |
+| Stops answering altogether | Gives up on that link after 4 seconds and gets a fresh one |
+| Says "too busy, wait 5 s" | Waits it out while the buffer plays |
+| Drops the connection for good | The server reconnects on its own; the player never notices |
+| Encrypts the stream (AES-128) | Decrypts it |
 
-When something can't be ridden out, RIPTV reconnects on its own, then tries the channel's other
-format, then a backup feed you've approved. Run it with `--logs` to see each of these as it happens.
+**Smooth** (in the player's settings) starts 45 s behind live for extra room; even under a
+Discord-style screen share nothing cut. If something truly can't be ridden out, RIPTV reconnects,
+then tries the channel's other format, then a backup feed you've approved. Run it with `--logs` to
+watch each of these happen. The numbers: [What changed, in numbers](docs/changes.md).
 
 ## License
 

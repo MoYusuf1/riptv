@@ -5,7 +5,7 @@ release's notes (`docs/release-notes.md`), and the published release also lists 
 How each number was measured is in brackets; live-channel start times are in
 [live-playback.md](live-playback.md).
 
-## Unreleased
+## 0.2.10
 
 Live TV on a difficult real Xtream provider (10 s HLS segments, a redirected playlist link that goes
 stale about every 2 minutes, 407/509 answers, connection blips), desktop Chrome, `--logs` trace:
@@ -17,6 +17,9 @@ stale about every 2 minutes, 407/509 answers, connection blips), desktop Chrome,
 | Unbroken playback, BBC News | about 2 minutes, then a reconnect | 13+ minutes |
 | Unbroken playback, Sky Sports Football, Smooth | not measured | 60 minutes, 0 reconnects (3 dead links renewed, 23 connection blips retried; buffer median 31 s) |
 | Sky Sports Premier League, 30 min, Smooth; second half under a 1080p60 x264 encode (like a Discord screen share) | not measured | 0 reconnects either half (10 dead links renewed); buffer never below 29.9 s; the converter kept real time; Chrome dropped 1.5% of frames under the load |
+| US sports, 15–32 min each: ESPN, CBS Sports Network, FOX Sports 1, NBC Sports Network, beIN Sports | not measured | 0 reconnects, 0 alarms on every channel; buffer ≥ 30 s; 10 s segments arrived in 0.2–0.8 s on average (no throttling seen) |
+| A hanging playlist link (no answer) | 3 tries of 10 s: buffer 30 → 4.8 s | one 4 s try, then a fresh link (~5 s in the test) |
+| Encrypted (AES-128) HLS channels, e.g. Public TV's "00s Replay" | 5 reconnects, then "keeps dropping" | play; +20 KB to the server |
 | A provider "wait 5 s" (509) | the stream ended | waited out from the buffer |
 | A link that dies for good | the stream ended; ~3 s blackout and restart | reopened by the server; the stream continues |
 | An update reaching the browser | could run the old app from the HTTP cache | `index.html` sent `no-cache` |
