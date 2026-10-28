@@ -894,7 +894,9 @@ impl Client {
     /// The proxy's live stream of a channel (`/live`): one fragmented-MP4 response, the codecs
     /// read and converted on the proxy as needed. `can` lists codecs the browser decodes beyond
     /// H.264 and AAC (`hevc,ac3,eac3`); `transcode` re-encodes the video whatever it is.
-    pub fn live(&self, media: &Url, can: &str, transcode: bool) -> Option<Url> {
+    /// `back`: seconds behind the live edge to begin, for more buffer (the proxy's default
+    /// otherwise).
+    pub fn live(&self, media: &Url, can: &str, transcode: bool, back: Option<u32>) -> Option<Url> {
         let mut u = self.proxy.clone()?;
         u.set_path("/live");
         u.set_query(None);
@@ -904,6 +906,9 @@ impl Client {
                 .append_pair("can", can);
             if transcode {
                 q.append_pair("video", "transcode");
+            }
+            if let Some(back) = back {
+                q.append_pair("back", &back.to_string());
             }
         }
         Some(u)

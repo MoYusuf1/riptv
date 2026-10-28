@@ -334,7 +334,9 @@ async fn pump(
 /// The live stream for `url`: as is where the browser can, or with its video re-encoded.
 pub fn live(client: &Client, url: &str, transcode: bool) -> Option<String> {
     let media = xtream::Url::parse(url).ok()?;
-    Some(client.live(&media, &can(), transcode)?.to_string())
+    // Smooth starts 45 s behind live instead of ~30: room for a provider's segment to come late.
+    let back = crate::preferences::load().smoother_live.then_some(45);
+    Some(client.live(&media, &can(), transcode, back)?.to_string())
 }
 
 /// The codecs this browser decodes beyond H.264 and AAC, as `/live` takes them.

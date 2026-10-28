@@ -316,7 +316,13 @@ pub fn router(state: AppState) -> Router {
                 .fallback_service(ServeDir::new(dir.join("assets")))
                 .layer(middleware::from_fn(cache_hashed_asset));
             r.nest("/assets", assets).fallback_service(
-                ServeDir::new(&dir).fallback(ServeFile::new(dir.join("index.html"))),
+                // Without it browsers cache index.html heuristically and keep running the old
+                // app (and its old wasm) for a while after an update.
+                tower_http::set_header::SetResponseHeader::if_not_present(
+                    ServeDir::new(&dir).fallback(ServeFile::new(dir.join("index.html"))),
+                    header::CACHE_CONTROL,
+                    HeaderValue::from_static("no-cache"),
+                ),
             )
         }
         None => r,

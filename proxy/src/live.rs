@@ -52,6 +52,9 @@ pub struct LiveQuery {
     can: String,
     /// `transcode` to re-encode the video whatever it is (the browser rejected it once).
     video: Option<String>,
+    /// Seconds behind the live edge to begin (more buffer against a late segment), when more
+    /// than [`START_SECONDS`]; capped at two minutes.
+    back: Option<u32>,
 }
 
 /// How much of the stream is read, at most, before deciding: the program map comes in the first
@@ -235,6 +238,21 @@ pub async fn stream(
     diagnostics::note(&s, &format!("{tag}live asking the provider"));
     let mut steps = vec![];
     let source = match Source::open(&s, &url, &ua, &mut steps).await {
+        Ok(Source::Hls {
+            original,
+            playlist,
+            media,
+            next: _,
+        }) => {
+            let back = q.back.map_or(START_SECONDS, |b| f64::from(b.min(120)));
+            let next = media.start(back);
+            Source::Hls {
+                original,
+                playlist,
+                media,
+                next,
+            }
+        }
         Ok(source) => source,
         Err(why) => {
             diagnostics::note(&s, &format!("{tag}live could not start: {why}"));
@@ -631,7 +649,7 @@ impl Source {
                 continue;
             }
             let media = Media::parse(&text, &base);
-            let next = media.start();
+            let next = media.start(START_SECONDS);
             return Ok(Self::Hls {
                 original: url.clone(),
                 playlist: base,
@@ -665,7 +683,7 @@ impl Source {
                 let mut quiet_since = Instant::now();
                 let mut refreshed = Instant::now();
                 let mut skipped = 0_u8;
-                let mut renewed = false;
+                let mut renewed_at = None::<Instant>;
                 let mut changed = true;
                 loop {
                     let from = next;
@@ -750,8 +768,32 @@ impl Source {
                     if media.ended {
                         return;
                     }
-                    if quiet_since.elapsed().as_secs_f64() > (media.target * 2.0).clamp(10.0, 20.0)
-                    {
+                    let quiet = quiet_since.elapsed().as_secs_f64();
+                    // The provider's redirected link can go stale (one real provider's does after
+                    // 2 minutes) and keep serving the old list: ask the original address for a
+                    // fresh one while the browser's buffer still covers the gap.
+                    let may_renew =
+                        playlist != original && renewed_at.is_none_or(|t| t.elapsed() >= RENEW_GAP);
+                    if quiet > (media.target * 1.2).max(4.0) && may_renew {
+                        renewed_at = Some(Instant::now());
+                        if let Some((fresh, updated, at)) =
+                            renew(&s, &original, &ua, &media, next).await
+                        {
+                            diagnostics::note(
+                                &s,
+                                &format!("{tag}live playlist stopped advancing; renewed"),
+                            );
+                            (playlist, media, next, changed) = (fresh, updated, at, true);
+                            continue;
+                        }
+                        diagnostics::note(
+                            &s,
+                            &format!(
+                                "{tag}live playlist stopped advancing; renewal didn't continue it"
+                            ),
+                        );
+                    }
+                    if quiet > (media.target * 2.0).clamp(10.0, 20.0) {
                         diagnostics::note(&s, &format!("{tag}live playlist stopped advancing"));
                         return;
                     }
@@ -783,25 +825,29 @@ impl Source {
                                 return;
                             }
                         },
+                        // A short cooldown is waited out while the buffer covers it; the
+                        // "stopped advancing" limit above still ends a provider that never lets up.
+                        Err(FetchError::Limited(wait, _)) if wait <= 10 => {
+                            sleep(Duration::from_secs(wait)).await;
+                        }
                         Err(why) => {
                             s.live_limits.carry(&playlist, &original);
-                            // Refresh an expired redirect/master link once, retaining the next
-                            // sequence number so already forwarded segments cannot be replayed.
-                            if !renewed
-                                && matches!(why, FetchError::Status(404 | 410))
+                            // Renew an expired or unanswered redirect/master link (a real
+                            // provider's answers 407 every 2 minutes), keeping the next sequence
+                            // number so already forwarded segments cannot be replayed.
+                            if matches!(why, FetchError::Request(_) | FetchError::Status(_))
                                 && playlist != original
+                                && renewed_at.is_none_or(|t| t.elapsed() >= RENEW_GAP)
                             {
-                                renewed = true;
-                                if let Ok(Self::Hls {
-                                    playlist: fresh,
-                                    media: updated,
-                                    ..
-                                }) = Self::open(&s, &original, &ua, &mut vec![]).await
-                                    && updated.continues(&media, next)
+                                renewed_at = Some(Instant::now());
+                                if let Some((fresh, updated, at)) =
+                                    renew(&s, &original, &ua, &media, next).await
                                 {
-                                    playlist = fresh;
-                                    media = updated;
-                                    changed = true;
+                                    diagnostics::note(
+                                        &s,
+                                        &format!("{tag}live playlist refresh: {why}; renewed"),
+                                    );
+                                    (playlist, media, next, changed) = (fresh, updated, at, true);
                                     continue;
                                 }
                             }
@@ -913,6 +959,33 @@ async fn read_rest(mut response: reqwest::Response, first: Bytes) -> Result<Stri
 /// trickle in), with a cushion against the next segment coming late.
 const START_SECONDS: f64 = 18.0;
 
+/// Least time between asking the original link for a fresh playlist: a renewed link can die
+/// within seconds too, so renewal isn't once-only, but the provider isn't hammered either.
+const RENEW_GAP: Duration = Duration::from_secs(3);
+/// Segments a renewed playlist may have moved past ours and still be followed (a gap the player
+/// skips) rather than reopened.
+const RESUME_SKIP: u64 = 3;
+
+/// Where a renewed link continues the stream: its playlist, list and next segment.
+async fn renew(
+    s: &AppState,
+    original: &Url,
+    ua: &str,
+    media: &Media,
+    next: u64,
+) -> Option<(Url, Media, u64)> {
+    let Ok(Source::Hls {
+        playlist,
+        media: fresh,
+        ..
+    }) = Source::open(s, original, ua, &mut vec![]).await
+    else {
+        return None;
+    };
+    let at = fresh.resume_at(media, next)?;
+    Some((playlist, fresh, at))
+}
+
 /// A media playlist: its segments with their sequence numbers.
 struct Media {
     /// Seconds per segment, at most.
@@ -924,19 +997,39 @@ struct Media {
 }
 
 impl Media {
-    /// A fresh address may name another timeline. Require an identical overlapping segment
-    /// before continuing the existing decoder; otherwise the browser must start a fresh one.
+    /// Where a renewed playlist picks up after `next - 1`, or `None` if it may be another
+    /// timeline. The last forwarded segment, same number and file name, continues exactly; with
+    /// it already gone, the first of the next few numbers (a short gap the player skips), unless
+    /// that number names another file. Only the file name: a renewed link puts a new token in the
+    /// rest, and at the live edge the next segment isn't listed yet.
+    fn resume_at(&self, old: &Self, next: u64) -> Option<u64> {
+        if self.continues(old, next) {
+            return Some(next);
+        }
+        let previous = next.checked_sub(1)?;
+        if self.segments.iter().any(|(seq, _, _)| *seq == previous) {
+            return None;
+        }
+        self.segments
+            .iter()
+            .map(|(seq, _, _)| *seq)
+            .find(|seq| (next..=next + RESUME_SKIP).contains(seq))
+    }
+
     fn continues(&self, old: &Self, next: u64) -> bool {
         let Some(previous) = next.checked_sub(1) else {
             return false;
         };
-        self.segments.iter().any(|(seq, _, _)| *seq == next)
-            && old
-                .segments
-                .iter()
-                .find(|(seq, _, _)| *seq == previous)
-                .zip(self.segments.iter().find(|(seq, _, _)| *seq == previous))
-                .is_some_and(|(old, new)| old.1 == new.1)
+        let file = |u: &Url| {
+            u.path_segments()
+                .and_then(|mut p| p.next_back())
+                .map(str::to_owned)
+        };
+        old.segments
+            .iter()
+            .find(|(seq, _, _)| *seq == previous)
+            .zip(self.segments.iter().find(|(seq, _, _)| *seq == previous))
+            .is_some_and(|(old, new)| file(&old.1).is_some() && file(&old.1) == file(&new.1))
     }
 
     fn parse(text: &str, base: &Url) -> Self {
@@ -977,12 +1070,15 @@ impl Media {
 }
 
 impl Media {
-    /// Where to begin: at least two segments and [`START_SECONDS`] back from the newest.
-    fn start(&self) -> u64 {
+    /// Where to begin: at least three segments (the HLS spec's minimum distance from the end,
+    /// what ExoPlayer does) and `back` seconds (at least [`START_SECONDS`]) from the newest.
+    /// With 10 s segments two left the buffer swinging down to 2 s between arrivals.
+    fn start(&self, back: f64) -> u64 {
+        let back = back.max(START_SECONDS);
         let mut seconds = 0.0;
         for (taken, (seq, _, length)) in self.segments.iter().rev().enumerate() {
             seconds += if *length > 0.0 { *length } else { self.target };
-            if taken >= 1 && seconds >= START_SECONDS {
+            if taken >= 2 && seconds >= back {
                 return *seq;
             }
         }
@@ -1153,6 +1249,7 @@ mod tests {
                     url: base.to_string(),
                     can: String::new(),
                     video: None,
+                    back: None,
                 }),
                 headers.clone(),
             )
@@ -1230,6 +1327,7 @@ mod tests {
                 url: base.to_string(),
                 can: String::new(),
                 video: None,
+                back: None,
             }),
             headers,
         )
@@ -1298,6 +1396,10 @@ mod tests {
                 )
                 .route("/expired", route_get(|| async { StatusCode::GONE }))
                 .route(
+                    "/token",
+                    route_get(|| async { StatusCode::PROXY_AUTHENTICATION_REQUIRED }),
+                )
+                .route(
                     "/one",
                     route_get(move || {
                         count.fetch_add(1, Ordering::SeqCst);
@@ -1307,10 +1409,93 @@ mod tests {
                 .route("/two", route_get(|| async { "two" })),
         )
         .await;
+        for (n, link) in ["expired", "token"].into_iter().enumerate() {
+            let (tx, mut rx) = mpsc::channel(32);
+            Source::Hls {
+                original: base.clone(),
+                playlist: base.join(link).unwrap(),
+                media: Media::parse("#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\none\n", &base),
+                next: 0,
+            }
+            .run(test_state(), String::new(), String::new(), tx)
+            .await;
+            let mut data = vec![];
+            while let Some(chunk) = rx.recv().await {
+                data.extend_from_slice(&chunk);
+            }
+            assert_eq!(data, b"onetwo", "{link}");
+            assert_eq!(segment_calls.load(Ordering::SeqCst), n + 1, "{link}");
+        }
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn a_stale_redirected_playlist_is_renewed_from_the_original_link() {
+        let (base, task) = provider(
+            Router::new()
+                .route(
+                    "/",
+                    route_get(|| async {
+                        "#EXTM3U\n#EXTINF:1,\ntok2/one\n#EXTINF:1,\ntok2/two\n#EXT-X-ENDLIST\n"
+                    }),
+                )
+                .route(
+                    "/stale",
+                    route_get(|| async { "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\none\n" }),
+                )
+                .route("/one", route_get(|| async { "one" }))
+                .route("/tok2/two", route_get(|| async { "two" })),
+        )
+        .await;
         let (tx, mut rx) = mpsc::channel(32);
         Source::Hls {
             original: base.clone(),
-            playlist: base.join("expired").unwrap(),
+            playlist: base.join("stale").unwrap(),
+            media: Media::parse("#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\none\n", &base),
+            next: 0,
+        }
+        .run(test_state(), String::new(), String::new(), tx)
+        .await;
+        let mut data = vec![];
+        while let Some(chunk) = rx.recv().await {
+            data.extend_from_slice(&chunk);
+        }
+        assert_eq!(data, b"onetwo", "continued without replaying \"one\"");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn a_short_provider_cooldown_is_waited_out_not_ended() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = calls.clone();
+        let (base, task) = provider(
+            Router::new()
+                .route(
+                    "/busy",
+                    route_get(move || {
+                        let first = count.fetch_add(1, Ordering::SeqCst) == 0;
+                        async move {
+                            if first {
+                                (StatusCode::from_u16(509).unwrap(), String::new())
+                            } else {
+                                (
+                                    StatusCode::OK,
+                                    "#EXTM3U\n#EXTINF:1,\none\n#EXTINF:1,\ntwo\n#EXT-X-ENDLIST\n"
+                                        .to_string(),
+                                )
+                            }
+                        }
+                    }),
+                )
+                .route("/one", route_get(|| async { "one" }))
+                .route("/two", route_get(|| async { "two" })),
+        )
+        .await;
+        let (tx, mut rx) = mpsc::channel(32);
+        let started = Instant::now();
+        Source::Hls {
+            original: base.clone(),
+            playlist: base.join("busy").unwrap(),
             media: Media::parse("#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\none\n", &base),
             next: 0,
         }
@@ -1321,7 +1506,10 @@ mod tests {
             data.extend_from_slice(&chunk);
         }
         assert_eq!(data, b"onetwo");
-        assert_eq!(segment_calls.load(Ordering::SeqCst), 1);
+        assert!(
+            started.elapsed() >= Duration::from_secs(5),
+            "the cooldown was respected"
+        );
         task.abort();
     }
 
@@ -1334,6 +1522,16 @@ mod tests {
             &base,
         );
         assert!(!new.continues(&old, 1));
+        assert_eq!(new.resume_at(&old, 1), None, "segment 0 names another file");
+        // Ours (0, 1) already rolled off a renewed list: pick up just past them, but not far.
+        let on = |first: u64| {
+            Media::parse(
+                &format!("#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:{first}\n#EXTINF:1,\na\n#EXTINF:1,\nb\n"),
+                &base,
+            )
+        };
+        assert_eq!(on(3).resume_at(&old, 2), Some(3));
+        assert_eq!(on(9).resume_at(&old, 2), None, "too far ahead");
         assert_eq!(new.target, 6.0);
     }
 
@@ -1382,7 +1580,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn refused_playlist_ends_promptly_instead_of_polling_for_a_minute() {
+    async fn refused_playlist_ends_within_the_stall_limit_respecting_cooldowns() {
         let calls = Arc::new(AtomicUsize::new(0));
         let count = calls.clone();
         let (base, task) = provider(Router::new().route(
@@ -1405,8 +1603,10 @@ mod tests {
         };
         let media = Media::parse("#EXTM3U\n#EXT-X-TARGETDURATION:1\n", &base);
         let (tx, _rx) = mpsc::channel(32);
+        // Each 509 asks for 5 s; those are waited out, but only until the playlist would count
+        // as stopped (10 s here), and never sooner than the provider asked.
         timeout(
-            Duration::from_secs(3),
+            Duration::from_secs(16),
             Source::Hls {
                 original: base.clone(),
                 playlist: base,
@@ -1416,8 +1616,8 @@ mod tests {
             .run(s, String::new(), String::new(), tx),
         )
         .await
-        .expect("509 should immediately close the source");
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        .expect("a provider that keeps refusing ends the source");
+        assert!(calls.load(Ordering::SeqCst) <= 3, "{calls:?}");
         task.abort();
     }
 
@@ -1515,8 +1715,8 @@ mod tests {
             m.segments[1],
             (501, Url::parse("https://h.tv/abs/b.ts").unwrap(), 10.0)
         );
-        // Two 10 s segments: start at the older of the two.
-        assert_eq!(m.start(), 500);
+        // Only two 10 s segments listed: start at the older of the two.
+        assert_eq!(m.start(START_SECONDS), 500);
     }
 
     #[test]
@@ -1528,10 +1728,13 @@ mod tests {
             text += &format!("#EXTINF:1.0,\n{i}.ts\n");
         }
         // Eighteen seconds of available history, without waiting on the live edge.
-        assert_eq!(Media::parse(&text, &base).start(), 112);
+        assert_eq!(Media::parse(&text, &base).start(START_SECONDS), 112);
+        // Asked for more (Smooth): further back; never less than the default.
+        assert_eq!(Media::parse(&text, &base).start(25.0), 105);
+        assert_eq!(Media::parse(&text, &base).start(5.0), 112);
         // Fewer than that listed: all of them.
         let few = "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:7\n#EXTINF:1,\na.ts\n#EXTINF:1,\nb.ts\n";
-        assert_eq!(Media::parse(few, &base).start(), 7);
+        assert_eq!(Media::parse(few, &base).start(START_SECONDS), 7);
     }
     #[tokio::test]
     async fn oversized_network_chunks_have_bounded_owned_queue_slots() {

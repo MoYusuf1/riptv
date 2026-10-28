@@ -451,6 +451,11 @@ async fn serves_web_app_with_csp_and_spa_fallback() {
             .await
             .unwrap();
         assert_eq!(r.status(), 200, "{path}");
+        assert_eq!(
+            r.headers()["cache-control"],
+            "no-cache",
+            "an update must reach the browser: {path}"
+        );
         let csp = r.headers()["content-security-policy"]
             .to_str()
             .unwrap()

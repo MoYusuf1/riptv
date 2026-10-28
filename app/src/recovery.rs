@@ -71,9 +71,15 @@ impl Monitor {
         self.position = s.position;
         self.frames = s.frames;
         let p = s.transport;
+        // Providers with 10 s segments go quiet for 10 s between them; silence only matters
+        // once the buffer can't cover it (or it lasts far longer than any segment).
+        let silent = s.now.saturating_sub(p.last_data.max(p.waiting_since));
         let stalled = p.reading
-            && s.now.saturating_sub(p.last_data.max(p.waiting_since))
-                >= if p.received == 0 { 20_000 } else { 8000 };
+            && if p.received == 0 {
+                silent >= 20_000
+            } else {
+                silent >= 8000 && s.ahead < 4.0 || silent >= 25_000
+            };
         let stuck = s.visible
             && !s.paused
             && !s.holding
@@ -367,8 +373,15 @@ mod tests {
     #[test]
     fn silence_is_detected_but_backpressure_and_slow_start_are_not_misclassified() {
         let mut m = Monitor::new(0);
-        assert!(!m.observe(sample(7999)).stalled);
-        assert!(m.observe(sample(8000)).stalled);
+        let low = |now| Sample {
+            ahead: 3.0,
+            ..sample(now)
+        };
+        assert!(!m.observe(low(7999)).stalled);
+        assert!(m.observe(low(8000)).stalled);
+        // The gap between 10 s segments, with the buffer covering it: not an outage.
+        assert!(!m.observe(sample(12_000)).stalled);
+        assert!(m.observe(sample(25_000)).stalled);
         let mut s = sample(100_000);
         s.transport.reading = false;
         assert!(!m.observe(s).stalled);
