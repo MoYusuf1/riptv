@@ -68,7 +68,7 @@ const CSS: &str = concat!(
 ::-webkit-scrollbar-thumb{border:2px solid var(--panel);border-radius:999px;background:#59414c}
 ::-webkit-scrollbar-thumb:hover{background:#946373}
 ::-webkit-scrollbar-corner{background:transparent}
-button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+:where(button,a,input,select,summary,[tabindex]):focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 body{margin:0;min-width:320px;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
 button,input{font:inherit;color:inherit}
 button{padding:0;border:0;background:none;text-align:inherit;cursor:pointer}
