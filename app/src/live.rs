@@ -416,8 +416,14 @@ pub(crate) fn LivePlayer(
                             paused.set(true);
                             live_stream.borrow_mut().take();
                             let _ = video.pause();
+                            // Never showed a picture: it isn't dropping, the provider isn't serving it.
                             status.set(
-                                "This channel keeps dropping. Retry or choose another feed.".into(),
+                                if *picture_ready.peek() {
+                                    "This channel keeps dropping. Retry or choose another feed."
+                                } else {
+                                    "This channel isn't available right now. Retry or choose another feed."
+                                }
+                                .into(),
                             );
                             continue;
                         }
