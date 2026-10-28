@@ -494,10 +494,10 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 "#,
     // Pictures fade in over a quiet placeholder (main.rs marks each one as it loads), pages and
     // lists arrive instead of appearing, and what is loading is drawn as what it will become.
-    r#".art img,.logo img,.thumb img,.trailer img,.d-art,.d-poster{opacity:0;transition:opacity .4s ease}
+    r#".art img,.logo img,.thumb img,.trailer img,.d-art,.d-poster{opacity:0;transition:opacity .4s var(--ease)}
 .art img[data-ready],.logo img[data-ready],.thumb img[data-ready],.trailer img[data-ready],.d-art[data-ready],.d-poster[data-ready]{opacity:1}
 img[data-failed]{display:none}
-.ph{position:absolute;inset:0;display:grid;place-items:center;color:var(--faint);font-weight:700;transition:opacity .4s ease}
+.ph{position:absolute;inset:0;display:grid;place-items:center;color:var(--faint);font-weight:700;transition:opacity .4s var(--ease)}
 .art:has(img[data-ready]) .ph,.logo:has(img[data-ready]) .ph,.thumb:has(img[data-ready]) .ph{opacity:0}
 .prog{position:absolute;inset:auto 0 0;height:3px;background:rgba(255,255,255,.22)}
 .prog i{display:block;height:100%;border-radius:0 3px 3px 0;background:var(--fill)}
@@ -506,11 +506,11 @@ img[data-failed]{display:none}
 @keyframes pop{from{opacity:0;transform:scale(.97) translateY(-4px)}}
 @keyframes pulse{50%{opacity:.5}}
 .scroll{animation:fade .2s var(--ease)}
-.detail{animation:rise .3s cubic-bezier(.2,.8,.2,1)}
-.d-main{animation:rise .45s .06s cubic-bezier(.2,.8,.2,1) backwards}
+.detail{animation:rise .3s var(--ease)}
+.d-main{animation:rise .45s .06s var(--ease) backwards}
 .watch{animation:fade .22s var(--ease)}
-.menu,.w-menu{animation:pop .14s ease-out}
-.toast,.upnext{animation:rise .25s ease-out}
+.menu,.w-menu{animation:pop .14s var(--ease)}
+.toast,.upnext{animation:rise .25s var(--ease)}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .sk{pointer-events:none}
 .sk .art,.sk .logo,.sk strong{background:var(--row);animation:pulse 1.4s ease-in-out infinite}
