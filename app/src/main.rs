@@ -354,7 +354,6 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 .option-remove svg{width:1rem;height:1rem}
 .option-remove:hover,.option-remove:focus-visible{background:var(--soft);color:var(--accent)}
 .option-remove:focus-visible,.settings-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-@media(prefers-reduced-motion:reduce){.live-settings,.channel-preview{animation:none}.playback-modes .mode,.option-remove{transition:none}}
 .stats{position:absolute;top:.8rem;left:.8rem;padding:.3rem .7rem;border-radius:8px;background:rgba(0,0,0,.66);color:#fff;font:600 .72rem ui-monospace,monospace;backdrop-filter:blur(8px)}
 .channel-dial{position:absolute;top:1rem;right:1rem;min-width:3rem;padding:.45rem .75rem;border-radius:12px;background:rgba(0,0,0,.6);color:#fff;text-align:center;font-weight:700;font-variant-numeric:tabular-nums;backdrop-filter:blur(14px)}
 .hud{position:absolute;inset:0;display:grid;place-items:center;color:#fff;pointer-events:none;animation:fade .3s var(--ease)}
@@ -403,7 +402,6 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 .live-pill::before{content:'';width:.42rem;height:.42rem;border-radius:50%;background:#fff}
 .player:not(.paused) .live-pill::before{animation:pulse 1.8s ease-in-out infinite}
 .player.paused .live-pill{background:rgba(255,255,255,.16)}
-@media(prefers-reduced-motion:reduce){.loader svg,.loader-logo,.loader-dot,.eq i,.live-pill::before{animation:none!important}}
 .guide{position:relative;display:flex;flex-direction:column;gap:.8rem;min-width:0;padding:1rem;border-top:1px solid var(--hair);background:var(--panel);animation:fade .3s var(--ease)}
 .guide-preview{position:absolute;top:3.2rem;width:min(320px,calc(100% - 24px));max-height:calc(100% - 4rem)}
 .guide-heading{display:flex;align-items:center;justify-content:space-between;gap:.75rem}
@@ -609,7 +607,7 @@ button{-webkit-tap-highlight-color:transparent}
 .epc:hover .thumb img:not(.series-still){transform:scale(1.04)}
 .menu button,.w-menu button{transition:background .15s}
 .art img,.thumb img,.d-art,.d-poster{animation:fade .5s var(--ease)}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}.loader svg{animation:spin 3s linear infinite!important}}
 "#,
     r#"@media(max-width:1080px){.topbar{gap:.7rem}.who b{display:none}.rail button{padding:0 .65rem}}
 @media(max-width:820px){.brand{display:none}.who b{display:none}.topbar{gap:.5rem;height:3rem;inset:.6rem .6rem auto}.rail{position:fixed;z-index:25;top:auto;bottom:.8rem;left:50%;flex-direction:row;transform:translateX(-50%);background:rgba(24,16,20,.94);backdrop-filter:blur(24px);box-shadow:0 10px 30px rgba(0,0,0,.4);border-radius:18px}.rail button{flex-direction:column;gap:.15rem;width:auto;min-width:4.4rem;height:3rem;padding:0 .8rem}.rail span{font-size:.65rem}.workspace{inset:4.2rem 0 0;grid-template-columns:1fr;padding:0 .6rem .6rem}.sidebar{display:none}.cats-btn{display:inline-flex}.scroll,.episodes{padding-bottom:5.5rem}.d-hero{min-height:auto;padding:7rem 1rem 1.6rem}.d-facts{position:relative;inset:auto;width:auto;margin-top:1.4rem}.d-sec{padding:1rem 1rem .8rem}.w-top{padding:.8rem .8rem 2.5rem}.w-bottom{padding:3rem .8rem .6rem}.w-row .vol,.w-row .volume{display:none}.w-menu{right:.8rem;bottom:5.2rem}}
@@ -625,7 +623,6 @@ button{-webkit-tap-highlight-color:transparent}
 /* A phone turned sideways while watching: just the picture. */
 @media(max-height:500px) and (orientation:landscape){body:has(.live.watching) .topbar,body:has(.live.watching) .rail,.workspace:has(.live.watching) .sidebar,.live.watching .channels,.live.watching .guide{display:none}.workspace:has(.live.watching){inset:0;grid-template-columns:1fr;padding:0}.live.watching{grid-template-columns:1fr;margin:0}.live.watching .stage{flex:1}.live.watching .live-stage{height:100%}.live.watching .player{height:100%;aspect-ratio:auto}}
 @media(max-width:820px){.pager{justify-content:center;padding-bottom:4.8rem}.pager .range,.pages .gap,.pages button:not(.on):not(.step){display:none}.pages .of{display:inline}}
-@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 "#,
 );
 
