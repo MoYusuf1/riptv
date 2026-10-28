@@ -62,10 +62,14 @@ impl Monitor {
     }
     pub(crate) fn observe(&mut self, s: Sample) -> Health {
         let advanced = (s.position - self.position).abs() >= 0.05;
-        if advanced || s.paused || s.holding || !s.visible {
+        // Holding is waiting for data only while little is buffered. Holding with seconds ready
+        // is a decoder that won't continue (a real provider's renewed link left a timestamp
+        // jump: holding flipped every tick with 32 s buffered and the picture froze for good).
+        let waiting = s.holding && s.ahead < 3.0;
+        if advanced || s.paused || waiting || !s.visible {
             self.advanced_at = s.now;
         }
-        if s.frames != self.frames || s.paused || s.holding || !s.visible {
+        if s.frames != self.frames || s.paused || waiting || !s.visible {
             self.frame_at = s.now;
         }
         self.position = s.position;
@@ -82,7 +86,7 @@ impl Monitor {
             };
         let stuck = s.visible
             && !s.paused
-            && !s.holding
+            && !waiting
             && (s.now.saturating_sub(p.last_data) < 2000 || !p.reading)
             && s.ahead >= 3.0
             && (s.now.saturating_sub(self.advanced_at) >= 8000
@@ -395,6 +399,27 @@ mod tests {
         s.transport.waiting_since = 99_000;
         assert!(!m.observe(s).stalled);
     }
+    #[test]
+    fn holding_with_a_full_buffer_does_not_hide_a_frozen_picture() {
+        let mut m = Monitor::new(0);
+        let frozen = |now| Sample {
+            holding: true,
+            ahead: 32.0,
+            transport: Transport {
+                reading: false,
+                ..sample(now).transport
+            },
+            ..sample(now)
+        };
+        m.observe(frozen(0));
+        assert!(m.observe(frozen(8000)).stuck);
+        // Holding with little buffered is genuine waiting for data.
+        let mut m = Monitor::new(0);
+        let waiting = |now| Sample { ahead: 1.0, ..frozen(now) };
+        m.observe(waiting(0));
+        assert!(!m.observe(waiting(8000)).stuck);
+    }
+
     #[test]
     fn frozen_picture_is_distinguished_from_an_upstream_outage_and_radio() {
         let mut m = Monitor::new(0);
