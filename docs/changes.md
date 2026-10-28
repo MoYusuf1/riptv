@@ -16,6 +16,7 @@ stale about every 2 minutes, 407/509 answers, connection blips), desktop Chrome,
 | Buffer ahead of the picture, 10 s segments | swings down to 2 s | 22–33 s (Smooth: 30–33 s) |
 | Unbroken playback, BBC News | about 2 minutes, then a reconnect | 13+ minutes |
 | Unbroken playback, Sky Sports Football, Smooth | not measured | 60 minutes, 0 reconnects (3 dead links renewed, 23 connection blips retried; buffer median 31 s) |
+| Sky Sports Premier League, 30 min, Smooth; second half under a 1080p60 x264 encode (like a Discord screen share) | not measured | 0 reconnects either half (10 dead links renewed); buffer never below 29.9 s; the converter kept real time; Chrome dropped 1.5% of frames under the load |
 | A provider "wait 5 s" (509) | the stream ended | waited out from the buffer |
 | A link that dies for good | the stream ended; ~3 s blackout and restart | reopened by the server; the stream continues |
 | An update reaching the browser | could run the old app from the HTTP cache | `index.html` sent `no-cache` |
