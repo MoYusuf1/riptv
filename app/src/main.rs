@@ -397,7 +397,7 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 .vol{width:0;height:4px;margin:0;opacity:0;appearance:none;border-radius:2px;background:linear-gradient(90deg,#fff var(--level,100%),rgba(255,255,255,.25) 0);transition:width .25s var(--ease),opacity .25s}
 .vol::-webkit-slider-thumb{width:12px;height:12px;appearance:none;border-radius:50%;background:#fff}
 .vol::-moz-range-thumb{width:12px;height:12px;border:0;border-radius:50%;background:#fff}
-.volume:hover .vol,.vol:focus-visible{width:5.5rem;margin:0 .6rem 0 .2rem;opacity:1}
+.volume:hover .vol,.volume:focus-within .vol{width:5.5rem;margin:0 .6rem 0 .2rem;opacity:1}
 .live-pill{display:inline-flex;align-items:center;gap:.4rem;margin-left:.35rem;padding:.28rem .7rem;border-radius:999px;background:var(--fill);color:#fff;font-size:.68rem;font-weight:700;letter-spacing:.08em;transition:background .2s}
 .live-pill::before{content:'';width:.42rem;height:.42rem;border-radius:50%;background:#fff}
 .player:not(.paused) .live-pill::before{animation:pulse 1.8s ease-in-out infinite}
