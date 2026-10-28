@@ -187,7 +187,8 @@ async fn pump(
         .map_err(js_error)?;
     if !response.ok() {
         let mut p = progress.get();
-        p.terminal = matches!(response.status(), 401 | 403);
+        // Refused or offline: retrying the same request only delays saying so.
+        p.terminal = matches!(response.status(), 401 | 403 | 404 | 410);
         p.retry_after = response
             .headers()
             .get("retry-after")
