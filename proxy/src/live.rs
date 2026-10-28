@@ -82,6 +82,8 @@ async fn enqueue(tx: &mpsc::Sender<Bytes>, bytes: Bytes) -> Result<(), ()> {
 const PLAYLIST_MAX: usize = 1024 * 1024;
 const READ_IDLE: Duration = Duration::from_secs(10);
 const REQUEST_WAIT: Duration = Duration::from_secs(10);
+/// How long a playlist refresh may take before the link counts as dead.
+const PLAYLIST_WAIT: Duration = Duration::from_secs(4);
 
 /// Provider-wide cooldowns also cover failures after response headers were sent. No URLs,
 /// account names, or passwords are retained. Expired entries are removed on access.
@@ -843,7 +845,12 @@ async fn follow(
             return (playlist, media, next);
         }
         refreshed = Instant::now();
-        match get_retry(s, &playlist, ua, tag, "playlist refresh").await {
+        // One short try, not three long ones: a refresh answers in well under a second, and
+        // a link that hangs is renewed below (a real one hung 33 s and the buffer fell to 5 s).
+        let refresh = timeout(PLAYLIST_WAIT, get(s, &playlist, ua))
+            .await
+            .unwrap_or_else(|_| Err(FetchError::Request("the provider didn't answer".into())));
+        match refresh {
             Ok(response) => match read_rest(response, Bytes::new()).await {
                 Ok(text) => {
                     let updated = Media::parse(&text, &playlist);
@@ -1540,6 +1547,50 @@ mod tests {
             data.extend_from_slice(&chunk);
         }
         assert_eq!(data, b"onetwothree");
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn a_hanging_playlist_link_is_renewed_within_seconds() {
+        let (base, task) = provider(
+            Router::new()
+                .route(
+                    "/",
+                    route_get(|| async {
+                        "#EXTM3U\n#EXTINF:1,\none\n#EXTINF:1,\ntwo\n#EXT-X-ENDLIST\n"
+                    }),
+                )
+                .route(
+                    "/hang",
+                    route_get(|| async {
+                        sleep(Duration::from_secs(60)).await;
+                        ""
+                    }),
+                )
+                .route("/one", route_get(|| async { "one" }))
+                .route("/two", route_get(|| async { "two" })),
+        )
+        .await;
+        let (tx, mut rx) = mpsc::channel(32);
+        let started = Instant::now();
+        Source::Hls {
+            original: base.clone(),
+            playlist: base.join("hang").unwrap(),
+            media: Media::parse("#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\none\n", &base),
+            next: 0,
+        }
+        .run(test_state(), String::new(), String::new(), tx)
+        .await;
+        let mut data = vec![];
+        while let Some(chunk) = rx.recv().await {
+            data.extend_from_slice(&chunk);
+        }
+        assert_eq!(data, b"onetwo");
+        assert!(
+            started.elapsed() < Duration::from_secs(8),
+            "{:?}",
+            started.elapsed()
+        );
         task.abort();
     }
 
