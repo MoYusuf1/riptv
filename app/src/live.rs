@@ -1093,7 +1093,7 @@ pub(crate) fn LivePlayer(
                 }
                 if !dial().is_empty() { div { class: "channel-dial", "{dial}" } }
                 if note().is_some() || silent() {
-                    div { class: "sound-note", title: note().unwrap_or_default(), Icon { d: MUTED } "No sound" }
+                    div { class: "sound-note", role: "img", aria_label: "No sound", title: note().unwrap_or_else(|| "No sound".into()), Icon { d: MUTED } }
                 }
                 // Recovering while the buffer still plays is silent (it's in the --logs trace);
                 // the ring shows only once the picture actually waits.
