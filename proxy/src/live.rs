@@ -680,185 +680,215 @@ impl Source {
                 mut media,
                 mut next,
             } => {
-                let mut quiet_since = Instant::now();
-                let mut refreshed = Instant::now();
-                let mut skipped = 0_u8;
-                let mut renewed_at = None::<Instant>;
-                let mut changed = true;
+                // A link that dies for good is reopened here (three tries, 1+2+4 s) and continued
+                // from the next segment: the converter and the browser never see it end. A
+                // provider that keeps refusing, or a list we can't continue, ends the response
+                // so the app can try its other routes.
                 loop {
-                    let from = next;
-                    for (seq, segment, length) in
-                        media.segments.iter().filter(|(seq, ..)| *seq >= from)
-                    {
-                        let started = Instant::now();
-                        let mut response = match get_retry(&s, segment, &ua, &tag, "segment").await
-                        {
-                            Ok(response) => response,
-                            Err(FetchError::Status(404 | 410)) if skipped < 2 => {
-                                // Only skip a missing segment before forwarding any of its bytes.
-                                // Two skips per connection, not an unlimited hole in the timeline.
-                                skipped += 1;
-                                next = seq.saturating_add(1);
-                                diagnostics::note(
-                                    &s,
-                                    &format!("{tag}live missing segment {seq}; skipping"),
-                                );
-                                continue;
-                            }
-                            Err(why) => {
-                                s.live_limits.carry(segment, &original);
-                                diagnostics::note(
-                                    &s,
-                                    &format!(
-                                        "{tag}live segment {seq} failed: {why}; reopening stream"
-                                    ),
-                                );
-                                return;
-                            }
-                        };
-                        let mut bytes = 0_u64;
-                        let mut blocked = Duration::ZERO;
-                        loop {
-                            let chunk = match timeout(READ_IDLE, response.chunk()).await {
-                                Ok(Ok(Some(chunk))) => chunk,
-                                Ok(Ok(None)) => break,
-                                _ => {
-                                    // Never retry a partially forwarded segment: that would repeat
-                                    // transport timestamps and corrupt the browser's decoder.
-                                    diagnostics::note(
-                                        &s,
-                                        &format!(
-                                            "{tag}live segment {seq} interrupted after {bytes} bytes; reopening stream"
-                                        ),
-                                    );
-                                    return;
-                                }
-                            };
-                            bytes += chunk.len() as u64;
-                            let sending = Instant::now();
-                            if enqueue(&tx, chunk).await.is_err() {
-                                return; // the viewer left
-                            }
-                            blocked += sending.elapsed();
-                        }
-                        let took = started.elapsed().as_secs_f64();
-                        let duration = if *length > 0.0 { *length } else { media.target };
-                        let network = (started.elapsed().saturating_sub(blocked)).as_secs_f64();
-                        diagnostics::note(
-                            &s,
-                            &format!(
-                                "{tag}live segment {seq} delivery bytes={bytes} video_s={duration:.1} elapsed_s={took:.2} downstream_wait_s={:.2} upstream_s={network:.2}",
-                                blocked.as_secs_f64()
-                            ),
-                        );
-                        if network > duration {
-                            diagnostics::note(
-                                &s,
-                                &format!(
-                                    "{tag}live segment {seq} took {network:.1}s for {duration:.1}s of video upstream"
-                                ),
-                            );
-                        }
-                        let Some(after) = seq.checked_add(1) else {
-                            return;
-                        };
-                        next = after;
-                        quiet_since = Instant::now();
-                    }
-                    if media.ended {
+                    (_, media, next) =
+                        follow(&s, &ua, &tag, &tx, &original, playlist, media, next).await;
+                    if media.ended || tx.is_closed() {
                         return;
                     }
-                    let quiet = quiet_since.elapsed().as_secs_f64();
-                    // The provider's redirected link can go stale (one real provider's does after
-                    // 2 minutes) and keep serving the old list: ask the original address for a
-                    // fresh one while the browser's buffer still covers the gap.
-                    let may_renew =
-                        playlist != original && renewed_at.is_none_or(|t| t.elapsed() >= RENEW_GAP);
-                    if quiet > (media.target * 1.2).max(4.0) && may_renew {
-                        renewed_at = Some(Instant::now());
-                        if let Some((fresh, updated, at)) =
-                            renew(&s, &original, &ua, &media, next).await
-                        {
-                            diagnostics::note(
-                                &s,
-                                &format!("{tag}live playlist stopped advancing; renewed"),
-                            );
-                            (playlist, media, next, changed) = (fresh, updated, at, true);
-                            continue;
+                    let mut reopened = None;
+                    for attempt in 0..3 {
+                        sleep(Duration::from_secs(1 << attempt)).await;
+                        reopened = renew(&s, &original, &ua, &media, next).await;
+                        if reopened.is_some() || tx.is_closed() {
+                            break;
                         }
+                    }
+                    let Some((fresh, updated, at)) = reopened else {
                         diagnostics::note(
                             &s,
-                            &format!(
-                                "{tag}live playlist stopped advancing; renewal didn't continue it"
-                            ),
+                            &format!("{tag}live couldn't reopen the provider's link"),
                         );
-                    }
-                    if quiet > (media.target * 2.0).clamp(10.0, 20.0) {
-                        diagnostics::note(&s, &format!("{tag}live playlist stopped advancing"));
                         return;
-                    }
-                    // Changed playlists wait a full target; unchanged ones half (RFC 8216).
-                    let wait = Duration::from_secs_f64(
-                        (media.target / if changed { 1.0 } else { 2.0 }).max(0.5),
+                    };
+                    diagnostics::note(
+                        &s,
+                        &format!(
+                            "{tag}live reopened the provider's link; continuing at segment {at}"
+                        ),
                     );
-                    if let Some(left) = wait.checked_sub(refreshed.elapsed()) {
-                        sleep(left).await;
+                    (playlist, media, next) = (fresh, updated, at);
+                }
+            }
+        }
+    }
+}
+
+/// Follows an HLS media playlist from `next`, renewing a stale link on the way; returns where it
+/// stopped (the playlist, its list and the next segment) when it can go no further.
+#[allow(clippy::too_many_arguments)]
+async fn follow(
+    s: &AppState,
+    ua: &str,
+    tag: &str,
+    tx: &mpsc::Sender<Bytes>,
+    original: &Url,
+    mut playlist: Url,
+    mut media: Media,
+    mut next: u64,
+) -> (Url, Media, u64) {
+    let mut quiet_since = Instant::now();
+    let mut refreshed = Instant::now();
+    let mut skipped = 0_u8;
+    let mut renewed_at = None::<Instant>;
+    let mut changed = true;
+    loop {
+        let from = next;
+        for (seq, segment, length) in media.segments.iter().filter(|(seq, ..)| *seq >= from) {
+            let started = Instant::now();
+            let mut response = match get_retry(s, segment, ua, tag, "segment").await {
+                Ok(response) => response,
+                Err(FetchError::Status(404 | 410)) if skipped < 2 => {
+                    // Only skip a missing segment before forwarding any of its bytes.
+                    // Two skips per connection, not an unlimited hole in the timeline.
+                    skipped += 1;
+                    next = seq.saturating_add(1);
+                    diagnostics::note(s, &format!("{tag}live missing segment {seq}; skipping"));
+                    continue;
+                }
+                Err(why) => {
+                    s.live_limits.carry(segment, original);
+                    diagnostics::note(
+                        s,
+                        &format!("{tag}live segment {seq} failed: {why}; reopening stream"),
+                    );
+                    return (playlist, media, next);
+                }
+            };
+            let mut bytes = 0_u64;
+            let mut blocked = Duration::ZERO;
+            loop {
+                let chunk = match timeout(READ_IDLE, response.chunk()).await {
+                    Ok(Ok(Some(chunk))) => chunk,
+                    Ok(Ok(None)) => break,
+                    _ => {
+                        // Never retry a partially forwarded segment: that would repeat
+                        // transport timestamps and corrupt the browser's decoder.
+                        diagnostics::note(
+                            s,
+                            &format!(
+                                "{tag}live segment {seq} interrupted after {bytes} bytes; reopening stream"
+                            ),
+                        );
+                        return (playlist, media, next);
                     }
-                    if tx.is_closed() {
-                        return;
-                    }
-                    refreshed = Instant::now();
-                    match get_retry(&s, &playlist, &ua, &tag, "playlist refresh").await {
-                        Ok(response) => match read_rest(response, Bytes::new()).await {
-                            Ok(text) => {
-                                let updated = Media::parse(&text, &playlist);
-                                changed = updated.sequence != media.sequence
-                                    || updated.segments.last().map(|s| s.0)
-                                        != media.segments.last().map(|s| s.0);
-                                media = updated;
-                            }
-                            Err(why) => {
-                                diagnostics::note(
-                                    &s,
-                                    &format!("{tag}live playlist refresh: {why}; reopening stream"),
-                                );
-                                return;
-                            }
-                        },
-                        // A short cooldown is waited out while the buffer covers it; the
-                        // "stopped advancing" limit above still ends a provider that never lets up.
-                        Err(FetchError::Limited(wait, _)) if wait <= 10 => {
-                            sleep(Duration::from_secs(wait)).await;
-                        }
-                        Err(why) => {
-                            s.live_limits.carry(&playlist, &original);
-                            // Renew an expired or unanswered redirect/master link (a real
-                            // provider's answers 407 every 2 minutes), keeping the next sequence
-                            // number so already forwarded segments cannot be replayed.
-                            if matches!(why, FetchError::Request(_) | FetchError::Status(_))
-                                && playlist != original
-                                && renewed_at.is_none_or(|t| t.elapsed() >= RENEW_GAP)
-                            {
-                                renewed_at = Some(Instant::now());
-                                if let Some((fresh, updated, at)) =
-                                    renew(&s, &original, &ua, &media, next).await
-                                {
-                                    diagnostics::note(
-                                        &s,
-                                        &format!("{tag}live playlist refresh: {why}; renewed"),
-                                    );
-                                    (playlist, media, next, changed) = (fresh, updated, at, true);
-                                    continue;
-                                }
-                            }
-                            diagnostics::note(
-                                &s,
-                                &format!("{tag}live playlist refresh: {why}; reopening stream"),
-                            );
-                            return;
-                        }
+                };
+                bytes += chunk.len() as u64;
+                let sending = Instant::now();
+                if enqueue(tx, chunk).await.is_err() {
+                    return (playlist, media, next); // the viewer left
+                }
+                blocked += sending.elapsed();
+            }
+            let took = started.elapsed().as_secs_f64();
+            let duration = if *length > 0.0 { *length } else { media.target };
+            let network = (started.elapsed().saturating_sub(blocked)).as_secs_f64();
+            diagnostics::note(
+                s,
+                &format!(
+                    "{tag}live segment {seq} delivery bytes={bytes} video_s={duration:.1} elapsed_s={took:.2} downstream_wait_s={:.2} upstream_s={network:.2}",
+                    blocked.as_secs_f64()
+                ),
+            );
+            if network > duration {
+                diagnostics::note(
+                    s,
+                    &format!(
+                        "{tag}live segment {seq} took {network:.1}s for {duration:.1}s of video upstream"
+                    ),
+                );
+            }
+            let Some(after) = seq.checked_add(1) else {
+                return (playlist, media, next);
+            };
+            next = after;
+            quiet_since = Instant::now();
+        }
+        if media.ended {
+            return (playlist, media, next);
+        }
+        let quiet = quiet_since.elapsed().as_secs_f64();
+        // The provider's redirected link can go stale (one real provider's does after
+        // 2 minutes) and keep serving the old list: ask the original address for a
+        // fresh one while the browser's buffer still covers the gap.
+        let may_renew =
+            playlist != *original && renewed_at.is_none_or(|t| t.elapsed() >= RENEW_GAP);
+        if quiet > (media.target * 1.2).max(4.0) && may_renew {
+            renewed_at = Some(Instant::now());
+            if let Some((fresh, updated, at)) = renew(s, original, ua, &media, next).await {
+                diagnostics::note(s, &format!("{tag}live playlist stopped advancing; renewed"));
+                (playlist, media, next, changed) = (fresh, updated, at, true);
+                continue;
+            }
+            diagnostics::note(
+                s,
+                &format!("{tag}live playlist stopped advancing; renewal didn't continue it"),
+            );
+        }
+        if quiet > (media.target * 2.0).clamp(10.0, 20.0) {
+            diagnostics::note(s, &format!("{tag}live playlist stopped advancing"));
+            return (playlist, media, next);
+        }
+        // Changed playlists wait a full target; unchanged ones half (RFC 8216).
+        let wait =
+            Duration::from_secs_f64((media.target / if changed { 1.0 } else { 2.0 }).max(0.5));
+        if let Some(left) = wait.checked_sub(refreshed.elapsed()) {
+            sleep(left).await;
+        }
+        if tx.is_closed() {
+            return (playlist, media, next);
+        }
+        refreshed = Instant::now();
+        match get_retry(s, &playlist, ua, tag, "playlist refresh").await {
+            Ok(response) => match read_rest(response, Bytes::new()).await {
+                Ok(text) => {
+                    let updated = Media::parse(&text, &playlist);
+                    changed = updated.sequence != media.sequence
+                        || updated.segments.last().map(|s| s.0)
+                            != media.segments.last().map(|s| s.0);
+                    media = updated;
+                }
+                Err(why) => {
+                    diagnostics::note(
+                        s,
+                        &format!("{tag}live playlist refresh: {why}; reopening stream"),
+                    );
+                    return (playlist, media, next);
+                }
+            },
+            // A short cooldown is waited out while the buffer covers it; the
+            // "stopped advancing" limit above still ends a provider that never lets up.
+            Err(FetchError::Limited(wait, _)) if wait <= 10 => {
+                sleep(Duration::from_secs(wait)).await;
+            }
+            Err(why) => {
+                s.live_limits.carry(&playlist, original);
+                // Renew an expired or unanswered redirect/master link (a real
+                // provider's answers 407 every 2 minutes), keeping the next sequence
+                // number so already forwarded segments cannot be replayed.
+                if matches!(why, FetchError::Request(_) | FetchError::Status(_))
+                    && playlist != *original
+                    && renewed_at.is_none_or(|t| t.elapsed() >= RENEW_GAP)
+                {
+                    renewed_at = Some(Instant::now());
+                    if let Some((fresh, updated, at)) = renew(s, original, ua, &media, next).await {
+                        diagnostics::note(
+                            s,
+                            &format!("{tag}live playlist refresh: {why}; renewed"),
+                        );
+                        (playlist, media, next, changed) = (fresh, updated, at, true);
+                        continue;
                     }
                 }
+                diagnostics::note(
+                    s,
+                    &format!("{tag}live playlist refresh: {why}; reopening stream"),
+                );
+                return (playlist, media, next);
             }
         }
     }
@@ -1465,6 +1495,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_dead_link_is_reopened_and_continued_without_gaps_or_repeats() {
+        let fails = Arc::new(AtomicUsize::new(0));
+        let count = fails.clone();
+        let (base, task) = provider(
+            Router::new()
+                .route(
+                    "/",
+                    route_get(|| async {
+                        "#EXTM3U\n#EXTINF:1,\none\n#EXTINF:1,\ntwo\n#EXTINF:1,\nthree\n#EXT-X-ENDLIST\n"
+                    }),
+                )
+                .route("/one", route_get(|| async { "one" }))
+                .route(
+                    "/two",
+                    route_get(move || {
+                        let failing = count.fetch_add(1, Ordering::SeqCst) < 3;
+                        async move {
+                            if failing {
+                                (StatusCode::INTERNAL_SERVER_ERROR, "")
+                            } else {
+                                (StatusCode::OK, "two")
+                            }
+                        }
+                    }),
+                )
+                .route("/three", route_get(|| async { "three" })),
+        )
+        .await;
+        let (tx, mut rx) = mpsc::channel(32);
+        Source::Hls {
+            original: base.clone(),
+            playlist: base.clone(),
+            media: Media::parse(
+                "#EXTM3U\n#EXT-X-TARGETDURATION:1\n#EXTINF:1,\none\n#EXTINF:1,\ntwo\n",
+                &base,
+            ),
+            next: 0,
+        }
+        .run(test_state(), String::new(), String::new(), tx)
+        .await;
+        let mut data = vec![];
+        while let Some(chunk) = rx.recv().await {
+            data.extend_from_slice(&chunk);
+        }
+        assert_eq!(data, b"onetwothree");
+        task.abort();
+    }
+
+    #[tokio::test]
     async fn a_short_provider_cooldown_is_waited_out_not_ended() {
         let calls = Arc::new(AtomicUsize::new(0));
         let count = calls.clone();
@@ -1604,9 +1683,9 @@ mod tests {
         let media = Media::parse("#EXTM3U\n#EXT-X-TARGETDURATION:1\n", &base);
         let (tx, _rx) = mpsc::channel(32);
         // Each 509 asks for 5 s; those are waited out, but only until the playlist would count
-        // as stopped (10 s here), and never sooner than the provider asked.
+        // as stopped (10 s here), then three reopen tries (7 s), never sooner than asked.
         timeout(
-            Duration::from_secs(16),
+            Duration::from_secs(25),
             Source::Hls {
                 original: base.clone(),
                 playlist: base,
@@ -1617,7 +1696,7 @@ mod tests {
         )
         .await
         .expect("a provider that keeps refusing ends the source");
-        assert!(calls.load(Ordering::SeqCst) <= 3, "{calls:?}");
+        assert!(calls.load(Ordering::SeqCst) <= 6, "{calls:?}");
         task.abort();
     }
 
