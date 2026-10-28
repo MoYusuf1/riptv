@@ -15,7 +15,7 @@ stale about every 2 minutes, 407/509 answers, connection blips), desktop Chrome,
 | "Provider interrupted" alarms, BBC News, 100 s | 8 (every 10 s segment gap) | 0 |
 | Buffer ahead of the picture, 10 s segments | swings down to 2 s | 22–33 s (Smooth: 30–33 s) |
 | Unbroken playback, BBC News | about 2 minutes, then a reconnect | 13+ minutes |
-| Unbroken playback, Sky Sports Football, Smooth | not measured | 16+ minutes, 0 reconnects (1 stale link renewed, 8 connection blips retried) |
+| Unbroken playback, Sky Sports Football, Smooth | not measured | 60 minutes, 0 reconnects (3 dead links renewed, 23 connection blips retried; buffer median 31 s) |
 | A provider "wait 5 s" (509) | the stream ended | waited out from the buffer |
 | A link that dies for good | the stream ended; ~3 s blackout and restart | reopened by the server; the stream continues |
 | An update reaching the browser | could run the old app from the HTTP cache | `index.html` sent `no-cache` |
