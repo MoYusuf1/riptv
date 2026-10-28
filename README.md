@@ -44,6 +44,22 @@ converter at all. It's still being tested.
 [Build from source](docs/setup.md) · [How it works](docs/reference.md) · [Roadmap](docs/roadmap.md) ·
 [For developers](docs/technical-breakdown.md) · [Bundled software](docs/third-party.md)
 
+## Built for difficult providers
+
+Many IPTV providers cut corners: video in long chunks, links that expire after a couple of minutes,
+"slow down" answers. Phone and TV apps quietly ride over this. RIPTV does too, and every technique
+below was measured on a real provider that cut out every two minutes:
+
+| What the provider does | What RIPTV does | Before → after |
+|---|---|---|
+| Sends video in 10-second chunks, silent in between | Starts three chunks behind live, like TV apps, and only calls silence an outage when the buffer can't cover it | "Provider interrupted" 8 times in 100 s → none |
+| Its stream link goes stale every ~2 minutes (refuses, or stops updating) | Fetches a fresh link from your login in the background and carries on | a cut every ~2 min → 13+ minutes unbroken |
+| Answers "too busy, wait 5 s" | Waits it out while the buffer plays | a cut → nothing visible |
+| A chunk arrives late | **Smooth** (in the player's settings) starts 45 s behind live for more room | |
+
+When something can't be ridden out, RIPTV reconnects on its own, then tries the channel's other
+format, then a backup feed you've approved. Run it with `--logs` to see each of these as it happens.
+
 ## License
 
 RIPTV is free for everyone under the [MIT License](LICENSE): use it, change it, share it.
