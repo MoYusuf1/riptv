@@ -738,6 +738,8 @@ async fn follow(
     let mut skipped = 0_u8;
     let mut renewed_at = None::<Instant>;
     let mut changed = true;
+    // The last segment key fetched: providers reuse one for many segments.
+    let mut secrets = None::<(Url, [u8; 16])>;
     loop {
         let from = next;
         for (seq, segment, length) in media.segments.iter().filter(|(seq, ..)| *seq >= from) {
@@ -763,28 +765,59 @@ async fn follow(
             };
             let mut bytes = 0_u64;
             let mut blocked = Duration::ZERO;
-            loop {
-                let chunk = match timeout(READ_IDLE, response.chunk()).await {
-                    Ok(Ok(Some(chunk))) => chunk,
-                    Ok(Ok(None)) => break,
-                    _ => {
-                        // Never retry a partially forwarded segment: that would repeat
-                        // transport timestamps and corrupt the browser's decoder.
-                        diagnostics::note(
-                            s,
-                            &format!(
-                                "{tag}live segment {seq} interrupted after {bytes} bytes; reopening stream"
-                            ),
-                        );
-                        return (playlist, media, next);
-                    }
+            if let Some(key) = media.key(*seq) {
+                // Encrypted: the whole segment, decrypted, then forwarded (a few MB at most).
+                let secret = match &secrets {
+                    Some((uri, secret)) if *uri == key.uri => *secret,
+                    _ => match segment_key(s, &key.uri, ua).await {
+                        Some(secret) => {
+                            secrets = Some((key.uri.clone(), secret));
+                            secret
+                        }
+                        None => {
+                            diagnostics::note(s, &format!("{tag}live segment key unavailable"));
+                            return (playlist, media, next);
+                        }
+                    },
                 };
-                bytes += chunk.len() as u64;
+                let plain = match timeout(READ_IDLE * 3, response.bytes()).await {
+                    Ok(Ok(body)) => key.decrypt(&secret, *seq, body.to_vec()),
+                    _ => None,
+                };
+                let Some(plain) = plain else {
+                    diagnostics::note(s, &format!("{tag}live segment {seq} couldn't be decrypted"));
+                    return (playlist, media, next);
+                };
+                bytes = plain.len() as u64;
                 let sending = Instant::now();
-                if enqueue(tx, chunk).await.is_err() {
-                    return (playlist, media, next); // the viewer left
+                if enqueue(tx, plain).await.is_err() {
+                    return (playlist, media, next);
                 }
                 blocked += sending.elapsed();
+            } else {
+                loop {
+                    let chunk = match timeout(READ_IDLE, response.chunk()).await {
+                        Ok(Ok(Some(chunk))) => chunk,
+                        Ok(Ok(None)) => break,
+                        _ => {
+                            // Never retry a partially forwarded segment: that would repeat
+                            // transport timestamps and corrupt the browser's decoder.
+                            diagnostics::note(
+                                s,
+                                &format!(
+                                    "{tag}live segment {seq} interrupted after {bytes} bytes; reopening stream"
+                                ),
+                            );
+                            return (playlist, media, next);
+                        }
+                    };
+                    bytes += chunk.len() as u64;
+                    let sending = Instant::now();
+                    if enqueue(tx, chunk).await.is_err() {
+                        return (playlist, media, next); // the viewer left
+                    }
+                    blocked += sending.elapsed();
+                }
             }
             let took = started.elapsed().as_secs_f64();
             let duration = if *length > 0.0 { *length } else { media.target };
@@ -1003,6 +1036,13 @@ const RENEW_GAP: Duration = Duration::from_secs(3);
 /// skips) rather than reopened.
 const RESUME_SKIP: u64 = 3;
 
+/// An AES-128 segment key: exactly 16 bytes from its address.
+async fn segment_key(s: &AppState, uri: &Url, ua: &str) -> Option<[u8; 16]> {
+    let response = timeout(REQUEST_WAIT, get(s, uri, ua)).await.ok()?.ok()?;
+    let body = timeout(REQUEST_WAIT, response.bytes()).await.ok()?.ok()?;
+    body.as_ref().try_into().ok()
+}
+
 /// Where a renewed link continues the stream: its playlist, list and next segment.
 async fn renew(
     s: &AppState,
@@ -1023,6 +1063,50 @@ async fn renew(
     Some((playlist, fresh, at))
 }
 
+/// An AES-128 segment key (`#EXT-X-KEY:METHOD=AES-128`): where it is, and its IV if given
+/// (otherwise the segment's sequence number, per RFC 8216).
+#[derive(Clone, Debug, PartialEq)]
+struct Key {
+    uri: Url,
+    iv: Option<[u8; 16]>,
+}
+
+impl Key {
+    /// `None` for `METHOD=NONE` and for methods this can't decrypt (SAMPLE-AES).
+    fn parse(attributes: &str, base: &Url) -> Option<Self> {
+        let value = |name: &str| {
+            let rest = attributes.split(&format!("{name}=")).nth(1)?;
+            Some(match rest.strip_prefix('"') {
+                Some(quoted) => quoted.split('"').next()?,
+                None => rest.split(',').next()?,
+            })
+        };
+        if value("METHOD")? != "AES-128" {
+            return None;
+        }
+        let iv = value("IV").and_then(|hex| {
+            let hex = hex.strip_prefix("0x").or_else(|| hex.strip_prefix("0X"))?;
+            u128::from_str_radix(hex, 16).ok().map(u128::to_be_bytes)
+        });
+        Some(Self {
+            uri: base.join(value("URI")?).ok()?,
+            iv,
+        })
+    }
+
+    /// The segment's bytes, decrypted (AES-128-CBC, PKCS#7 padding).
+    fn decrypt(&self, key: &[u8; 16], seq: u64, mut data: Vec<u8>) -> Option<Bytes> {
+        use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
+        let iv = self.iv.unwrap_or(u128::from(seq).to_be_bytes());
+        let plain = cbc::Decryptor::<aes::Aes128>::new(key.into(), &iv.into())
+            .decrypt_padded_mut::<Pkcs7>(&mut data)
+            .ok()?
+            .len();
+        data.truncate(plain);
+        Some(Bytes::from(data))
+    }
+}
+
 /// A media playlist: its segments with their sequence numbers.
 struct Media {
     /// Seconds per segment, at most.
@@ -1030,6 +1114,8 @@ struct Media {
     sequence: u64,
     /// Sequence number, address, seconds.
     segments: Vec<(u64, Url, f64)>,
+    /// From which sequence number on each `#EXT-X-KEY` applies (`None`: unencrypted).
+    keys: Vec<(u64, Option<Key>)>,
     ended: bool,
 }
 
@@ -1079,9 +1165,13 @@ impl Media {
             .and_then(|v| v.parse().ok())
             .unwrap_or(0);
         let mut segments = vec![];
+        let mut keys = vec![];
         let mut seconds = 0.0;
         for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
-            if let Some(info) = line.strip_prefix("#EXTINF:") {
+            if let Some(attributes) = line.strip_prefix("#EXT-X-KEY:") {
+                let at = sequence.saturating_add(segments.len() as u64);
+                keys.push((at, Key::parse(attributes, base)));
+            } else if let Some(info) = line.strip_prefix("#EXTINF:") {
                 seconds = info
                     .split(',')
                     .next()
@@ -1101,12 +1191,23 @@ impl Media {
                 .clamp(1.0, 60.0),
             sequence,
             segments,
+            keys,
             ended: text.contains("#EXT-X-ENDLIST"),
         }
     }
 }
 
 impl Media {
+    /// The key a segment is encrypted with, if any.
+    fn key(&self, seq: u64) -> Option<&Key> {
+        self.keys
+            .iter()
+            .rev()
+            .find(|(from, _)| *from <= seq)?
+            .1
+            .as_ref()
+    }
+
     /// Where to begin: at least three segments (the HLS spec's minimum distance from the end,
     /// what ExoPlayer does) and `back` seconds (at least [`START_SECONDS`]) from the newest.
     /// With 10 s segments two left the buffer swinging down to 2 s between arrivals.
@@ -1591,6 +1692,73 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
+        task.abort();
+    }
+
+    fn encrypt(plain: &[u8], key: &[u8; 16], iv: [u8; 16]) -> Vec<u8> {
+        use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+        let mut buf = plain.to_vec();
+        buf.resize(plain.len() / 16 * 16 + 16, 0);
+        let n = cbc::Encryptor::<aes::Aes128>::new(key.into(), &iv.into())
+            .encrypt_padded_mut::<Pkcs7>(&mut buf, plain.len())
+            .unwrap()
+            .len();
+        buf.truncate(n);
+        buf
+    }
+
+    #[test]
+    fn segment_keys_are_read_from_the_playlist() {
+        let base = Url::parse("https://h.tv/live/1.m3u8").unwrap();
+        let m = Media::parse(
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:7\n#EXTINF:1,\nclear.ts\n\
+             #EXT-X-KEY:METHOD=AES-128,URI=\"k/1.key\",IV=0x000102030405060708090a0b0c0d0e0f\n\
+             #EXTINF:1,\nlocked.ts\n#EXT-X-KEY:METHOD=AES-128,URI=\"https://keys.tv/2\"\n\
+             #EXTINF:1,\nimplied.ts\n#EXT-X-KEY:METHOD=NONE\n#EXTINF:1,\nclear2.ts\n\
+             #EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"k\"\n#EXTINF:1,\nsample.ts\n",
+            &base,
+        );
+        assert_eq!(m.key(7), None);
+        let k = m.key(8).unwrap();
+        assert_eq!(k.uri.as_str(), "https://h.tv/live/k/1.key");
+        assert_eq!(k.iv, Some(core::array::from_fn(|i| i as u8)));
+        assert_eq!(
+            m.key(9).map(|k| (k.uri.as_str(), k.iv)),
+            Some(("https://keys.tv/2", None))
+        );
+        assert_eq!(m.key(10), None, "METHOD=NONE");
+        assert_eq!(m.key(11), None, "SAMPLE-AES isn't decrypted here");
+    }
+
+    #[tokio::test]
+    async fn encrypted_segments_are_decrypted_in_order() {
+        let key = *b"0123456789abcdef";
+        let one = encrypt(b"first segment", &key, u128::from(4_u64).to_be_bytes());
+        let two = encrypt(b"second", &key, [7; 16]);
+        let (base, task) = provider(
+            Router::new()
+                .route("/key", route_get(move || async move { key.to_vec() }))
+                .route("/one", route_get(move || async move { one }))
+                .route("/two", route_get(move || async move { two })),
+        )
+        .await;
+        let list = "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:4\n#EXT-X-KEY:METHOD=AES-128,URI=\"key\"\n\
+                    #EXTINF:1,\none\n#EXT-X-KEY:METHOD=AES-128,URI=\"key\",IV=0x07070707070707070707070707070707\n\
+                    #EXTINF:1,\ntwo\n#EXT-X-ENDLIST\n";
+        let (tx, mut rx) = mpsc::channel(32);
+        Source::Hls {
+            original: base.clone(),
+            playlist: base.clone(),
+            media: Media::parse(list, &base),
+            next: 4,
+        }
+        .run(test_state(), String::new(), String::new(), tx)
+        .await;
+        let mut data = vec![];
+        while let Some(chunk) = rx.recv().await {
+            data.extend_from_slice(&chunk);
+        }
+        assert_eq!(data, b"first segmentsecond");
         task.abort();
     }
 

@@ -21,6 +21,8 @@ tower-http = { version = "0.7.1", features = ["fs", "set-header"] }
 # Shared stream sniffing (`xtream::sniff`), the same code the app decides with.
 xtream = { path = "../xtream" }
 ruzstd = { version = "0.9", default-features = false, features = ["std"] }
+aes = "0.8"
+cbc = "0.1"
 
 [dev-dependencies]
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "query", "json"] }
