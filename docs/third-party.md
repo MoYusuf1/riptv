@@ -34,3 +34,17 @@ credits TVmaze and links to the show's TVmaze page. Images are loaded from TVmaz
 
 Movie cast photos come from [Wikipedia](https://en.wikipedia.org) page summaries; the images are
 hosted by Wikimedia Commons under their own free licenses, and the page credits Wikipedia.
+
+## Interface font
+
+Adwaita Sans (based on Inter) is bundled as a Latin WOFF2 variable font, under the
+[SIL Open Font License 1.1](../app/public/fonts/LICENSE.txt). It is served by RIPTV itself;
+no font service receives requests. Other writing systems fall back to the device's fonts.
+The font and its license are included in the web assets of release downloads.
+
+The source is `AdwaitaSans-Regular.ttf` from Arch's `adwaita-fonts` 51.0-2 package.
+To regenerate the subset with FontTools and its WOFF2 support installed:
+
+```sh
+python -m fontTools.subset /path/to/AdwaitaSans-Regular.ttf --flavor=woff2 --layout-features='*' --unicodes='0000-024F,1E00-1EFF,2000-206F,20A0-20CF,2100-214F,2190-21FF,FEFF,FFFD' --output-file=app/public/fonts/adwaita-sans-latin.woff2
+```

@@ -832,33 +832,55 @@ pub(crate) fn LivePlayer(
         let epoch = epoch_for_keys.clone();
         let on_key =
             Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
+                if e.default_prevented() {
+                    return;
+                }
+                if crate::controls::is_within_open_dialog(&e) {
+                    return;
+                }
+                if e.alt_key() || e.ctrl_key() || e.meta_key() || e.shift_key() {
+                    return;
+                }
+                let key = e.key().to_ascii_lowercase();
                 if options.menu.peek().is_some() {
-                    if e.key() == "Escape" {
+                    if key == "escape" {
                         e.prevent_default();
+                        if let Some((target, ..)) = *options.menu.peek() {
+                            crate::controls::focus(&format!("channel-{target}"));
+                        }
                         let mut menu = options.menu;
                         menu.set(None);
                     }
                     return;
                 }
+                // The menu's own key handler can clear its signal before this document listener
+                // runs. Still consume Escape here so one press cannot also leave fullscreen.
+                let from_options_menu = e
+                    .target()
+                    .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+                    .is_some_and(|element| {
+                        element
+                            .closest(".playback-context")
+                            .ok()
+                            .flatten()
+                            .is_some()
+                    });
+                if from_options_menu && key == "escape" {
+                    e.prevent_default();
+                    return;
+                }
                 if *settings_open.peek() {
-                    if e.key() == "Escape" {
+                    if key == "escape" {
                         e.prevent_default();
+                        crate::controls::focus("live-settings-toggle");
                         settings_open.set(false);
                     }
                     return;
                 }
-                if e.alt_key() || e.ctrl_key() || e.meta_key() {
+                if crate::controls::preserve_native_key(&e) {
                     return;
                 }
-                if e.target()
-                    .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
-                    .is_some_and(|el| {
-                        matches!(el.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT")
-                    })
-                {
-                    return;
-                }
-                match e.key().to_ascii_lowercase().as_str() {
+                match key.as_str() {
                     " " => {
                         e.prevent_default();
                         toggle_play();
@@ -1127,6 +1149,10 @@ pub(crate) fn LivePlayer(
                 if settings_open() {
                     crate::live_settings::LiveSettings {
                         catalog: catalog.clone(), smoother: smoother(), backup: backup(),
+                        onclose: move |_| {
+                            crate::controls::focus("live-settings-toggle");
+                            settings_open.set(false);
+                        },
                         onmode: move |on| { smoother.set(on); preferences::update(|p| p.smoother_live = on); },
                         onbackup: move |target| { backup.set(target); preferences::update(|p| preferences::set_backup(p, id, target)); },
                     }
@@ -1166,7 +1192,7 @@ pub(crate) fn LivePlayer(
                     if selected_id() != id { span { class: "backup-label", "Backup · {selected_title}" } }
                     span { class: "grow" }
                     button { class: "ctl", aria_label: "Stream info", title: "Stream info (I)", onclick: move |_| show_stats.set(!show_stats()), Icon { d: INFO } }
-                    button { class: "ctl settings-toggle", aria_label: "Live playback settings", aria_expanded: settings_open(), aria_controls: "live-settings", title: "Live playback settings", onclick: move |_| settings_open.set(!settings_open()), Icon { d: GEAR } }
+                    button { id: "live-settings-toggle", class: "ctl settings-toggle", aria_label: "Live playback settings", aria_expanded: settings_open(), aria_controls: "live-settings", title: "Live playback settings", onclick: move |_| settings_open.set(!settings_open()), Icon { d: GEAR } }
                     button { class: "ctl", aria_label: "Picture in picture", title: "Picture in picture", onclick: move |_| toggle_pip(video_el()), Icon { d: PIP } }
                     button { class: "ctl", aria_label: "Fullscreen", title: "Fullscreen (F)", onclick: move |_| toggle_fullscreen("live-player", expanded), Icon { d: FULLSCREEN } }
                 }

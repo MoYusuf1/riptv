@@ -6,6 +6,7 @@ pub(crate) fn LiveSettings(
     catalog: Snapshot<Library>,
     smoother: bool,
     backup: Option<u64>,
+    onclose: EventHandler<()>,
     onmode: EventHandler<bool>,
     onbackup: EventHandler<Option<u64>>,
 ) -> Element {
@@ -17,7 +18,16 @@ pub(crate) fn LiveSettings(
             section { class: "live-settings", id: "live-settings", aria_label: "Live playback settings", onclick: move |e| e.stop_propagation(),
                 div { class: "sheet-body",
                     div { class: "settings-section",
-                        h3 { "Playback" }
+                        div { class: "settings-heading",
+                            h3 { "Playback" }
+                            button {
+                                class: "icon-btn settings-close",
+                                aria_label: "Close playback settings",
+                                title: "Close playback settings",
+                                onclick: move |_| onclose.call(()),
+                                Icon { d: CLOSE }
+                            }
+                        }
                         div { class: "playback-modes", role: "group", aria_label: "Playback mode",
                             button { class: if !smoother { "mode selected" } else { "mode" }, aria_pressed: !smoother, aria_label: "Live: shorter playback delay", onclick: move |_| onmode.call(false), "Live" }
                             button { class: if smoother { "mode selected" } else { "mode" }, aria_pressed: smoother, aria_label: "Smooth: a larger playback buffer", onclick: move |_| onmode.call(true), "Smooth" }

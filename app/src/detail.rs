@@ -127,6 +127,7 @@ thread_local! {
 #[component]
 pub(crate) fn DetailPage(
     row: Row,
+    inert: bool,
     onback: EventHandler<()>,
     onplay: EventHandler<(Rc<Vec<Play>>, usize)>,
 ) -> Element {
@@ -412,7 +413,7 @@ pub(crate) fn DetailPage(
     let season_now = chosen().or_else(|| spans.first().map(|s| s.0));
 
     rsx! {
-        section { class: "detail",
+        section { class: "detail", inert: inert.then_some(""),
             // At the page's root: inside a section, content-visibility would confine it to that section.
             if seasons_open() {
                 button { class: "scrim", aria_label: "Close menu", onclick: move |_| seasons_open.set(false) }
@@ -434,7 +435,7 @@ pub(crate) fn DetailPage(
                     }
                     div { class: "d-actions",
                         if !all.is_empty() {
-                            button { class: "play", onclick: { let play_at = play_at.clone(); move |_| play_at(start_at) },
+                            button { id: "title-play", class: "play", onclick: { let play_at = play_at.clone(); move |_| play_at(start_at) },
                                 Icon { d: PLAY }
                                 if let Some((at, total)) = resume {
                                     "Resume"
@@ -492,8 +493,16 @@ pub(crate) fn DetailPage(
                             if spans.len() > 1 {
                                 // The app's own menu, not the browser's dropdown.
                                 div { class: "sortwrap",
-                                    onkeydown: move |e| if e.key() == Key::Escape { seasons_open.set(false) },
+                                    onkeydown: move |e| {
+                                        if e.key() == Key::Escape && seasons_open() {
+                                            e.stop_propagation();
+                                            e.prevent_default();
+                                            crate::controls::focus("season-trigger");
+                                            seasons_open.set(false);
+                                        }
+                                    },
                                     button {
+                                        id: "season-trigger",
                                         class: "sort-btn season-btn",
                                         aria_label: "Season",
                                         aria_haspopup: "menu",
@@ -510,7 +519,11 @@ pub(crate) fn DetailPage(
                                                     role: "menuitemradio",
                                                     aria_checked: Some(number) == season_now,
                                                     class: if Some(number) == season_now { "on" } else { "" },
-                                                    onclick: move |_| { chosen.set(Some(number)); seasons_open.set(false); },
+                                                    onclick: move |_| {
+                                                        crate::controls::focus("season-trigger");
+                                                        chosen.set(Some(number));
+                                                        seasons_open.set(false);
+                                                    },
                                                     span { "Season {number}" }
                                                     if Some(number) == season_now { Icon { d: CHECK } }
                                                 }

@@ -5,6 +5,50 @@ use std::{cell::Cell, rc::Rc, time::Duration};
 use web_sys::js_sys;
 use web_sys::wasm_bindgen::{JsCast, closure::Closure};
 
+/// Returns keyboard focus to a known, mounted HTML element by id.
+pub(crate) fn focus(id: &str) {
+    if let Some(element) = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id(id))
+        .and_then(|element| element.dyn_into::<web_sys::HtmlElement>().ok())
+    {
+        let _ = element.focus();
+    }
+}
+
+/// Keep focused form controls and native Space/Enter activations out of player shortcuts.
+pub(crate) fn preserve_native_key(event: &web_sys::KeyboardEvent) -> bool {
+    let Some(element) = event
+        .target()
+        .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+    else {
+        return false;
+    };
+    let editable = element
+        .closest("input,textarea,select,[contenteditable]:not([contenteditable='false']),[role='textbox'],[role='searchbox'],[role='slider'],[role='spinbutton']")
+        .ok()
+        .flatten()
+        .is_some();
+    if editable {
+        return true;
+    }
+    let native_activation = event.key() == " " || event.key().eq_ignore_ascii_case("Enter");
+    native_activation
+        && element
+            .closest("button,a[href],[role='button'],[role='link']")
+            .ok()
+            .flatten()
+            .is_some()
+}
+
+/// Keep player shortcuts from crossing an open native modal boundary.
+pub(crate) fn is_within_open_dialog(event: &web_sys::KeyboardEvent) -> bool {
+    event
+        .target()
+        .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+        .is_some_and(|element| element.closest("dialog[open]").ok().flatten().is_some())
+}
+
 /// A scoped outside-click listener: removed when the dropdown closes or its player unmounts.
 pub(crate) struct OutsideClick {
     document: web_sys::Document,

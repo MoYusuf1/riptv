@@ -46,18 +46,25 @@ pub(crate) fn CategoryList(
     selected: Option<u64>,
     pins: Vec<u64>,
     query: Signal<String>,
+    #[props(default)] in_dialog: bool,
     onselect: EventHandler<Option<u64>>,
     onpin: EventHandler<u64>,
 ) -> Element {
     let CategoryData { list, library } = data;
     let mut query = query;
     let q = query().to_lowercase();
+    let filter_id = if in_dialog {
+        "category-dialog-filter"
+    } else {
+        "category-sidebar-filter"
+    };
     let pins: std::collections::HashSet<_> = pins.into_iter().collect();
     let matches =
         |c: &&xtream::Category| q.is_empty() || xtream::contains_lowercase(&c.category_name, &q);
-    let has_matches = list
-        .iter()
-        .any(|c| xtream::contains_lowercase(&c.category_name, &q));
+    let has_matches = q.is_empty()
+        || list
+            .iter()
+            .any(|c| xtream::contains_lowercase(&c.category_name, &q));
     let count = |id: u64| {
         library
             .as_ref()
@@ -70,12 +77,16 @@ pub(crate) fn CategoryList(
         div { class: "category-filter",
             Icon { d: SEARCH }
             input {
+                id: "{filter_id}",
                 aria_label: "Filter categories", placeholder: "Filter categories",
                 value: "{query}", oninput: move |e| query.set(e.value())
             }
             button {
                 aria_label: "Clear category filter", aria_hidden: q.is_empty(),
-                tabindex: if q.is_empty() { -1 } else { 0 }, onclick: move |_| query.set(String::new()),
+                tabindex: if q.is_empty() { -1 } else { 0 }, onclick: move |_| {
+                    crate::controls::focus(filter_id);
+                    query.set(String::new());
+                },
                 Icon { d: CLOSE }
             }
         }
@@ -93,7 +104,10 @@ pub(crate) fn CategoryList(
         if !q.is_empty() && !has_matches {
             div { class: "category-note",
                 span { "No categories match ‘{query}’." }
-                button { aria_label: "Clear category filter", onclick: move |_| query.set(String::new()), "Clear filter" }
+                button { aria_label: "Clear category filter", onclick: move |_| {
+                    crate::controls::focus(filter_id);
+                    query.set(String::new());
+                }, "Clear filter" }
             }
         }
     }

@@ -6,11 +6,11 @@ license = "MIT"
 description = "Dioxus web UI for the IPTV client"
 
 [dependencies]
-dioxus = { version = "0.7.10", default-features = false, features = ["web", "launch", "macro", "html", "signals", "hooks"] }
+dioxus = { version = "0.7.10", default-features = false, features = ["web", "mounted", "launch", "macro", "html", "signals", "hooks"] }
 rstreamkit = { version = "0.1.0", git = "https://github.com/MoYusuf1/rstreamkit.git" }
 futures-core = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wasm-bindgen-futures = "0.4.78"
-web-sys = { version = "0.3.105", features = ["Window", "Location", "Document", "Element", "DomRect", "EventTarget", "Headers", "Request", "RequestInit", "Response", "ReadableStream", "ReadableStreamDefaultReader", "HtmlVideoElement", "HtmlMediaElement", "KeyboardEvent", "Node", "Storage", "TimeRanges", "VideoPlaybackQuality", "console", "MediaSource", "MediaSourceReadyState", "SourceBuffer", "Url", "AbortController", "AbortSignal"] }
+web-sys = { version = "0.3.105", features = ["Window", "Location", "Document", "Element", "DomRect", "EventTarget", "Headers", "Request", "RequestInit", "Response", "ReadableStream", "ReadableStreamDefaultReader", "HtmlVideoElement", "HtmlDialogElement", "HtmlMediaElement", "KeyboardEvent", "Node", "Storage", "TimeRanges", "VideoPlaybackQuality", "console", "MediaSource", "MediaSourceReadyState", "SourceBuffer", "Url", "AbortController", "AbortSignal"] }
 xtream = { version = "0.1.0", path = "../xtream" }

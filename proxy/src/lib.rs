@@ -52,7 +52,7 @@ use tower_http::{
 /// Policy for the web app. It's same-origin with no inline scripts; `'wasm-unsafe-eval'` is
 /// what lets the browser compile WebAssembly (it does not allow `eval`). Images may come from
 /// anywhere because providers host channel logos and posters themselves.
-const APP_CSP: &str = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'unsafe-inline'; \
+const APP_CSP: &str = "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'unsafe-inline'; font-src 'self'; \
     img-src http: https: data:; media-src 'self' blob: https:; connect-src 'self'; base-uri 'none'; form-action 'none'; \
     frame-ancestors 'none'";
 

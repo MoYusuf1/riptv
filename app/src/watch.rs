@@ -433,17 +433,33 @@ pub(crate) fn Watch(
         ))
     });
     let installed = listener.clone();
+    let menu_for_keys = menu;
     use_effect(move || {
         let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
             return;
         };
         let key_idle = key_idle.clone();
+        let mut menu = menu_for_keys;
         let on_key =
             Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
-                if e.ctrl_key() || e.meta_key() || e.alt_key() {
+                if e.default_prevented() {
+                    return;
+                }
+                if e.ctrl_key() || e.meta_key() || e.alt_key() || e.shift_key() {
                     return;
                 }
                 let key = e.key().to_ascii_lowercase();
+                if *menu.peek() {
+                    if key == "escape" {
+                        e.prevent_default();
+                        crate::controls::focus("watch-settings-toggle");
+                        menu.set(false);
+                    }
+                    return;
+                }
+                if crate::controls::preserve_native_key(&e) {
+                    return;
+                }
                 // Values are read into locals first: a `peek()` guard lives to the end of its
                 // statement, and these calls write the same signals.
                 let (now, level) = (pos(), volume());
@@ -513,7 +529,11 @@ pub(crate) fn Watch(
         div {
             class: "{class}",
             id: "watch",
+            role: "dialog",
+            aria_modal: "true",
+            aria_label: "{play.title}",
             tabindex: "0",
+            onmounted: move |_| crate::controls::focus("watch"),
             onmousemove: move |_| idle.wake(),
             ondoubleclick: move |_| fullscreen_watch(),
             if !engine_now {
@@ -803,7 +823,7 @@ pub(crate) fn Watch(
                                 Icon { d: DOWNLOAD }
                             }
                         }
-                        button { class: "ctl", aria_label: "Settings", title: "Settings", onclick: move |_| menu.set(!menu()), Icon { d: GEAR } }
+                        button { id: "watch-settings-toggle", class: "ctl", aria_label: "Settings", title: "Settings", onclick: move |_| menu.set(!menu()), Icon { d: GEAR } }
                         button { class: "ctl", aria_label: "Picture in picture", title: "Picture in picture", onclick: move |_| toggle_pip(watch_video()), Icon { d: PIP } }
                         button { class: "ctl", aria_label: "Fullscreen", title: "Fullscreen (F)", onclick: move |_| fullscreen_watch(), Icon { d: FULLSCREEN } }
                     }

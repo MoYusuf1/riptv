@@ -465,6 +465,10 @@ async fn serves_web_app_with_csp_and_spa_fallback() {
             "{csp}"
         );
         assert!(
+            csp.contains("font-src 'self';"),
+            "local fonts must be allowed: {csp}"
+        );
+        assert!(
             !csp.contains("'unsafe-eval'"),
             "scripts must not get plain eval: {csp}"
         );

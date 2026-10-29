@@ -997,6 +997,8 @@ fn App() -> Element {
         // The title comes from Dioxus.toml instead.
         style { "{CSS}" }
         style { "{navigation::CSS}{categories::CSS}{updates::CSS}{quit::CSS}" }
+        style { {include_str!("theme.css")} }
+        style { {include_str!("mobile.css")} }
         if quit() { quit::Closed {} } else if session.read().is_some() { Browse {} } else { Login {} }
         updates::Notice {}
     }
@@ -1348,6 +1350,14 @@ fn Browse() -> Element {
     let mut category_search = use_signal(String::new);
     let mut pinned_categories = use_signal(|| remembered.pinned_categories.clone());
     let mut playing = use_signal(|| None::<Play>);
+    let previous_playing = use_hook(|| Rc::new(Cell::new(false)));
+    let previous_playing_effect = previous_playing.clone();
+    use_effect(move || {
+        let active = playing().is_some();
+        if previous_playing_effect.replace(active) && !active {
+            controls::focus("title-play");
+        }
+    });
     let mut queue = use_signal(|| None::<(Rc<Vec<Play>>, usize)>);
     let mut live = use_signal(|| None::<(u64, String, String, Option<String>)>); // (id, title, playlist url, logo)
     let watching = use_signal(|| None::<u64>);
@@ -1367,6 +1377,25 @@ fn Browse() -> Element {
     let mut sort_open = use_signal(|| false);
     let mut account_open = use_signal(|| false);
     let mut cats_open = use_signal(|| false);
+    let categories_were_open = use_hook(|| Rc::new(Cell::new(false)));
+    use_effect(move || {
+        let open = cats_open();
+        if categories_were_open.replace(open) && !open {
+            // Selecting a category can replace the grid with the live list and its trigger.
+            controls::focus("category-trigger");
+        }
+    });
+    // Close before unmounting: the browser restores focus to the category trigger.
+    let mut dismiss_categories = move || {
+        if let Some(dialog) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.get_element_by_id("category-dialog"))
+            .and_then(|e| e.dyn_into::<web_sys::HtmlDialogElement>().ok())
+        {
+            dialog.close();
+        }
+        cats_open.set(false);
+    };
     let mut player_revision = use_signal(|| 0_u64);
     let mut refresh = use_signal(|| 0_u64);
     let mut page = use_signal(|| 0_usize);
@@ -1463,6 +1492,8 @@ fn Browse() -> Element {
 
     let pick_kind = move |k: Kind| {
         let prefs = preferences::load();
+        account_open.set(false);
+        sort_open.set(false);
         kind.set(k);
         sort.set(Sort::restored(k, prefs.sorts[k as usize]));
         category.set(prefs.categories[k as usize]);
@@ -1474,11 +1505,13 @@ fn Browse() -> Element {
         page.set(0);
     };
     let select = move |cat: Option<u64>| {
+        account_open.set(false);
+        sort_open.set(false);
         category.set(cat);
         preferences::update(|p| p.categories[kind() as usize] = cat);
         search.set(String::new());
         open.set(None);
-        cats_open.set(false);
+        dismiss_categories();
         if cat.is_none() {
             live.set(None);
         }
@@ -1518,7 +1551,7 @@ fn Browse() -> Element {
         });
     });
 
-    let cat_list = move || -> Element {
+    let cat_list = move |in_dialog: bool| -> Element {
         match &*cats.read() {
             Some(Err(e)) => rsx! { p { class: "err", "{e}" } },
             Some(Ok((k, list))) if *k == kind() => {
@@ -1529,7 +1562,7 @@ fn Browse() -> Element {
                     .filter(|l| l.kind == kind());
                 rsx! {
                     categories::CategoryList {
-                        data: categories::CategoryData { list: list.clone(), library: lib.cloned() }, selected: category(),
+                        data: categories::CategoryData { list: list.clone(), library: lib.cloned() }, selected: category(), in_dialog,
                         pins: pinned_categories()[kind() as usize].clone(), query: category_search,
                         onselect: select,
                         onpin: move |id| {
@@ -1555,12 +1588,17 @@ fn Browse() -> Element {
         sort(),
         page()
     );
+    let section_name = match kind() {
+        Kind::Live => "Live",
+        Kind::Movies => "Movies",
+        Kind::Series => "Shows",
+    };
     let category_name = match &*cats.read() {
         Some(Ok((k, list))) if *k == kind() => category()
             .and_then(|id| list.iter().find(|c| c.category_id == id))
             .map(|c| c.category_name.clone())
-            .unwrap_or_else(|| "All".to_string()),
-        _ => "All".to_string(),
+            .unwrap_or_else(|| section_name.to_string()),
+        _ => section_name.to_string(),
     };
     let body = match &*library.read() {
         Some(Err(e)) => rsx! { p { class: "err", "{e}" } },
@@ -1579,34 +1617,24 @@ fn Browse() -> Element {
             let list = if shown.is_empty() {
                 let filtered = !q.is_empty() || category().is_some();
                 let (mark, heading, message) = if filtered {
+                    let noun = if kind() == Kind::Series {
+                        "shows"
+                    } else if kind() == Kind::Movies {
+                        "movies"
+                    } else {
+                        "channels"
+                    };
                     (
                         SEARCH,
                         "No matches",
                         if !q.is_empty() {
-                            format!(
-                                "No {} match “{}” in {}.",
-                                if kind() == Kind::Series {
-                                    "shows"
-                                } else if kind() == Kind::Movies {
-                                    "movies"
-                                } else {
-                                    "channels"
-                                },
-                                search(),
-                                category_name
-                            )
+                            if category().is_some() {
+                                format!("No {noun} match “{}” in {}.", search(), category_name)
+                            } else {
+                                format!("No {noun} match “{}”.", search())
+                            }
                         } else {
-                            format!(
-                                "There are no {} in {}.",
-                                if kind() == Kind::Series {
-                                    "shows"
-                                } else if kind() == Kind::Movies {
-                                    "movies"
-                                } else {
-                                    "channels"
-                                },
-                                category_name
-                            )
+                            format!("There are no {noun} in {}.", category_name)
                         },
                     )
                 } else {
@@ -1625,7 +1653,11 @@ fn Browse() -> Element {
                             if !q.is_empty() {
                                 button {
                                     class: "empty-action",
-                                    onclick: move |_| { search.set(String::new()); page.set(0); },
+                                    onclick: move |_| {
+                                        crate::controls::focus("catalog-search");
+                                        search.set(String::new());
+                                        page.set(0);
+                                    },
                                     "Clear search"
                                 }
                             }
@@ -1786,13 +1818,24 @@ fn Browse() -> Element {
     });
     let cats_sheet = cats_open().then(|| {
         rsx! {
-            div { class: "overlay bottom", onclick: move |_| cats_open.set(false),
+            dialog {
+                id: "category-dialog", class: "category-dialog", aria_labelledby: "category-heading",
+                onmounted: move |_| {
+                    if let Some(dialog) = web_sys::window().and_then(|w| w.document())
+                        .and_then(|d| d.get_element_by_id("category-dialog"))
+                        .and_then(|e| e.dyn_into::<web_sys::HtmlDialogElement>().ok())
+                    {
+                        let _ = dialog.show_modal();
+                    }
+                },
+                oncancel: move |e| { e.prevent_default(); dismiss_categories(); },
+                onclick: move |_| dismiss_categories(),
                 div { class: "sheet cats", onclick: move |e| e.stop_propagation(),
                     div { class: "bar",
-                        strong { "Categories" }
-                        button { class: "icon-btn", aria_label: "Close", onclick: move |_| cats_open.set(false), Icon { d: CLOSE } }
+                        strong { id: "category-heading", "Categories" }
+                        button { class: "icon-btn", aria_label: "Close", onclick: move |_| dismiss_categories(), Icon { d: CLOSE } }
                     }
-                    div { class: "sheet-body", {cat_list()} }
+                    div { class: "sheet-body", {cat_list(true)} }
                 }
             }
         }
@@ -1800,8 +1843,18 @@ fn Browse() -> Element {
 
     let sort_menu = move || -> Element {
         rsx! {
-            div { class: "sortwrap",
+            div {
+                class: "sortwrap",
+                onkeydown: move |e| {
+                    if e.key() == Key::Escape && sort_open() {
+                        e.stop_propagation();
+                        e.prevent_default();
+                        crate::controls::focus("sort-trigger");
+                        sort_open.set(false);
+                    }
+                },
                 button {
+                    id: "sort-trigger",
                     class: "sort-btn",
                     title: "Sort",
                     aria_label: "Sort",
@@ -1843,12 +1896,13 @@ fn Browse() -> Element {
         Kind::Series => "shows",
     };
     rsx! {
-        header { class: if open().is_some() { "topbar detail-mode" } else { "topbar" },
+        header { class: if open().is_some() { "topbar detail-mode" } else { "topbar" }, inert: playing().is_some().then_some(""),
             if open().is_none() {
                 span { class: "brand", title: "Rust", RustMark {} }
                 div { class: "search",
                     Icon { d: SEARCH }
                     input {
+                        id: "catalog-search",
                         aria_label: "Search {search_label}",
                         placeholder: "Search {search_label}",
                         value: "{search}",
@@ -1859,15 +1913,27 @@ fn Browse() -> Element {
                             class: "search-clear",
                             aria_label: "Clear search",
                             title: "Clear search",
-                            onclick: move |_| { search.set(String::new()); page.set(0); },
+                            onclick: move |_| {
+                                crate::controls::focus("catalog-search");
+                                search.set(String::new());
+                                page.set(0);
+                            },
                             Icon { d: CLOSE }
                         }
                     }
                 }
             }
             div { class: "account",
-                onkeydown: move |e| if e.key() == Key::Escape { account_open.set(false) },
+                onkeydown: move |e| {
+                    if e.key() == Key::Escape && account_open() {
+                        e.stop_propagation();
+                        e.prevent_default();
+                        crate::controls::focus("account-trigger");
+                        account_open.set(false);
+                    }
+                },
                 button {
+                    id: "account-trigger",
                     class: if initial.is_some() { "who" } else { "who solo" },
                     style: "--c:{profile_color}",
                     aria_label: "Account",
@@ -1923,17 +1989,17 @@ fn Browse() -> Element {
         if open().is_none() {
             navigation::LibraryNav { kind: kind(), playlist: client.is_playlist(), onpick: pick_kind }
         }
-        main { class: if open().is_some() { "workspace detail-open" } else { "workspace" },
-            aside { class: "sidebar", {cat_list()} }
+        main { class: if open().is_some() { "workspace detail-open" } else { "workspace" }, inert: playing().is_some().then_some(""),
+            aside { class: "sidebar", {cat_list(false)} }
             div { class: "content",
                 if three_pane {
                     div { class: if live().is_some() { "live watching" } else { "live" },
                         section { class: "channels",
                             div { class: "head",
-                                h1 { "{category_name}" }
+                                h1 { title: "{category_name}", "{category_name}" }
                                 div { class: "tools",
                                     {sort_menu()}
-                                    button { class: "cats-btn", onclick: move |_| cats_open.set(true), Icon { d: LIST } "Categories" }
+                                    button { id: "category-trigger", class: "cats-btn", aria_haspopup: "dialog", aria_expanded: cats_open(), aria_controls: "category-dialog", onclick: move |_| cats_open.set(true), Icon { d: LIST } "Categories" }
                                 }
                             }
                             {body}
@@ -1952,22 +2018,23 @@ fn Browse() -> Element {
                 } else {
                     section { class: if open().is_some() { "main covered" } else { "main" },
                         div { class: "head",
-                            h1 { "{category_name}" }
+                            h1 { title: "{category_name}", "{category_name}" }
                             div { class: "tools",
                                 {sort_menu()}
-                                button { class: "cats-btn", onclick: move |_| cats_open.set(true), Icon { d: LIST } "Categories" }
+                                button { id: "category-trigger", class: "cats-btn", aria_haspopup: "dialog", aria_expanded: cats_open(), aria_controls: "category-dialog", onclick: move |_| cats_open.set(true), Icon { d: LIST } "Categories" }
                             }
                         }
                         {body}
                     }
                 }
             }
-            {cats_sheet}
         }
+        {cats_sheet}
         if let Some(row) = open() {
             DetailPage {
                 key: "{row.key}",
                 row,
+                inert: playing().is_some(),
                 onback: move |_| open.set(None),
                 onplay: move |(all, at): (Rc<Vec<Play>>, usize)| {
                     playing.set(all.get(at).cloned());
