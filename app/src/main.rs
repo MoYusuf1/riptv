@@ -128,10 +128,13 @@ svg{width:1.1rem;height:1.1rem}
 .rust-mark{width:1.85rem;height:1.85rem;color:var(--accent)}
 .search{position:relative;display:flex;align-items:center;flex:1;min-width:4rem;max-width:42rem;margin-inline:auto}
 .search svg{position:absolute;left:.95rem;width:1rem;height:1rem;color:var(--dim);pointer-events:none}
-.search input{width:100%;height:2.55rem;padding:0 1rem 0 2.6rem;border:1px solid rgba(255,255,255,.05);border-radius:13px;outline:0;background:rgba(255,255,255,.035);transition:border-color .2s,background .2s,box-shadow .2s}
+.search input{width:100%;height:2.55rem;padding:0 2.8rem 0 2.6rem;border:1px solid rgba(255,255,255,.05);border-radius:13px;outline:0;background:rgba(255,255,255,.035);transition:border-color .2s,background .2s,box-shadow .2s}
 .search input:hover{background:rgba(255,255,255,.055)}
 .search input:focus{border-color:rgba(255,125,146,.35);background:rgba(255,125,146,.035);box-shadow:0 0 0 3px rgba(255,125,146,.06)}
 .search input::placeholder{color:var(--faint)}
+.search-clear{position:absolute;right:.35rem;display:grid;place-items:center;width:2rem;height:2rem;border-radius:50%;color:var(--dim);transition:color .2s,background .2s}
+.search-clear:hover{background:rgba(255,255,255,.09);color:var(--text)}
+.search-clear svg{position:static;width:.9rem;height:.9rem;color:inherit}
 .topbar.detail-mode{inset:.65rem .7rem auto auto;width:auto;height:2.8rem;padding:.25rem;border-radius:999px;background:rgba(22,16,20,.82)}
 .topbar.detail-mode .grow{display:none}
 .topbar.detail-mode .who{background:transparent}
@@ -189,6 +192,14 @@ svg{width:1.1rem;height:1.1rem}
 .channels .sort-btn{padding:.45rem}
 .cats-btn{display:none;align-items:center;gap:.4rem;flex:none;padding:.4rem .8rem;border-radius:999px;background:var(--row);font-size:.8rem}
 .scroll{flex:1;min-height:0;padding:0 .4rem 2rem;overflow:auto;scrollbar-width:thin}
+.empty-state{display:grid;justify-items:center;align-content:center;gap:.65rem;min-height:min(32vh,17rem);padding:2rem 1rem;color:var(--dim);text-align:center}
+.empty-state .empty-mark{display:grid;place-items:center;width:3rem;height:3rem;margin-bottom:.15rem;border:1px solid rgba(255,125,146,.14);border-radius:1rem;background:linear-gradient(145deg,rgba(255,125,146,.1),rgba(255,255,255,.025));color:var(--accent)}
+.empty-state .empty-mark svg{width:1.25rem;height:1.25rem}
+.empty-state strong{color:var(--text);font-size:1rem;font-weight:600}
+.empty-state p{max-width:24rem;margin:0;font-size:.84rem}
+.empty-actions{display:flex;justify-content:center;flex-wrap:wrap;gap:.5rem;margin-top:.3rem}
+.empty-action{padding:.48rem .85rem;border:1px solid var(--hair);border-radius:999px;background:rgba(255,255,255,.04);color:var(--text);font-size:.8rem;font-weight:600;transition:background .2s,border-color .2s}
+.empty-action:hover{border-color:rgba(255,125,146,.28);background:var(--soft)}
 "#,
     // Posters and channel tiles
     r#".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(8.6rem,1fr));align-items:start;gap:1.5rem 1rem}
@@ -1544,6 +1555,13 @@ fn Browse() -> Element {
         sort(),
         page()
     );
+    let category_name = match &*cats.read() {
+        Some(Ok((k, list))) if *k == kind() => category()
+            .and_then(|id| list.iter().find(|c| c.category_id == id))
+            .map(|c| c.category_name.clone())
+            .unwrap_or_else(|| "All".to_string()),
+        _ => "All".to_string(),
+    };
     let body = match &*library.read() {
         Some(Err(e)) => rsx! { p { class: "err", "{e}" } },
         Some(Ok(lib)) if lib.kind == kind() => {
@@ -1559,7 +1577,72 @@ fn Browse() -> Element {
                 shown = rows(lib, order, &client, None, "", (now * size, size)).0;
             }
             let list = if shown.is_empty() {
-                rsx! { div { class: "empty", "Nothing matches." } }
+                let filtered = !q.is_empty() || category().is_some();
+                let (mark, heading, message) = if filtered {
+                    (
+                        SEARCH,
+                        "No matches",
+                        if !q.is_empty() {
+                            format!(
+                                "No {} match “{}” in {}.",
+                                if kind() == Kind::Series {
+                                    "shows"
+                                } else if kind() == Kind::Movies {
+                                    "movies"
+                                } else {
+                                    "channels"
+                                },
+                                search(),
+                                category_name
+                            )
+                        } else {
+                            format!(
+                                "There are no {} in {}.",
+                                if kind() == Kind::Series {
+                                    "shows"
+                                } else if kind() == Kind::Movies {
+                                    "movies"
+                                } else {
+                                    "channels"
+                                },
+                                category_name
+                            )
+                        },
+                    )
+                } else {
+                    (
+                        if kind() == Kind::Live { LIVE_TV } else if kind() == Kind::Movies { MOVIE } else { SERIES },
+                        match kind() { Kind::Live => "No channels yet", Kind::Movies => "No movies yet", Kind::Series => "No shows yet" },
+                        "This section is empty. Try refreshing the library once your provider has content.".to_string(),
+                    )
+                };
+                rsx! {
+                    div { class: "empty-state", role: "status",
+                        span { class: "empty-mark", aria_hidden: "true", Icon { d: mark } }
+                        strong { "{heading}" }
+                        p { "{message}" }
+                        div { class: "empty-actions",
+                            if !q.is_empty() {
+                                button {
+                                    class: "empty-action",
+                                    onclick: move |_| { search.set(String::new()); page.set(0); },
+                                    "Clear search"
+                                }
+                            }
+                            if category().is_some() {
+                                button {
+                                    class: "empty-action",
+                                    onclick: move |_| {
+                                        category.set(None);
+                                        preferences::update(|p| p.categories[kind() as usize] = None);
+                                        page.set(0);
+                                    },
+                                    "Show all categories"
+                                }
+                            }
+                        }
+                    }
+                }
             } else if three_pane {
                 rsx! {
                     for r in shown {
@@ -1715,13 +1798,6 @@ fn Browse() -> Element {
         }
     });
 
-    let category_name = match &*cats.read() {
-        Some(Ok((k, list))) if *k == kind() => category()
-            .and_then(|id| list.iter().find(|c| c.category_id == id))
-            .map(|c| c.category_name.clone())
-            .unwrap_or_else(|| "All".to_string()),
-        _ => "All".to_string(),
-    };
     let sort_menu = move || -> Element {
         rsx! {
             div { class: "sortwrap",
@@ -1761,17 +1837,31 @@ fn Browse() -> Element {
     let account_name = playlist();
     let profile_color = use_context::<ProfileColor>().0();
     let initial = account_name.chars().next();
+    let search_label = match kind() {
+        Kind::Live => "channels",
+        Kind::Movies => "movies",
+        Kind::Series => "shows",
+    };
     rsx! {
         header { class: if open().is_some() { "topbar detail-mode" } else { "topbar" },
             if open().is_none() {
                 span { class: "brand", title: "Rust", RustMark {} }
-                label { class: "search",
+                div { class: "search",
                     Icon { d: SEARCH }
                     input {
-                        aria_label: "Search this section",
-                        placeholder: "Search",
+                        aria_label: "Search {search_label}",
+                        placeholder: "Search {search_label}",
                         value: "{search}",
                         oninput: move |e| { search.set(e.value()); page.set(0); }
+                    }
+                    if !search().is_empty() {
+                        button {
+                            class: "search-clear",
+                            aria_label: "Clear search",
+                            title: "Clear search",
+                            onclick: move |_| { search.set(String::new()); page.set(0); },
+                            Icon { d: CLOSE }
+                        }
                     }
                 }
             }
