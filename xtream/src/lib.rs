@@ -202,6 +202,14 @@ pub struct Category {
     pub category_name: String,
 }
 
+/// Providers can repeat an ID, which denotes the same selectable category. Keep the first
+/// record and its position so category identity remains unique without reordering the provider.
+fn unique_categories(mut categories: Vec<Category>) -> Vec<Category> {
+    let mut seen = std::collections::HashSet::new();
+    categories.retain(|category| seen.insert(category.category_id));
+    categories
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct LiveStream {
     #[serde(deserialize_with = "flex_id")]
@@ -1093,9 +1101,11 @@ impl Client {
 
     pub async fn live_categories(&self) -> Result<Vec<Category>> {
         if let Some(p) = &self.playlist {
-            return Ok(p.categories.clone());
+            return Ok(unique_categories(p.categories.clone()));
         }
-        self.list("get_live_categories", None).await
+        self.list("get_live_categories", None)
+            .await
+            .map(unique_categories)
     }
 
     /// `None` returns every channel, which can be tens of thousands.
@@ -1115,7 +1125,9 @@ impl Client {
         if self.is_playlist() {
             return Ok(vec![]);
         }
-        self.list("get_vod_categories", None).await
+        self.list("get_vod_categories", None)
+            .await
+            .map(unique_categories)
     }
 
     pub async fn vod_streams(&self, category: Option<u64>) -> Result<Vec<VodStream>> {
@@ -1129,7 +1141,9 @@ impl Client {
         if self.is_playlist() {
             return Ok(vec![]);
         }
-        self.list("get_series_categories", None).await
+        self.list("get_series_categories", None)
+            .await
+            .map(unique_categories)
     }
 
     pub async fn series(&self, category: Option<u64>) -> Result<Vec<Series>> {
@@ -1268,6 +1282,26 @@ mod tests {
             1
         );
         assert!(list::<Category>(json!([{"nope": 1}])).is_err());
+    }
+
+    #[test]
+    fn duplicate_categories_keep_the_first_name_and_provider_order() {
+        let categories = list::<Category>(json!([
+            {"category_id": "2", "category_name": "First"},
+            {"category_id": "1", "category_name": "Middle"},
+            {"category_id": 2, "category_name": "Duplicate"},
+            {"category_id": 3, "category_name": "Last"},
+            {"category_id": 1, "category_name": "Other duplicate"}
+        ]))
+        .unwrap();
+        let unique = unique_categories(categories);
+        assert_eq!(
+            unique
+                .iter()
+                .map(|c| (c.category_id, c.category_name.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(2, "First"), (1, "Middle"), (3, "Last")]
+        );
     }
 
     #[test]
