@@ -80,6 +80,9 @@ async fn enqueue(tx: &mpsc::Sender<Bytes>, bytes: Bytes) -> Result<(), ()> {
 }
 /// A playlist this large is not a playlist.
 const PLAYLIST_MAX: usize = 1024 * 1024;
+/// Encrypted segments must be complete before CBC decryption. This generous ceiling allows
+/// large segments while preventing a provider response from growing memory without a bound.
+const ENCRYPTED_SEGMENT_MAX: usize = 64 * 1024 * 1024;
 const READ_IDLE: Duration = Duration::from_secs(10);
 const REQUEST_WAIT: Duration = Duration::from_secs(10);
 /// How long a playlist refresh may take before the link counts as dead.
@@ -766,7 +769,7 @@ async fn follow(
             let mut bytes = 0_u64;
             let mut blocked = Duration::ZERO;
             if let Some(key) = media.key(*seq) {
-                // Encrypted: the whole segment, decrypted, then forwarded (a few MB at most).
+                // Encrypted segments must be collected before decryption and forwarding.
                 let secret = match &secrets {
                     Some((uri, secret)) if *uri == key.uri => *secret,
                     _ => match segment_key(s, &key.uri, ua).await {
@@ -780,10 +783,13 @@ async fn follow(
                         }
                     },
                 };
-                let plain = match timeout(READ_IDLE * 3, response.bytes()).await {
-                    Ok(Ok(body)) => key.decrypt(&secret, *seq, body.to_vec()),
-                    _ => None,
-                };
+                let plain =
+                    match timeout(READ_IDLE * 3, read_bounded(response, ENCRYPTED_SEGMENT_MAX))
+                        .await
+                    {
+                        Ok(Some(body)) => key.decrypt(&secret, *seq, body),
+                        _ => None,
+                    };
                 let Some(plain) = plain else {
                     diagnostics::note(s, &format!("{tag}live segment {seq} couldn't be decrypted"));
                     return (playlist, media, next);
@@ -1039,8 +1045,26 @@ const RESUME_SKIP: u64 = 3;
 /// An AES-128 segment key: exactly 16 bytes from its address.
 async fn segment_key(s: &AppState, uri: &Url, ua: &str) -> Option<[u8; 16]> {
     let response = timeout(REQUEST_WAIT, get(s, uri, ua)).await.ok()?.ok()?;
-    let body = timeout(REQUEST_WAIT, response.bytes()).await.ok()?.ok()?;
-    body.as_ref().try_into().ok()
+    let body = timeout(REQUEST_WAIT, read_bounded(response, 16))
+        .await
+        .ok()??;
+    body.try_into().ok()
+}
+
+/// Collect at most `max` bytes, checking every chunk (including chunked responses without a
+/// Content-Length). The caller controls the total deadline and drops the response on failure.
+async fn read_bounded(mut response: reqwest::Response, max: usize) -> Option<Vec<u8>> {
+    if response.content_length().is_some_and(|n| n > max as u64) {
+        return None;
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.ok()? {
+        if chunk.len() > max.saturating_sub(body.len()) {
+            return None;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Some(body)
 }
 
 /// Where a renewed link continues the stream: its playlist, list and next segment.
@@ -1705,6 +1729,79 @@ mod tests {
             .len();
         buf.truncate(n);
         buf
+    }
+
+    #[tokio::test]
+    async fn bounded_encrypted_reads_reject_chunked_overflow() {
+        struct Chunks(usize);
+        impl futures_core::Stream for Chunks {
+            type Item = std::io::Result<Bytes>;
+            fn poll_next(
+                mut self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Option<Self::Item>> {
+                let chunk = match self.0 {
+                    0 => Some(Bytes::from_static(b"0123456789abcdef")),
+                    1 => Some(Bytes::from_static(b"overflow")),
+                    _ => None,
+                };
+                self.0 += 1;
+                std::task::Poll::Ready(chunk.map(Ok))
+            }
+        }
+        let (base, task) = provider(
+            Router::new().route("/", route_get(|| async { Body::from_stream(Chunks(0)) })),
+        )
+        .await;
+        let state = test_state();
+        assert!(segment_key(&state, &base, "").await.is_none());
+        let response = get(&state, &base, "").await.unwrap();
+        assert!(read_bounded(response, 20).await.is_none());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn bounded_reads_accept_exact_limit_and_reject_declared_overflow() {
+        let (base, task) = provider(
+            Router::new()
+                .route("/exact", route_get(|| async { "0123456789abcdef" }))
+                .route("/large", route_get(|| async { "0123456789abcdef!" })),
+        )
+        .await;
+        let state = test_state();
+        let exact = get(&state, &base.join("exact").unwrap(), "").await.unwrap();
+        assert_eq!(read_bounded(exact, 16).await.unwrap(), b"0123456789abcdef");
+        let large = get(&state, &base.join("large").unwrap(), "").await.unwrap();
+        assert_eq!(large.content_length(), Some(17));
+        assert!(read_bounded(large, 16).await.is_none());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn segment_keys_require_exactly_sixteen_bytes() {
+        let (base, task) = provider(
+            Router::new()
+                .route("/short", route_get(|| async { "0123456789abcde" }))
+                .route("/exact", route_get(|| async { "0123456789abcdef" }))
+                .route("/long", route_get(|| async { "0123456789abcdef!" })),
+        )
+        .await;
+        let state = test_state();
+        assert!(
+            segment_key(&state, &base.join("short").unwrap(), "")
+                .await
+                .is_none()
+        );
+        assert_eq!(
+            segment_key(&state, &base.join("exact").unwrap(), "").await,
+            Some(*b"0123456789abcdef")
+        );
+        assert!(
+            segment_key(&state, &base.join("long").unwrap(), "")
+                .await
+                .is_none()
+        );
+        task.abort();
     }
 
     #[test]
