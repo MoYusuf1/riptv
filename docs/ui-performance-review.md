@@ -158,7 +158,7 @@ Mobile Live navigation was additionally checked at a 320px CSS viewport: categor
 category → channel → moving mock video, then Back removes the video and returns focus to category
 search. All → filtered channel → stream also passes. Returning to another category clears the
 old channel query. Empty category-search recovery clears the query and focuses the visible
-header search, rather than a hidden duplicate filter. Sidebar/page filter IDs remain distinct.
+header search, rather than a hidden duplicate filter. The header search and sidebar filter have distinct IDs; later refinement below removes the duplicated category tree.
 The sort sheet mounts no category list; its A–Z/Z–A controls use the same capsule treatment as
 the section switcher. Desktop browsing retains its sidebar and channel workflow.
 
@@ -179,6 +179,32 @@ passes with `CARGO_INCREMENTAL=0`. Native fixture tests require loopback
 access; the restricted-sandbox attempt fails to bind sockets and the loopback-enabled run passes.
 Real phone touch, keyboard, safe-area and hardware audio checks remain outstanding.
 
+## Follow-up reliability and category work — 2026-10-30
+
+Category sorting now affects the visible category page as well as the channel order. The ordered
+category snapshot is memoized by category data, section and sort; search and pin changes reuse it.
+This adds O(c log c) sorting and O(c) category/key storage per changed snapshot, rather than sorting
+on every keystroke. Pinned categories remain first, ordered within each group.
+
+The sidebar and mobile root now share one `CategoryList` tree. Browser DOM checks show one tree
+at both 320px and 1280px; CSS changes its placement, rather than constructing a hidden second list.
+Empty-filter recovery focuses the visible search field at either breakpoint. Pin actions have
+stable control IDs and restore focus after rows move.
+
+Live fullscreen now belongs to a per-player controller. Toggle, Escape and player disposal cancel
+stale fallback work; delayed tasks hold weak references. Native request Promises remain tracked
+after the fallback deadline, so a cancelled late success exits only its original fullscreen player
+and an old response cannot override a new request. Normal late native entry clears page-fill state.
+Run `cargo test --locked -p riptv --test fullscreen --test catalog` for the targeted regressions.
+Ten dependency-free transition tests cover cancellation, replacement, native changes, fallback,
+late settlement and disposal. The browser is additionally checked for rapid toggles, Escape and
+category Back cleanup; those checks do not certify iOS native fullscreen or simulate every possible
+browser Promise delay. There is no new polling loop.
+
+The MAST audit, implementation and independent review are separate tasks. Review caught the
+late-native-response case after the initial fallback fix; browser interaction caught focus loss
+when a pin moved its row. Checks and targeted regression tests accompany the integrated change.
+
 ## Next priorities
 
 1. Test on real iOS and Android devices: software keyboard, touch scrolling and seeking, safe
@@ -188,6 +214,3 @@ Real phone touch, keyboard, safe-area and hardware audio checks remain outstandi
 3. Exercise encrypted overflow, cancellation and reopening end to end, and validate the segment
    ceiling against representative providers before treating it as a compatibility guarantee.
 4. Measure accumulated progress storage and define retention or cleanup if real usage warrants it.
-5. Cancel the existing delayed fullscreen fallback when native fullscreen is entered and rapidly
-   exited: a rapid exit can leave the page-fill fallback active until Escape. This is distinct
-   from the verified landscape layout and was not changed in this pass.

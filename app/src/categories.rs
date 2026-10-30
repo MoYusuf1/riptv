@@ -12,12 +12,7 @@ pub(crate) const CSS: &str = r#"
 .category-list{display:flex;flex:1;flex-direction:column;min-height:0}.category-list>.category-filter,.category-list>.category-all{flex:none}.category-items{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
 aside.sidebar:has(.category-list){display:flex;flex-direction:column;overflow:hidden}
 @media(max-width:820px){aside.sidebar:has(.category-list){display:none}}
-.category-dialog .sheet-body:has(.category-list){display:flex;flex-direction:column;min-height:0;overflow:hidden}
-.category-dialog .category-list,.sidebar .category-list{min-height:0}
-.category-dialog .category-item .category-pin{position:static;width:2.75rem;min-width:2.75rem;height:2.75rem;opacity:.8}
-.category-dialog .category-item .cat,.category-dialog .cat.category-all{min-height:3.5rem}
-.category-page .category-list{flex:1;min-height:0;width:100%}
-.category-page .category-filter{display:none}
+.sidebar .category-list{min-height:0}
 .category-filter{position:relative;display:flex;align-items:center;height:2.5rem;margin:0 0 .5rem;border:1px solid transparent;border-radius:10px;background:var(--row);transition:border-color .2s,background .2s,box-shadow .2s}
 .category-filter:focus-within{border-color:color-mix(in srgb,var(--accent) 40%,transparent);background:color-mix(in srgb,var(--accent) 4%,var(--row));box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 12%,transparent)}
 .category-filter>svg{position:absolute;left:.75rem;width:.95rem;height:.95rem;color:var(--dim);pointer-events:none}
@@ -49,26 +44,13 @@ pub(crate) fn CategoryList(
     selected: Option<u64>,
     pins: Vec<u64>,
     query: Signal<String>,
-    #[props(default)] in_dialog: bool,
-    #[props(default)] in_page: bool,
     onselect: EventHandler<Option<u64>>,
     onpin: EventHandler<u64>,
 ) -> Element {
     let CategoryData { list } = data;
     let mut query = query;
     let q = query().to_lowercase();
-    let filter_id = if in_page {
-        "category-page-filter"
-    } else if in_dialog {
-        "category-dialog-filter"
-    } else {
-        "category-sidebar-filter"
-    };
-    let focus_id = if in_page {
-        "mobile-catalog-search"
-    } else {
-        filter_id
-    };
+    let filter_id = "category-sidebar-filter";
     let pins: std::collections::HashSet<_> = pins.into_iter().collect();
     let matches =
         |c: &&xtream::Category| q.is_empty() || xtream::contains_lowercase(&c.category_name, &q);
@@ -88,7 +70,8 @@ pub(crate) fn CategoryList(
                 button {
                     aria_label: "Clear category filter", aria_hidden: q.is_empty(),
                     tabindex: if q.is_empty() { -1 } else { 0 }, onclick: move |_| {
-                        crate::controls::focus(focus_id);
+                        crate::controls::focus("mobile-catalog-search");
+                            crate::controls::focus(filter_id);
                         query.set(String::new());
                     },
                     Icon { d: CLOSE }
@@ -100,7 +83,7 @@ pub(crate) fn CategoryList(
                 onclick: move |_| onselect.call(None), span { "All" }
             }
             div { class: "category-items",
-                // Pinned first, preserving provider order within both groups and each row's identity.
+                // Pinned first, preserving the supplied sort order and each row's identity.
                 for c in list.iter().filter(matches).filter(|c| pins.contains(&c.category_id))
                     .chain(list.iter().filter(matches).filter(|c| !pins.contains(&c.category_id))) {
                     CategoryItem { key: "category-{c.category_id}", category: c.clone(),
@@ -110,7 +93,8 @@ pub(crate) fn CategoryList(
                     div { class: "category-note",
                         span { "No categories match ‘{query}’." }
                         button { aria_label: "Clear category filter", onclick: move |_| {
-                            crate::controls::focus(focus_id);
+                            crate::controls::focus("mobile-catalog-search");
+                            crate::controls::focus(filter_id);
                             query.set(String::new());
                         }, "Clear filter" }
                     }
@@ -130,6 +114,13 @@ fn CategoryItem(
 ) -> Element {
     let id = category.category_id;
     let action = if pinned { "Unpin" } else { "Pin" };
+    let mut restore_pin_focus = use_signal(|| false);
+    use_effect(move || {
+        if restore_pin_focus() {
+            crate::controls::focus(&format!("category-pin-{id}"));
+            restore_pin_focus.set(false);
+        }
+    });
     rsx! {
         div { class: format!("category-item{}{}", if selected { " selected" } else { "" }, if pinned { " is-pinned" } else { "" }),
             button {
@@ -139,9 +130,9 @@ fn CategoryItem(
                 span { "{category.category_name}" }
             }
             button {
-                class: if pinned { "category-pin pinned" } else { "category-pin" },
+                id: "category-pin-{id}", class: if pinned { "category-pin pinned" } else { "category-pin" },
                 aria_label: "{action} {category.category_name}", title: "{action} category",
-                aria_pressed: pinned, onclick: move |_| onpin.call(id), Icon { d: PIN }
+                aria_pressed: pinned, onclick: move |_| { restore_pin_focus.set(true); onpin.call(id); }, Icon { d: PIN }
             }
         }
     }

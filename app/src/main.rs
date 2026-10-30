@@ -23,6 +23,8 @@ mod diag;
 mod experimental;
 mod fetch;
 mod frame_stats;
+mod fullscreen;
+mod fullscreen_state;
 mod live;
 mod live_settings;
 mod media_session;
@@ -649,7 +651,6 @@ const HEART: &str =
 const CLOSE: &str = "M6 6l12 12M18 6L6 18";
 const MUSIC: &str =
     "M9 18V5l12-2v13M9 18a3 3 0 11-6 0 3 3 0 016 0zM21 16a3 3 0 11-6 0 3 3 0 016 0z";
-const LIST: &str = "M4 6h16M4 12h16M4 18h10";
 const NEXT: &str = "M6 5l10 7-10 7V5zM19 5v14";
 const EXTERNAL: &str = "M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5";
 const GEAR: &str = "M12 9a3 3 0 100 6 3 3 0 000-6zM19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z";
@@ -884,31 +885,6 @@ fn toggle_mute() -> Option<bool> {
     let v = video_el()?;
     v.set_muted(!v.muted());
     Some(v.muted())
-}
-
-/// Real fullscreen where the browser really does it. Some embedded browsers accept the request and
-/// never act on it (and iOS Safari only fullscreens a bare `<video>`), so if nothing happened a
-/// moment later the player fills the page instead (`expanded`).
-fn toggle_fullscreen(id: &'static str, mut expanded: Signal<bool>) {
-    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
-        return;
-    };
-    if doc.fullscreen_element().is_some() {
-        doc.exit_fullscreen();
-    } else if expanded() {
-        expanded.set(false);
-    } else {
-        if let Some(player) = doc.get_element_by_id(id) {
-            let _ = player.request_fullscreen();
-        }
-        // Not Dioxus's `spawn`: the key listener calls this from outside its runtime.
-        wasm_bindgen_futures::spawn_local(async move {
-            rstreamkit::mse::sleep(Duration::from_millis(600)).await;
-            if doc.fullscreen_element().is_none() {
-                expanded.set(true);
-            }
-        });
-    }
 }
 
 /// Chromium counts the audio bytes it has decoded. Zero after a few seconds of playing, with the
@@ -1474,13 +1450,29 @@ fn Browse() -> Element {
         });
     });
 
-    let cat_list = move |in_dialog: bool, in_page: bool| -> Element {
+    // Categories share one tree across desktop sidebar and mobile root. Sorting does not
+    // depend on the query or pins, so typing and pinning reuse the immutable ordered snapshot.
+    let ordered_categories = use_memo(move || {
+        cats.read()
+            .as_ref()
+            .and_then(|result| result.as_ref().ok())
+            .filter(|(k, _)| *k == kind())
+            .map(|(_, list)| {
+                let mut ordered = list.as_ref().clone();
+                ordered.sort_by_cached_key(|category| category.category_name.to_lowercase());
+                if sort() == Sort::ZA {
+                    ordered.reverse();
+                }
+                Rc::new(ordered)
+            })
+    });
+    let cat_list = move || -> Element {
         match &*cats.read() {
             Some(Err(e)) => rsx! { p { class: "err", "{e}" } },
             Some(Ok((k, list))) if *k == kind() => {
                 rsx! {
                     categories::CategoryList {
-                        data: categories::CategoryData { list: list.clone() }, selected: category(), in_dialog, in_page,
+                        data: categories::CategoryData { list: ordered_categories().unwrap_or_else(|| list.clone()) }, selected: category(),
                         pins: pinned_categories()[kind() as usize].clone(), query: category_search,
                         onselect: select,
                         onpin: move |id| {
@@ -1837,7 +1829,7 @@ fn Browse() -> Element {
                             crate::controls::focus("mobile-catalog-search");
                         }, Icon { d: BACK } }
                     }
-                    h1 { class: "mobile-page-title", if kind() == Kind::Live && !mobile_category_root() { "{category_name}" } else { "{section_name}" } }
+                    h1 { class: "mobile-page-title", if kind() == Kind::Live && !mobile_category_root() { if category().is_none() { "All channels" } else { "{category_name}" } } else { "{section_name}" } }
                 }
                 button { id: "mobile-filter-trigger", class: "mobile-header-filter", aria_label: "Sort", aria_haspopup: "dialog", aria_expanded: cats_open(), aria_controls: "category-dialog", onclick: move |_| cats_open.set(true), Icon { d: SORT } }
                 div { class: "search mobile-search",
@@ -1947,11 +1939,8 @@ fn Browse() -> Element {
             navigation::LibraryNav { kind: kind(), playlist: client.is_playlist(), onpick: pick_kind }
         }
         main { class: if open().is_some() { "workspace detail-open" } else { "workspace" }, inert: playing().is_some().then_some(""),
-            aside { class: "sidebar", {cat_list(false, false)} }
+            aside { class: "sidebar", aria_label: "Categories", {cat_list()} }
             div { class: if kind() == Kind::Live && mobile_category_root() { "content mobile-category-root" } else { "content" },
-                if kind() == Kind::Live {
-                    section { class: "category-page", aria_label: "Live categories", {cat_list(false, true)} }
-                }
                 if three_pane {
                     div { class: if live().is_some() { "live watching" } else { "live" },
                         section { class: "channels",
@@ -1959,7 +1948,7 @@ fn Browse() -> Element {
                                 h1 { title: "{category_name}", "{category_name}" }
                                 div { class: "tools",
                                     {sort_menu()}
-                                    button { id: "category-trigger", class: "cats-btn", aria_label: "Categories", aria_haspopup: "dialog", aria_expanded: cats_open(), aria_controls: "category-dialog", onclick: move |_| cats_open.set(true), Icon { d: LIST } "Categories" }
+                                    button { id: "category-trigger", class: "cats-btn", aria_label: "Sort titles", aria_haspopup: "dialog", aria_expanded: cats_open(), aria_controls: "category-dialog", onclick: move |_| cats_open.set(true), Icon { d: SORT } "Sort" }
                                 }
                             }
                             {body}
@@ -1981,7 +1970,7 @@ fn Browse() -> Element {
                             h1 { title: "{category_name}", "{category_name}" }
                             div { class: "tools",
                                 {sort_menu()}
-                                button { id: "category-trigger", class: "cats-btn", aria_label: "Categories", aria_haspopup: "dialog", aria_expanded: cats_open(), aria_controls: "category-dialog", onclick: move |_| cats_open.set(true), Icon { d: LIST } "Categories" }
+                                button { id: "category-trigger", class: "cats-btn", aria_label: "Sort titles", aria_haspopup: "dialog", aria_expanded: cats_open(), aria_controls: "category-dialog", onclick: move |_| cats_open.set(true), Icon { d: SORT } "Sort" }
                             }
                         }
                         {body}

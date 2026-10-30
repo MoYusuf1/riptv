@@ -160,7 +160,12 @@ pub(crate) fn LivePlayer(
             crate::toggle_play();
         }
     };
-    let mut expanded = use_signal(|| false);
+    let expanded = use_signal(|| false);
+    let fullscreen = use_hook(crate::fullscreen::Controller::default);
+    {
+        let fullscreen = fullscreen.clone();
+        use_drop(move || fullscreen.dispose());
+    }
     // Why there is no sound, when the player knows: its own note, or what the browser reports.
     let mut note = use_signal(|| None::<String>);
     let mut silent = use_signal(|| false);
@@ -816,12 +821,14 @@ pub(crate) fn LivePlayer(
     let keys_for_install = keys.clone();
     let digits_for_keys = digits.clone();
     let epoch_for_keys = dial_epoch.clone();
+    let fullscreen_for_keys = fullscreen.clone();
     use_effect(move || {
         let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
             return;
         };
         let digits = digits_for_keys.clone();
         let epoch = epoch_for_keys.clone();
+        let fullscreen = fullscreen_for_keys.clone();
         let on_key =
             Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
                 if e.default_prevented() {
@@ -897,13 +904,13 @@ pub(crate) fn LivePlayer(
                         epoch.set(epoch.get().wrapping_add(1));
                         channel_action.set(Some(ChannelAction::Down));
                     }
-                    "f" => toggle_fullscreen("live-player", expanded),
+                    "f" => fullscreen.toggle("live-player", expanded),
                     "i" => show_stats.set(!show_stats()),
                     "escape" => {
                         digits.borrow_mut().clear();
                         dial.set(String::new());
                         epoch.set(epoch.get().wrapping_add(1));
-                        expanded.set(false);
+                        fullscreen.exit("live-player", expanded);
                     }
                     "m" => muted.set(toggle_mute().unwrap_or(false)),
                     "enter" => {
@@ -958,6 +965,7 @@ pub(crate) fn LivePlayer(
         }
     });
 
+    let fullscreen_for_picture = fullscreen.clone();
     let class = format!(
         "player{}{}{}{}",
         if paused() { " paused" } else { "" },
@@ -1108,7 +1116,7 @@ pub(crate) fn LivePlayer(
                         }
                     },
                     onclick: move |_| { if settings_open() { settings_open.set(false); } else { toggle_play(); } },
-                    ondoubleclick: move |_| toggle_fullscreen("live-player", expanded),
+                    ondoubleclick: move |_| fullscreen_for_picture.toggle("live-player", expanded),
                 }
                 if show_stats() {
                     crate::stream_info::StreamInfo { readout: stats(), onclose: move |_| {
@@ -1195,7 +1203,7 @@ pub(crate) fn LivePlayer(
                     button { id: "stream-info-toggle", class: "ctl", aria_label: "Stream info", aria_expanded: show_stats(), aria_controls: "stream-info", title: "Stream info (I)", onclick: move |_| { show_stats.set(!show_stats()); settings_open.set(false); }, Icon { d: INFO } }
                     button { id: "live-settings-toggle", class: "ctl settings-toggle", aria_label: "Live playback settings", aria_expanded: settings_open(), aria_controls: "live-settings", title: "Live playback settings", onclick: move |_| { settings_open.set(!settings_open()); show_stats.set(false); }, Icon { d: GEAR } }
                     button { class: "ctl", aria_label: "Picture in picture", title: "Picture in picture", onclick: move |_| toggle_pip(video_el()), Icon { d: PIP } }
-                    button { class: "ctl", aria_label: "Fullscreen", title: "Fullscreen (F)", onclick: move |_| toggle_fullscreen("live-player", expanded), Icon { d: FULLSCREEN } }
+                    button { class: "ctl", aria_label: "Fullscreen", title: "Fullscreen (F)", onclick: move |_| fullscreen.toggle("live-player", expanded), Icon { d: FULLSCREEN } }
                 }
             }
             Guide { key: "{selected_id}", id: selected_id(), playing: picture_ready() && !failed }
