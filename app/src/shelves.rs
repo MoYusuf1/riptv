@@ -102,34 +102,35 @@ fn load(list: &str) -> Rc<Vec<Entry>> {
     })
 }
 
-fn store(list: &str, entries: Vec<Entry>) {
-    if let Some(s) = storage()
-        && let Ok(json) = serde_json::to_string(&entries)
-        && s.set_item(&name(list), &json).is_ok()
-    {
-        CACHE.with(|cache| {
-            cache
-                .borrow_mut()
-                .insert(list.to_owned(), (json, Rc::new(entries)));
-        });
-    }
+fn store(list: &str, entries: Vec<Entry>) -> Result<(), ()> {
+    let s = storage().ok_or(())?;
+    let json = serde_json::to_string(&entries).map_err(|_| ())?;
+    s.set_item(&name(list), &json).map_err(|_| ())?;
+    CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert(list.to_owned(), (json, Rc::new(entries)));
+    });
+    Ok(())
 }
 
 /// Puts `entry` first in `list` (replacing an earlier one of the same title).
-fn promote(list: &str, entry: Entry, keep: usize) {
+fn promote(list: &str, entry: Entry, keep: usize) -> Result<(), ()> {
     let mut all = load(list).as_ref().clone();
     all.retain(|e| !(e.kind == entry.kind && e.id == entry.id));
     all.insert(0, entry);
     all.truncate(keep);
-    store(list, all);
+    store(list, all)
 }
 
-fn remove(list: &str, kind: Title, id: u64) {
+fn remove(list: &str, kind: Title, id: u64) -> Result<(), ()> {
     let mut all = load(list).as_ref().clone();
     let before = all.len();
     all.retain(|e| !(e.kind == kind && e.id == id));
     if all.len() != before {
-        store(list, all);
+        store(list, all)
+    } else {
+        Ok(())
     }
 }
 
@@ -148,13 +149,13 @@ pub fn is_mine(kind: Title, id: u64) -> bool {
 }
 
 /// Saves `entry` to My List, or takes it off if it is there. Returns whether it is now on it.
-pub fn toggle_mine(entry: Entry) -> bool {
+pub fn toggle_mine(entry: Entry) -> Result<bool, ()> {
     if is_mine(entry.kind, entry.id) {
-        remove("list", entry.kind, entry.id);
-        false
+        remove("list", entry.kind, entry.id)?;
+        Ok(false)
     } else {
-        promote("list", entry, LIST);
-        true
+        promote("list", entry, LIST)?;
+        Ok(true)
     }
 }
 
@@ -198,7 +199,7 @@ pub fn save(key: &str, at: f64, total: f64, entry: Option<&Entry>) {
             // earlier episode may still be half watched.)
             let _ = s.remove_item(&progress_key(key));
             if let Some(e) = entry.filter(|e| e.kind == Title::Movie) {
-                remove("recent", e.kind, e.id);
+                let _ = remove("recent", e.kind, e.id);
             }
             return;
         }
@@ -208,7 +209,7 @@ pub fn save(key: &str, at: f64, total: f64, entry: Option<&Entry>) {
         );
     }
     if let Some(e) = entry {
-        promote(
+        let _ = promote(
             "recent",
             Entry {
                 at,
@@ -226,6 +227,6 @@ pub fn finish(key: &str, entry: Option<&Entry>) {
         let _ = s.remove_item(&progress_key(key));
     }
     if let Some(e) = entry {
-        remove("recent", e.kind, e.id);
+        let _ = remove("recent", e.kind, e.id);
     }
 }

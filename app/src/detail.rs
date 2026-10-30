@@ -141,6 +141,7 @@ pub(crate) fn DetailPage(
         let (kind, id) = identity(&row);
         shelves::is_mine(kind, id)
     });
+    let mut list_save_failed = use_signal(|| false);
     let mut backdrop_failed = use_signal(|| false);
     let mut poster_failed = use_signal(|| false);
     let (c, target) = (client.clone(), row.target.clone());
@@ -456,13 +457,20 @@ pub(crate) fn DetailPage(
                             title: if listed() { "Remove from My List" } else { "Add to My List" },
                             aria_label: "My List",
                             aria_pressed: "{listed()}",
-                            onclick: move |_| listed.set(shelves::toggle_mine(for_list.clone())),
+                            aria_describedby: list_save_failed().then_some("list-save-error"),
+                            onclick: move |_| match shelves::toggle_mine(for_list.clone()) {
+                                Ok(saved) => { listed.set(saved); list_save_failed.set(false); }
+                                Err(()) => list_save_failed.set(true),
+                            },
                             Icon { d: HEART }
                         }
                         if let Some(id) = &trailer {
                             a { class: "icon-btn", href: "https://www.youtube.com/watch?v={id}", target: "_blank", rel: "noopener noreferrer", title: "Trailer on YouTube", aria_label: "Trailer on YouTube", Icon { d: EXTERNAL } }
                         }
                         if is_movie && let Some(p) = all.first() { Download { title: p.file.clone(), url: p.url.clone() } }
+                    }
+                    if list_save_failed() {
+                        p { id: "list-save-error", class: "list-save-error", role: "alert", "My List couldn’t be updated. Please try again." }
                     }
                     div { class: "d-meta",
                         if let Some(y) = &details.year { span { "{y}" } }

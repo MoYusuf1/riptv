@@ -227,3 +227,4 @@ a.person:hover { border-color: rgba(168, 199, 250, .3); background: var(--soft);
 .sort-choice.selected { background: #30343c; color: var(--text); }
 .sort-choice:hover { color: var(--text); }
 .mobile-title-row, .mobile-search { display: none; }
+.list-save-error { margin: .75rem 0; color: var(--dim); font-size: .85rem; line-height: 1.4; }

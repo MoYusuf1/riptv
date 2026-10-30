@@ -255,6 +255,22 @@ followed by a read adds none, an external JSON change adds a parse, and a failed
 the cache. Two browser tabs verify that adding and removing My List in one is observed by the
 other on its next render. This establishes operation behavior, not a latency or memory benchmark.
 
+## Failure and cancellation paths — 2026-10-30
+
+My List mutations now return their persistence result. A rejected write leaves the previous
+pressed state intact and exposes a short, associated error message; a successful retry clears
+it. Private recent/progress callers retain their existing behavior and retention policy.
+Seek pointer cancellation clears the draft drag state and restores the actual media position
+(including a converted stream's offset), without committing the preview value.
+
+A temporary local harness loaded the same release app and blocked only shelf writes in its own
+tab. The button stayed off, the associated alert appeared, and a retry after enabling writes
+succeeded and cleared the alert. A separate two-phase synthetic pointer harness showed a 50s
+draft with `dragging` while the paused video remained at 40s; cancellation restored the slider
+to 40s and removed `dragging`, without moving the video. Both harnesses are test-only build
+artifacts excluded from shipping and removed after verification. These checks verify the
+component paths; they do not reproduce actual OS quota exhaustion or physical touch cancellation.
+
 ## Next priorities
 
 1. Test on real iOS and Android devices: software keyboard, touch scrolling and seeking, safe

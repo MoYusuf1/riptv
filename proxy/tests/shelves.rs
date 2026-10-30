@@ -81,7 +81,7 @@ fn successful_own_write_publishes_shared_cache_and_failed_write_does_not() {
     let before_failed_write = shelves::mine();
     let after_failed_list_load = shelves::parse_count();
     FAIL_SET.with(|fail| *fail.borrow_mut() = true);
-    assert!(shelves::toggle_mine(shelves::Entry {
+    let item = shelves::Entry {
         kind: shelves::Title::Movie,
         id: 2,
         title: "Two".into(),
@@ -90,10 +90,19 @@ fn successful_own_write_publishes_shared_cache_and_failed_write_does_not() {
         sub: None,
         at: 0.0,
         total: 0.0,
-    }));
+    };
+    assert_eq!(shelves::toggle_mine(item.clone()), Err(()));
     FAIL_SET.with(|fail| *fail.borrow_mut() = false);
     let after_failed_write = shelves::mine();
     assert_eq!(shelves::parse_count(), after_failed_list_load);
     assert!(Rc::ptr_eq(&before_failed_write, &after_failed_write));
     assert!(after_failed_write.is_empty());
+
+    assert_eq!(shelves::toggle_mine(item.clone()), Ok(true));
+    let after_add = shelves::mine();
+    assert_eq!(after_add.len(), 1);
+    assert_eq!(after_add[0].id, 2);
+    assert!(Rc::ptr_eq(&after_add, &shelves::mine()));
+    assert_eq!(shelves::toggle_mine(item), Ok(false));
+    assert!(shelves::mine().is_empty());
 }

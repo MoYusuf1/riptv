@@ -803,7 +803,21 @@ pub(crate) fn Watch(
                                     blur_watch_seek();
                                 }
                             },
-                            onpointercancel: move |_| let_go(),
+                            onpointercancel: move |_| {
+                                scrubbing.set(false);
+                                seek_pointer_down.set(false);
+                                if let Some(video) = watch_video() {
+                                    let offset = if matches!(engine.peek().as_ref(), Some(Engine::Converted(..))) {
+                                        *start.peek() as f64
+                                    } else {
+                                        0.0
+                                    };
+                                    pos.set(offset + video.current_time());
+                                } else {
+                                    pos.set(*scrub_from.peek());
+                                }
+                                blur_watch_seek();
+                            },
                             onblur: move |_| let_go(),
                         }
                     if scrubbing() {
