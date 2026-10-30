@@ -210,10 +210,10 @@ pub(crate) fn DetailPage(
                         let found = c.performer(&name).await;
                         PORTRAITS.with(|p| {
                             let mut cache = p.borrow_mut();
-                            if cache.len() >= 256 {
-                                if let Some(old) = cache.keys().next().cloned() {
-                                    cache.remove(&old);
-                                }
+                            if cache.len() >= 256
+                                && let Some(old) = cache.keys().next().cloned()
+                            {
+                                cache.remove(&old);
                             }
                             cache.insert(name.clone(), found.clone())
                         });
@@ -353,7 +353,7 @@ pub(crate) fn DetailPage(
                     file: title.clone(),
                     url: url.clone(),
                     duration: runtime,
-                    entry: Some(entry_of(&row, &title, poster.clone(), extension(url), None)),
+                    entry: Some(entry_of(row, &title, poster.clone(), extension(url), None)),
                 }),
                 Target::Series(_) => {
                     for season in seasons.iter() {
@@ -377,7 +377,7 @@ pub(crate) fn DetailPage(
                                 url: client.episode_url(ep.id, ext).to_string(),
                                 duration: ep.info.runtime_secs,
                                 entry: Some(entry_of(
-                                    &row,
+                                    row,
                                     &title,
                                     poster.clone(),
                                     None,

@@ -108,14 +108,13 @@ pub(crate) fn use_preview(id: Option<u64>, anchor: String) -> Preview {
             if let Ok(entries) = &result {
                 let mut cache = cache.borrow_mut();
                 cache.retain(|_, (at, _)| now.saturating_sub(*at) < 60);
-                if cache.len() >= 64 {
-                    if let Some(oldest) = cache
+                if cache.len() >= 64
+                    && let Some(oldest) = cache
                         .iter()
                         .min_by_key(|(_, (at, _))| *at)
                         .map(|(id, _)| *id)
-                    {
-                        cache.remove(&oldest);
-                    }
+                {
+                    cache.remove(&oldest);
                 }
                 cache.insert(id, (now, entries.clone()));
             }

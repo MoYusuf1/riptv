@@ -489,7 +489,7 @@ pub(crate) fn LivePlayer(
     // A readout for telling a slow stream from a slow decoder: what the picture really is,
     // frames per second actually shown, frames dropped, and how much is buffered.
     let mut show_stats = use_signal(|| false);
-    let mut stats = use_signal(String::new);
+    let mut stats = use_signal(crate::stream_info::Readout::default);
     {
         let trace = trace.clone();
         use_effect(move || {
@@ -577,32 +577,24 @@ pub(crate) fn LivePlayer(
             let fps = (frames.saturating_sub(last.0) as f64 * 1000.0 / (now - last.1).max(1.0))
                 .round() as u32;
             last = (frames, now);
-            let buffered = v.buffered();
-            let ahead = buffered
-                .length()
-                .checked_sub(1)
-                .and_then(|i| buffered.end(i).ok())
-                .map_or(0.0, |end| (end - v.current_time()).max(0.0))
-                as u32;
+            let (width, height) = (v.video_width(), v.video_height());
             let source = match feed() {
-                Feed::Pending => "starting compatibility mode",
-                Feed::Direct(_) => "native HLS",
-                Feed::Rust => "Rust player",
-                Feed::Partial => "Rust player, no sound",
-                Feed::Converted(_) => "converted by ffmpeg",
+                Feed::Pending => "Preparing",
+                Feed::Direct(_) => "Browser",
+                Feed::Rust | Feed::Partial => "Experimental",
+                Feed::Converted(_) => "Compatibility mode",
             };
-            let fps = if first {
-                "… fps".to_string()
-            } else {
-                format!("{fps} fps")
+            let next = crate::stream_info::Readout {
+                picture: (width > 0 && height > 0).then_some((width, height)),
+                fps: (!first).then_some(fps),
+                dropped: quality.dropped_video_frames(),
+                buffer_seconds: buffer_ahead(&v).round() as u32,
+                playback: source,
             };
             first = false;
-            stats.set(format!(
-                "{}×{} · {fps} · {} dropped · {ahead}s buffered · {source}",
-                v.video_width(),
-                v.video_height(),
-                quality.dropped_video_frames()
-            ));
+            if *stats.peek() != next {
+                stats.set(next);
+            }
         }
     });
     let watchdog_client = client.clone();
@@ -869,6 +861,12 @@ pub(crate) fn LivePlayer(
                     e.prevent_default();
                     return;
                 }
+                if key == "escape" && *show_stats.peek() {
+                    e.prevent_default();
+                    crate::controls::focus("stream-info-toggle");
+                    show_stats.set(false);
+                    return;
+                }
                 if *settings_open.peek() {
                     if key == "escape" {
                         e.prevent_default();
@@ -1113,7 +1111,10 @@ pub(crate) fn LivePlayer(
                     ondoubleclick: move |_| toggle_fullscreen("live-player", expanded),
                 }
                 if show_stats() {
-                    div { class: "stats", "{stats}" }
+                    crate::stream_info::StreamInfo { readout: stats(), onclose: move |_| {
+                        crate::controls::focus("stream-info-toggle");
+                        show_stats.set(false);
+                    } }
                 }
                 if audio_only() {
                     div { class: if paused() { "radio paused" } else { "radio" },
@@ -1191,8 +1192,8 @@ pub(crate) fn LivePlayer(
                     button { class: "live-pill", title: "Jump to live", onclick: move |_| { go_live(); if paused() { toggle_play(); } }, "LIVE" }
                     if selected_id() != id { span { class: "backup-label", "Backup · {selected_title}" } }
                     span { class: "grow" }
-                    button { class: "ctl", aria_label: "Stream info", title: "Stream info (I)", onclick: move |_| show_stats.set(!show_stats()), Icon { d: INFO } }
-                    button { id: "live-settings-toggle", class: "ctl settings-toggle", aria_label: "Live playback settings", aria_expanded: settings_open(), aria_controls: "live-settings", title: "Live playback settings", onclick: move |_| settings_open.set(!settings_open()), Icon { d: GEAR } }
+                    button { id: "stream-info-toggle", class: "ctl", aria_label: "Stream info", aria_expanded: show_stats(), aria_controls: "stream-info", title: "Stream info (I)", onclick: move |_| { show_stats.set(!show_stats()); settings_open.set(false); }, Icon { d: INFO } }
+                    button { id: "live-settings-toggle", class: "ctl settings-toggle", aria_label: "Live playback settings", aria_expanded: settings_open(), aria_controls: "live-settings", title: "Live playback settings", onclick: move |_| { settings_open.set(!settings_open()); show_stats.set(false); }, Icon { d: GEAR } }
                     button { class: "ctl", aria_label: "Picture in picture", title: "Picture in picture", onclick: move |_| toggle_pip(video_el()), Icon { d: PIP } }
                     button { class: "ctl", aria_label: "Fullscreen", title: "Fullscreen (F)", onclick: move |_| toggle_fullscreen("live-player", expanded), Icon { d: FULLSCREEN } }
                 }

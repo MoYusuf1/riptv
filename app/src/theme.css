@@ -184,3 +184,48 @@ a.person:hover { border-color: rgba(168, 199, 250, .3); background: var(--soft);
 .icon-btn.back, .w-top .icon-btn.back { background: rgba(12, 14, 18, .64); }
 .rail span { font-size: .7rem; }
 @media (max-width: 820px) { .rail span { font-size: .8rem; } }
+
+/* Quiet circular identity matches the rounded account control. */
+.avatar, .who i, .who.solo i, .topbar.detail-mode .who i {
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--c) 18%, var(--panel));
+  color: color-mix(in srgb, var(--c) 36%, var(--text));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 30%, var(--hair));
+}
+.avatar .edit { border-radius: inherit; }
+.profile:hover .avatar, .profile:focus-visible .avatar,
+.who:hover i, .who[aria-expanded=true] i,
+.topbar.detail-mode .who:hover i, .topbar.detail-mode .who[aria-expanded=true] i {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 55%, var(--text));
+}
+.profile:hover .avatar, .profile:focus-visible .avatar { transform: scale(1.025); }
+.avatar.add { background: var(--panel); color: var(--dim); box-shadow: inset 0 0 0 1px var(--hair); }
+
+/* Playback menus share the same readable rows; the toolbar retains its controls. */
+.live-settings .settings-heading, .stream-info .settings-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .8rem; }
+.live-settings .settings-heading h3, .stream-info h3 { margin: 0; color: var(--text); font-size: 1rem; font-weight: 600; letter-spacing: -.015em; text-transform: none; }
+.live-settings .playback-modes { grid-template-columns: 1fr; gap: .4rem; padding: 0; border: 0; background: transparent; }
+.live-settings .playback-modes .mode { display: flex; align-items: center; justify-content: space-between; min-height: 3.75rem; padding: .65rem .8rem; text-align: left; border: 1px solid var(--hair); background: #13161c; box-shadow: none; border-radius: 10px; }
+.playback-modes .mode strong { display: block; color: var(--text); font-size: .9rem; font-weight: 550; }
+.playback-modes .mode small { display: block; margin-top: .2rem; color: var(--dim); font-size: .78rem; font-weight: 400; }
+.live-settings .playback-modes .mode.selected { background: var(--soft); border-color: rgba(168,199,250,.3); box-shadow: none; }
+.mode-check { display: grid; place-items: center; width: 1.25rem; color: var(--accent); }
+.mode-check svg { width: 1.1rem; height: 1.1rem; }
+.stream-info { position: absolute; z-index: 12; top: .8rem; left: .8rem; width: 18rem; max-width: calc(100% - 1.6rem); padding: 1rem; border: 1px solid var(--hair); border-radius: 14px; background: #171b22; box-shadow: 0 14px 36px #0006; text-align: left; }
+.stream-info dl { margin: 0; }
+.stream-info dl > div { display: grid; grid-template-columns: 1fr auto; gap: .8rem; align-items: baseline; padding: .65rem 0; border-top: 1px solid var(--hair); }
+.stream-info dt { color: var(--dim); font-size: .8rem; }
+.stream-info dd { margin: 0; color: var(--text); font-size: .85rem; font-weight: 550; font-variant-numeric: tabular-nums; }
+.load-feedback { display: grid; justify-items: center; gap: .8rem; }
+.load-status { margin: 0; color: var(--dim); font-size: .85rem; font-weight: 450; letter-spacing: 0; }
+@media (max-width: 820px) {
+  .stream-info { position: fixed; inset: auto max(.75rem,env(safe-area-inset-right)) max(.75rem,env(safe-area-inset-bottom)) max(.75rem,env(safe-area-inset-left)); width: auto; max-width: none; max-height: 65dvh; overflow-y: auto; }
+  .stream-info .icon-btn { width: 2.75rem; height: 2.75rem; }
+}
+.mobile-page-label { display: none; }
+.browse-sort { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; color: var(--dim); font-size: .85rem; }
+.mobile-page-title, .mobile-header-filter { display: none; }
+.sort-choices { display: flex; gap: .3rem; padding: .25rem; border: 1px solid var(--hair); border-radius: 12px; background: #141414; }
+.sort-choice { min-width: 4.25rem; min-height: 2.75rem; padding: .5rem .9rem; border-radius: 8px; color: var(--dim); font-size: .85rem; font-weight: 550; }
+.sort-choice.selected { background: #30343c; color: var(--text); }
+.sort-choice:hover { color: var(--text); }

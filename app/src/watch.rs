@@ -101,38 +101,8 @@ pub(crate) fn Watch(
     let mut ahead = use_signal(|| 0.0_f64);
     let mut paused = use_signal(|| false);
     let mut waiting = use_signal(|| true);
-    // How far the current source has got with starting, for the progress ring.
+    // Recovery uses these real media stages to detect an experimental-player stall.
     let mut load_stage = use_signal(|| 0_u8);
-    // How close the title is to playing, as a percentage that only moves forward: deciding how
-    // to play it, the request, then each second buffered (3 s is plenty to start), the first
-    // frame, playing.
-    let mut ready = use_signal(|| 0_u32);
-    // Bumped by every seek: each one is a new wait, measured from zero.
-    let mut seeks = use_signal(|| 0_u32);
-    let ring_from = use_hook(|| Rc::new(Cell::new(u32::MAX)));
-    // A moment after a start, to let the ring land on 100% instead of vanishing short of it.
-    let mut landing = use_signal(|| false);
-    use_effect(move || {
-        let buffered = (ahead() - pos()).max(0.0);
-        let target = match load_stage() {
-            0 => 8,
-            1 => 25,
-            2 => 45 + ((buffered / 3.0).min(1.0) * 45.0) as u32,
-            3 => 92,
-            // Playing already: a wait here is a seek within the same stream or the buffer
-            // running dry; 2 s of picture at the new position is ready to go.
-            _ if waiting() => ((buffered / 2.0).min(1.0) * 95.0) as u32,
-            _ => 100,
-        };
-        // A seek starts the ring again from where that seek's wait stands (from zero); a switch
-        // of player (the experimental one stalling) carries on from where the ring was.
-        let seek = seeks();
-        let now = *ready.peek();
-        if target > now || seek != ring_from.get() {
-            ready.set(target);
-        }
-        ring_from.set(seek);
-    });
     let mut muted = use_signal(move || saved_volume == 0);
     let mut volume = use_signal(move || saved_volume);
     let mut rate = use_signal(move || saved_speed);
@@ -321,7 +291,6 @@ pub(crate) fn Watch(
             t.max(0.0)
         };
         pos.set(t);
-        seeks += 1;
         if matches!(engine.peek().as_ref(), Some(Engine::Converted(..))) {
             // A new stream from `t`: count it up by its own stages, not the old stream's buffer.
             load_stage.set(0);
@@ -501,6 +470,13 @@ pub(crate) fn Watch(
         Some(Engine::Converted(c, _)) => (true, "converted", Some(c.at(start()).to_string())),
         _ => (false, "", None),
     };
+    let load_message = if !engine_now || load_stage() == 0 {
+        "Preparing video…"
+    } else if load_stage() < 2 {
+        "Opening stream…"
+    } else {
+        "Buffering video…"
+    };
     let (p, b) = {
         let t = total().max(1.0);
         // To 0.1% (1.4 px on a 1440 px bar): the bar's style is rewritten only when it would move.
@@ -543,7 +519,10 @@ pub(crate) fn Watch(
                         p { "{why}" }
                     }
                 } else {
-                    div { class: "w-load", LoadRing { stage: 0, percent: Some(8) } }
+                    div { class: "w-load",
+                        LoadRing { stage: 2 }
+                        p { class: "load-status", role: "status", "Preparing video…" }
+                    }
                 }
             } else {
                 video {
@@ -566,19 +545,10 @@ pub(crate) fn Watch(
                     onloadstart: move |_| load_stage.set(1),
                     onloadeddata: move |_| if *load_stage.peek() < 3 { load_stage.set(3) },
                     onplaying: move |_| {
-                        // Whatever the ring was waiting for (a start, a seek, a refill): finish it.
-                        if (*load_stage.peek() < 4 || *waiting.peek()) && *ready.peek() < 100 {
-                            landing.set(true);
-                            spawn(async move {
-                                rstreamkit::mse::sleep(Duration::from_millis(1100)).await;
-                                landing.set(false);
-                            });
-                        }
                         load_stage.set(4);
                         waiting.set(false);
                         paused.set(false);
                     },
-                    oncanplay: move |_| waiting.set(false),
                     onloadedmetadata: move |_| {
                         if *load_stage.peek() < 2 {
                             load_stage.set(2);
@@ -666,14 +636,14 @@ pub(crate) fn Watch(
                         }
                     },
                 }
-                // One ring from the start to the picture: when it's ready the same ring sweeps on to
-                // 100% and fades (a new element would have nothing to animate from).
-                // Until it plays: `canplay` clears `waiting` a moment before `playing`, which would
-                // drop the ring for an instant and bring back a new one. Never while dragging the
-                // seek bar: the wait starts when the drag ends.
-                if !scrubbing() && ((load_stage() < 4 && !paused()) || (waiting() && !paused()) || landing()) {
-                    div { class: if landing() { "hud landing" } else { "hud" },
-                        LoadRing { stage: load_stage(), percent: Some(if landing() { 100 } else { ready() }) }
+                // Keep the indeterminate ring and honest status visible until playback actually
+                // starts, and again whenever the browser reports that it is waiting for data.
+                if !scrubbing() && (load_stage() < 4 || waiting()) && !paused() {
+                    div { class: "hud",
+                        div { class: "load-feedback",
+                            LoadRing { stage: 2 }
+                            p { class: "load-status", role: "status", "{load_message}" }
+                        }
                     }
                 }
                 if paused() && !waiting() && up_next().is_none() {

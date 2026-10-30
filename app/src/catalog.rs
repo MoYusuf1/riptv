@@ -33,6 +33,56 @@ pub(crate) fn page(order: &[u32], skip: usize, size: usize) -> &[u32] {
     &remaining[..remaining.len().min(size)]
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NavigationAction {
+    Previous,
+    Next,
+    Number(usize),
+}
+
+/// Resolve a channel action in an already filtered order. The result contains the item's
+/// zero-based position in that order and its index into the original catalog.
+pub(crate) fn navigate(
+    filtered: &[u32],
+    current_id: u64,
+    action: NavigationAction,
+    id: impl Fn(u32) -> Option<u64>,
+) -> Option<(usize, u32)> {
+    if let NavigationAction::Number(number) = action {
+        return number.checked_sub(1).and_then(|position| {
+            filtered
+                .get(position)
+                .copied()
+                .map(|index| (position, index))
+        });
+    }
+
+    let mut first = None;
+    let mut last = None;
+    let mut previous = None;
+    let mut next = None;
+    let mut found_current = false;
+    for (position, &index) in filtered.iter().enumerate() {
+        let item = (position, index);
+        if first.is_none() {
+            first = Some(item);
+        }
+        if found_current && next.is_none() {
+            next = Some(item);
+        }
+        if id(index)? == current_id {
+            found_current = true;
+            previous = last;
+        }
+        last = Some(item);
+    }
+    match action {
+        NavigationAction::Previous => previous.or(last),
+        NavigationAction::Next => next.or(first),
+        NavigationAction::Number(_) => unreachable!("number action returned above"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

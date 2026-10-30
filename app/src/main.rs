@@ -36,6 +36,7 @@ mod recovery;
 mod shelves;
 mod snapshot;
 mod standard;
+mod stream_info;
 mod timeline;
 mod updates;
 mod watch;
@@ -314,14 +315,14 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 .stage-empty{display:grid;flex:1;place-content:center;justify-items:center;gap:.8rem;color:var(--dim)}
 .stage-empty svg{width:3.4rem;height:3.4rem;opacity:.55}
 .live-stage{display:flex;flex-direction:column;height:100%;min-height:0}
-.live-stage>.player{flex:1;margin-bottom:.7rem}
-.live-stage:has(>.guide)>.player{flex:0 1 auto;aspect-ratio:16/9;margin-bottom:0}
+.live-stage>.player{flex:0 1 auto;aspect-ratio:16/9;margin-bottom:0}
+@media(min-width:821px){.live-stage:not(:has(>.guide))::after{content:"";flex:1;min-height:clamp(11rem,25vh,20rem)}}
 .live-stage>.guide{flex:1;min-height:clamp(11rem,25vh,20rem)}
-.live-stage>.guide.guide-note{flex:none;min-height:0;max-height:none}
+.live-stage>.guide.guide-note{max-height:none}
 .player{position:relative;min-height:0;margin:.7rem .7rem 0;overflow:hidden;border-radius:16px;background:#000;outline:0}
 .player:fullscreen,.player.fill{margin:0;border-radius:0}
 .player.fill{position:fixed;z-index:60;inset:0}
-.live-stage:has(>.guide)>.player:fullscreen,.live-stage:has(>.guide)>.player.fill{aspect-ratio:auto;margin:0}
+.live-stage>.player:fullscreen,.live-stage>.player.fill{aspect-ratio:auto;margin:0}
 .player:not(.active):not(.paused){cursor:none}
 .player video{width:100%;height:100%;object-fit:contain;opacity:0;transition:opacity .45s var(--ease)}
 .player.showing video{opacity:1}
@@ -365,7 +366,6 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 .option-remove svg{width:1rem;height:1rem}
 .option-remove:hover,.option-remove:focus-visible{background:var(--soft);color:var(--accent)}
 .option-remove:focus-visible,.settings-toggle:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.stats{position:absolute;top:.8rem;left:.8rem;padding:.3rem .7rem;border-radius:8px;background:rgba(0,0,0,.66);color:#fff;font:600 .72rem ui-monospace,monospace;backdrop-filter:blur(8px)}
 .channel-dial{position:absolute;top:1rem;right:1rem;min-width:3rem;padding:.45rem .75rem;border-radius:12px;background:rgba(0,0,0,.6);color:#fff;text-align:center;font-weight:700;font-variant-numeric:tabular-nums;backdrop-filter:blur(14px)}
 .hud{position:absolute;inset:0;display:grid;place-items:center;color:#fff;pointer-events:none;animation:fade .3s var(--ease)}
 .hud.fail{align-content:center;gap:.9rem;padding:2rem;text-align:center;pointer-events:auto;background:rgba(0,0,0,.35)}
@@ -380,18 +380,6 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 @starting-style{.ring-fill{stroke-dashoffset:138.23}}
 .loader-logo{width:54%;height:54%;object-fit:contain;animation:breathe 2.4s ease-in-out infinite}
 .loader-dot{width:.5rem;height:.5rem;border-radius:50%;background:#fff;animation:breathe 1.6s ease-in-out infinite}
-@property --p{syntax:'<integer>';inherits:true;initial-value:0}
-.loader.pct{transition:--p .9s var(--ease)}
-.loader.pct svg{animation-duration:3.2s}
-.loader.pct .ring-fill{stroke-dashoffset:calc(138.23 * (100 - var(--p)) / 100);transition:none}
-.loader-pct{display:flex;align-items:baseline;color:#fff;font-size:1.05rem;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
-.loader-pct::before{counter-reset:p var(--p);content:counter(p)}
-.loader-pct small{margin-left:.05em;font-size:.6em;font-weight:500;opacity:.55}
-/* A percentage grows from twelve o'clock and holds still; only the logo ring turns. */
-.loader.pct svg{animation:none;transform:rotate(-90deg)}
-.hud.landing{animation:landing 1.1s var(--ease) forwards;pointer-events:none}
-.hud.landing .loader.pct{transition-duration:.55s}
-@keyframes landing{0%,55%{opacity:1;transform:none}100%{opacity:0;transform:scale(1.08)}}
 @keyframes breathe{50%{opacity:.55;transform:scale(.92)}}
 .spinner{width:2.6rem;height:2.6rem;border:2.5px solid rgba(255,255,255,.18);border-top-color:#fff;border-radius:50%;animation:spin .9s linear infinite}
 @keyframes spin{to{transform:rotate(1turn)}}
@@ -553,8 +541,7 @@ body{font-size:.875rem}
 .row strong{font-weight:600}
 .d-sec h2{font-size:1.35rem;font-weight:700}
 .topbar.detail-mode .who{padding:.25rem}
-/* The account button wears the profile's own avatar: its colour as a gradient, a fine bright
-   edge, an accent ring while hovered or open; on a title's page, the size of the back button. */
+/* Profile identity sizing; the shared theme owns its colour and surface. */
 .who{gap:.6rem;height:2.7rem;padding:0 1rem 0 .32rem;border:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.05);font-size:.9rem;font-weight:600;transition:background .2s var(--ease)}
 .who:hover,.who[aria-expanded=true]{background:rgba(255,255,255,.1)}
 .who i{width:2.05rem;height:2.05rem;background:linear-gradient(150deg,color-mix(in srgb,var(--c) 82%,#fff),color-mix(in srgb,var(--c) 70%,#000));box-shadow:inset 0 0 0 1px rgba(255,255,255,.22),0 4px 12px color-mix(in srgb,var(--c) 35%,transparent);font-size:.9rem;transition:box-shadow .2s var(--ease)}
@@ -1110,11 +1097,10 @@ enum Items {
 }
 
 /// Everything the provider lists for one section, loaded once. Categories are filtered
-/// client-side, so switching category is instant and the sidebar can show counts.
+/// client-side, so switching category needs no additional provider request.
 struct Library {
     kind: Kind,
     items: Items,
-    counts: HashMap<u64, usize>,
     orders: catalog::OrderCache,
 }
 
@@ -1148,14 +1134,6 @@ impl Library {
     }
 }
 
-fn count<T>(list: &[T], category: impl Fn(&T) -> Option<u64>) -> HashMap<u64, usize> {
-    let mut counts = HashMap::new();
-    for id in list.iter().filter_map(category) {
-        *counts.entry(id).or_default() += 1;
-    }
-    counts
-}
-
 /// A section's data kept after it loads (see `Browse`), shared rather than copied.
 #[derive(Default)]
 struct Loaded {
@@ -1169,170 +1147,96 @@ async fn load(c: &Client, kind: Kind) -> xtream::Result<Library> {
         Kind::Movies => Items::Movies(c.vod_streams(None).await?),
         Kind::Series => Items::Series(c.series(None).await?),
     };
-    let counts = match &items {
-        Items::Live(v) => count(v, |s| s.category_id),
-        Items::Movies(v) => count(v, |s| s.category_id),
-        Items::Series(v) => count(v, |s| s.category_id),
-    };
     Ok(Library {
         kind,
         items,
-        counts,
         orders: Default::default(),
     })
 }
 
-/// One page of rows: of the items in `cat` (all if `None`) whose title contains `q` (lowercase),
-/// `limit` of them after the first `skip`, plus how many matched in all. Only the rows on the page
-/// are built (that includes making a stream URL), so a 30,000-title library stays cheap on every
-/// keystroke in the search box and every turn of the page.
+/// Build only the requested page from the already filtered, memoized index order.
 fn rows(
     lib: &Library,
     order: &[u32],
     c: &Client,
-    cat: Option<u64>,
-    q: &str,
     (skip, limit): (usize, usize),
 ) -> (Vec<Row>, usize) {
     fn take<T>(
         (list, order): (&[T], &[u32]),
-        (cat, q, (skip, limit), total_hint): (Option<u64>, &str, (usize, usize), Option<usize>),
-        info: impl Fn(&T) -> (&str, Option<u64>),
+        (skip, limit): (usize, usize),
         row: impl Fn(&T) -> Row,
     ) -> (Vec<Row>, usize) {
-        if cat.is_none() && q.is_empty() {
-            let shown = catalog::page(order, skip, limit)
-                .iter()
-                .map(|&i| row(&list[i as usize]))
-                .collect();
-            return (shown, order.len());
-        }
-        let mut hits = order.iter().map(|&i| &list[i as usize]).filter(|t| {
-            let (title, category) = info(t);
-            (cat.is_none() || category == cat) && xtream::contains_lowercase(title, q)
-        });
-        let skipped = hits.by_ref().take(skip).count();
-        let shown: Vec<Row> = hits.by_ref().take(limit).map(&row).collect();
-        let total = total_hint.unwrap_or_else(|| skipped + shown.len() + hits.count());
-        (shown, total)
+        let shown = catalog::page(order, skip, limit)
+            .iter()
+            .map(|&i| row(&list[i as usize]))
+            .collect();
+        (shown, order.len())
     }
-    // Category totals are already counted on load. Avoid scanning thousands of remaining items
-    // every render when the viewer isn't searching.
-    let total_hint = q
-        .is_empty()
-        .then(|| cat.map_or(lib.len(), |id| lib.counts.get(&id).copied().unwrap_or(0)));
-    let filter = (cat, q, (skip, limit), total_hint);
     match &lib.items {
-        Items::Live(v) => take(
-            (v, order),
-            filter,
-            |s| (&s.name, s.category_id),
-            |s| Row {
+        Items::Live(v) => take((v, order), (skip, limit), |s| Row {
+            key: s.stream_id,
+            title: s.name.clone(),
+            icon: s.stream_icon.clone(),
+            category: s.category_id,
+            score: None,
+            target: Target::Live {
+                id: s.stream_id,
+                url: c.live_url(s.stream_id, "m3u8").to_string(),
+            },
+        }),
+        Items::Movies(v) => take((v, order), (skip, limit), |s| {
+            let ext = s
+                .container_extension
+                .as_deref()
+                .filter(|e| !e.is_empty())
+                .unwrap_or("mp4");
+            Row {
                 key: s.stream_id,
-                title: s.name.clone(),
+                title: xtream::display_title(&s.name).to_owned(),
                 icon: s.stream_icon.clone(),
                 category: s.category_id,
-                score: None,
-                target: Target::Live {
-                    id: s.stream_id,
-                    url: c.live_url(s.stream_id, "m3u8").to_string(),
-                },
-            },
-        ),
-        Items::Movies(v) => take(
-            (v, order),
-            filter,
-            |s| (&s.name, s.category_id),
-            |s| {
-                let ext = s
-                    .container_extension
-                    .as_deref()
-                    .filter(|e| !e.is_empty())
-                    .unwrap_or("mp4");
-                Row {
-                    key: s.stream_id,
-                    title: xtream::display_title(&s.name).to_owned(),
-                    icon: s.stream_icon.clone(),
-                    category: s.category_id,
-                    score: score(&s.rating),
-                    target: Target::Movie {
-                        id: s.stream_id,
-                        url: c.movie_url(s.stream_id, ext).to_string(),
-                    },
-                }
-            },
-        ),
-        Items::Series(v) => take(
-            (v, order),
-            filter,
-            |s| (&s.name, s.category_id),
-            |s| Row {
-                key: s.series_id,
-                title: xtream::display_title(&s.name).to_owned(),
-                icon: s.cover.clone(),
-                category: s.category_id,
                 score: score(&s.rating),
-                target: Target::Series(s.series_id),
-            },
-        ),
+                target: Target::Movie {
+                    id: s.stream_id,
+                    url: c.movie_url(s.stream_id, ext).to_string(),
+                },
+            }
+        }),
+        Items::Series(v) => take((v, order), (skip, limit), |s| Row {
+            key: s.series_id,
+            title: xtream::display_title(&s.name).to_owned(),
+            icon: s.cover.clone(),
+            category: s.category_id,
+            score: score(&s.rating),
+            target: Target::Series(s.series_id),
+        }),
     }
 }
 
-/// Resolve a channel button or number against the same filtered order shown in the list.
-/// This scans the existing index, without building another playlist-sized allocation.
+/// Resolve against the memoized filtered order already displayed in the channel list.
 fn channel_target<'a>(
     lib: &'a Library,
-    order: &[u32],
-    category: Option<u64>,
-    query: &str,
+    filtered: &[u32],
     current: u64,
     action: ChannelAction,
 ) -> Option<(usize, &'a LiveStream)> {
     let Items::Live(streams) = &lib.items else {
         return None;
     };
-    let mut first = None;
-    let mut last = None;
-    let mut previous = None;
-    let mut next = None;
-    let mut found_current = false;
-    let mut position = 0;
-    for &index in order {
-        let stream = streams.get(index as usize)?;
-        if category.is_some_and(|id| stream.category_id != Some(id))
-            || !xtream::contains_lowercase(&stream.name, query)
-        {
-            continue;
-        }
-        let item = (position, stream);
-        if first.is_none() {
-            first = Some(item);
-        }
-        if let ChannelAction::Number(number) = action
-            && number == position + 1
-        {
-            return Some(item);
-        }
-        if found_current && next.is_none() {
-            next = Some(item);
-        }
-        if stream.stream_id == current {
-            found_current = true;
-            previous = last;
-        }
-        last = Some(item);
-        position += 1;
-    }
-    match action {
-        ChannelAction::Up => previous.or(last),
-        ChannelAction::Down => next.or(first),
-        ChannelAction::Number(_) => None,
-    }
+    let action = match action {
+        ChannelAction::Up => catalog::NavigationAction::Previous,
+        ChannelAction::Down => catalog::NavigationAction::Next,
+        ChannelAction::Number(n) => catalog::NavigationAction::Number(n),
+    };
+    let (position, index) = catalog::navigate(filtered, current, action, |index| {
+        streams.get(index as usize).map(|stream| stream.stream_id)
+    })?;
+    Some((position, streams.get(index as usize)?))
 }
 
 #[component]
 fn Browse() -> Element {
-    use_context_provider(|| channel_preview::Cache::default());
+    use_context_provider(channel_preview::Cache::default);
     let mut session = use_context::<Signal<Option<Client>>>();
     let playlist = use_context::<Signal<String>>();
     let mut rust_sound = use_context::<Signal<bool>>();
@@ -1376,12 +1280,27 @@ fn Browse() -> Element {
     let mut sort = use_signal(|| Sort::restored(Kind::Live, remembered.sorts[0]));
     let mut sort_open = use_signal(|| false);
     let mut account_open = use_signal(|| false);
+    let account_dismissal = use_hook(|| Rc::new(RefCell::new(None::<controls::OutsideClick>)));
+    {
+        let listener = account_dismissal.clone();
+        use_effect(move || {
+            listener.borrow_mut().take();
+            if account_open() {
+                *listener.borrow_mut() =
+                    controls::OutsideClick::new(".account", move || account_open.set(false));
+            }
+        });
+        use_drop(move || {
+            account_dismissal.borrow_mut().take();
+        });
+    }
     let mut cats_open = use_signal(|| false);
     let categories_were_open = use_hook(|| Rc::new(Cell::new(false)));
     use_effect(move || {
         let open = cats_open();
         if categories_were_open.replace(open) && !open {
             // Selecting a category can replace the grid with the live list and its trigger.
+            controls::focus("mobile-filter-trigger");
             controls::focus("category-trigger");
         }
     });
@@ -1555,14 +1474,9 @@ fn Browse() -> Element {
         match &*cats.read() {
             Some(Err(e)) => rsx! { p { class: "err", "{e}" } },
             Some(Ok((k, list))) if *k == kind() => {
-                let lib = library.read();
-                let lib = lib
-                    .as_ref()
-                    .and_then(|r| r.as_ref().ok())
-                    .filter(|l| l.kind == kind());
                 rsx! {
                     categories::CategoryList {
-                        data: categories::CategoryData { list: list.clone(), library: lib.cloned() }, selected: category(), in_dialog,
+                        data: categories::CategoryData { list: list.clone() }, selected: category(), in_dialog,
                         pins: pinned_categories()[kind() as usize].clone(), query: category_search,
                         onselect: select,
                         onpin: move |id| {
@@ -1607,12 +1521,12 @@ fn Browse() -> Element {
             let order = order.as_deref().map(|o| o.as_slice()).unwrap_or(&[]);
             let size = if three_pane { PAGE_LIST } else { PAGE_GRID };
             let q = search().to_lowercase();
-            let (mut shown, total) = rows(lib, order, &client, None, "", (page() * size, size));
+            let (mut shown, total) = rows(lib, order, &client, (page() * size, size));
             let pages = total.div_ceil(size).max(1);
             let now = page().min(pages - 1);
             // A refresh can leave the page asked for past the end: show the last one instead.
             if now != page() {
-                shown = rows(lib, order, &client, None, "", (now * size, size)).0;
+                shown = rows(lib, order, &client, (now * size, size)).0;
             }
             let list = if shown.is_empty() {
                 let filtered = !q.is_empty() || category().is_some();
@@ -1765,11 +1679,11 @@ fn Browse() -> Element {
                     queue.set(None);
                 },
                 onnext: move |_| {
-                    if let Some((all, at)) = queue() {
-                        if let Some(next) = all.get(at).cloned() {
-                            playing.set(Some(next));
-                            queue.set(Some((all, at + 1)));
-                        }
+                    if let Some((all, at)) = queue()
+                        && let Some(next) = all.get(at).cloned()
+                    {
+                        playing.set(Some(next));
+                        queue.set(Some((all, at + 1)));
                     }
                 },
             }
@@ -1791,12 +1705,12 @@ fn Browse() -> Element {
                 onchannel: move |action| {
                     let selected = {
                         let library = library.read();
-                        let order = order.read();
+                        let filtered = matches.read();
                         library.as_ref()
                             .and_then(|r| r.as_ref().ok())
-                            .zip(order.as_deref().map(|o| o.as_slice()))
-                            .and_then(|(lib, order)| channel_target(
-                                lib, order, category(), &search().to_lowercase(), id, action,
+                            .zip(filtered.as_deref().map(|o| o.as_slice()))
+                            .and_then(|(lib, filtered)| channel_target(
+                                lib, filtered, id, action,
                             ))
                             .map(|(position, stream)| (
                                 position,
@@ -1832,10 +1746,24 @@ fn Browse() -> Element {
                 onclick: move |_| dismiss_categories(),
                 div { class: "sheet cats", onclick: move |e| e.stop_propagation(),
                     div { class: "bar",
-                        strong { id: "category-heading", "Categories" }
+                        strong { id: "category-heading", "Filter and sort" }
                         button { class: "icon-btn", aria_label: "Close", onclick: move |_| dismiss_categories(), Icon { d: CLOSE } }
                     }
-                    div { class: "sheet-body", {cat_list(true)} }
+                    div { class: "sheet-body",
+                        div { class: "browse-sort",
+                            span { "Sort by" }
+                            div { class: "sort-choices", role: "group", aria_label: "Sort titles",
+                                for option in Sort::options(kind()).iter().copied() {
+                                    button { class: if option == sort() { "sort-choice selected" } else { "sort-choice" }, aria_label: "{option.label()}", aria_pressed: option == sort(), onclick: move |_| {
+                                        sort.set(option);
+                                        preferences::update(|p| p.sorts[kind() as usize] = option.saved());
+                                        page.set(0);
+                                    }, if option == Sort::AZ { "A–Z" } else { "Z–A" } }
+                                }
+                            }
+                        }
+                        {cat_list(true)}
+                    }
                 }
             }
         }
@@ -1899,6 +1827,8 @@ fn Browse() -> Element {
         header { class: if open().is_some() { "topbar detail-mode" } else { "topbar" }, inert: playing().is_some().then_some(""),
             if open().is_none() {
                 span { class: "brand", title: "Rust", RustMark {} }
+                h1 { class: "mobile-page-title", "{section_name}" }
+                button { id: "mobile-filter-trigger", class: "mobile-header-filter", aria_label: "Filter and sort", aria_haspopup: "dialog", aria_expanded: cats_open(), aria_controls: "category-dialog", onclick: move |_| cats_open.set(true), Icon { d: SORT } }
                 div { class: "search",
                     Icon { d: SEARCH }
                     input {
@@ -1999,7 +1929,7 @@ fn Browse() -> Element {
                                 h1 { title: "{category_name}", "{category_name}" }
                                 div { class: "tools",
                                     {sort_menu()}
-                                    button { id: "category-trigger", class: "cats-btn", aria_haspopup: "dialog", aria_expanded: cats_open(), aria_controls: "category-dialog", onclick: move |_| cats_open.set(true), Icon { d: LIST } "Categories" }
+                                    button { id: "category-trigger", class: "cats-btn", aria_label: "Categories", aria_haspopup: "dialog", aria_expanded: cats_open(), aria_controls: "category-dialog", onclick: move |_| cats_open.set(true), Icon { d: LIST } "Categories" }
                                 }
                             }
                             {body}
@@ -2021,7 +1951,7 @@ fn Browse() -> Element {
                             h1 { title: "{category_name}", "{category_name}" }
                             div { class: "tools",
                                 {sort_menu()}
-                                button { id: "category-trigger", class: "cats-btn", aria_haspopup: "dialog", aria_expanded: cats_open(), aria_controls: "category-dialog", onclick: move |_| cats_open.set(true), Icon { d: LIST } "Categories" }
+                                button { id: "category-trigger", class: "cats-btn", aria_label: "Categories", aria_haspopup: "dialog", aria_expanded: cats_open(), aria_controls: "category-dialog", onclick: move |_| cats_open.set(true), Icon { d: LIST } "Categories" }
                             }
                         }
                         {body}
@@ -2087,6 +2017,7 @@ fn Pager(
         nav { class: "pager", aria_label: "Pages",
             span { class: "range", "{thousands(first)}–{thousands(last)} of {thousands(total)}" }
             div { class: "pages",
+                span { class: "mobile-page-label", "Page {thousands(page + 1)} of {thousands(pages)}" }
                 button { class: "step", disabled: page == 0, aria_label: "Previous page", title: "Previous page",
                     onclick: move |_| onpage.call(page.saturating_sub(1)), Icon { d: BACK } }
                 for slot in page_window(page, pages) {

@@ -4,11 +4,18 @@ use super::*;
 pub(crate) const CSS: &str = r#"
 .category-item{position:relative;display:flex;align-items:center;border-radius:10px}.category-item:hover{background:var(--row)}.category-item.selected{background:var(--soft)}
 .category-item.is-pinned:not(.selected){background:color-mix(in srgb,var(--accent) 5%,transparent)}
-.category-item .cat{flex:1;min-width:0;padding-left:2.1rem}.category-item .cat:hover,.category-item .cat.on{background:transparent}
-.category-pin{position:absolute;left:.3rem;display:grid;place-items:center;width:1.5rem;height:1.6rem;border-radius:7px;color:var(--dim);opacity:0;transition:opacity .15s,background .15s}
-.category-pin svg{width:.9rem;height:.9rem}.category-pin:hover{background:rgba(255,255,255,.08);color:var(--text)}
+.category-item{min-height:3.5rem;gap:.2rem}.category-item .cat{flex:1;min-width:0;min-height:3.5rem;padding:.55rem .35rem .55rem .7rem;text-align:left}.category-item .cat span{display:-webkit-box;overflow:hidden;white-space:normal;overflow-wrap:anywhere;-webkit-box-orient:vertical;-webkit-line-clamp:2}.category-item .cat:hover,.category-item .cat.on{background:transparent}
+.category-pin{position:static;display:grid;place-items:center;flex:none;width:2.75rem;height:2.75rem;border-radius:9px;color:var(--dim);opacity:.6;transition:opacity .15s,background .15s}
+.category-pin svg{width:1.2rem;height:1.2rem}.category-pin:hover{background:rgba(255,255,255,.08);color:var(--text)}
 .category-pin.pinned{color:var(--accent);opacity:1}.category-item:hover .category-pin,.category-item:focus-within .category-pin{opacity:1}
-.category-all{padding-left:2.1rem}.category-note{display:grid;gap:.55rem;padding:.75rem .7rem;color:var(--dim);font-size:.8rem}
+.category-all{min-height:3.5rem;padding-left:.7rem}.category-note{display:grid;gap:.55rem;padding:.75rem .7rem;color:var(--dim);font-size:.8rem}
+.category-list{display:flex;flex:1;flex-direction:column;min-height:0}.category-list>.category-filter,.category-list>.category-all{flex:none}.category-items{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+aside.sidebar:has(.category-list){display:flex;flex-direction:column;overflow:hidden}
+@media(max-width:820px){aside.sidebar:has(.category-list){display:none}}
+.category-dialog .sheet-body:has(.category-list){display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.category-dialog .category-list,.sidebar .category-list{min-height:0}
+.category-dialog .category-item .category-pin{position:static;width:2.75rem;min-width:2.75rem;height:2.75rem;opacity:.8}
+.category-dialog .category-item .cat,.category-dialog .cat.category-all{min-height:3.5rem}
 .category-filter{position:relative;display:flex;align-items:center;height:2.5rem;margin:0 0 .5rem;border:1px solid transparent;border-radius:10px;background:var(--row);transition:border-color .2s,background .2s,box-shadow .2s}
 .category-filter:focus-within{border-color:color-mix(in srgb,var(--accent) 40%,transparent);background:color-mix(in srgb,var(--accent) 4%,var(--row));box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 12%,transparent)}
 .category-filter>svg{position:absolute;left:.75rem;width:.95rem;height:.95rem;color:var(--dim);pointer-events:none}
@@ -19,24 +26,18 @@ pub(crate) const CSS: &str = r#"
 .category-filter button[aria-hidden="true"]{visibility:hidden;pointer-events:none}
 .category-note button{justify-self:start;padding:.38rem .65rem;border-radius:8px;background:var(--soft);color:var(--text);font-size:.78rem;font-weight:600}
 .category-note button:hover{background:color-mix(in srgb,var(--accent) 16%,var(--soft))}
-@media(hover:none){.category-pin{opacity:1}}
+@media(hover:none){.category-pin{opacity:.8}}
 "#;
 
 /// Compare immutable catalogue snapshots by identity, not by walking thousands of titles.
 #[derive(Clone)]
 pub(crate) struct CategoryData {
     pub list: Rc<Vec<xtream::Category>>,
-    pub library: Option<Rc<Library>>,
 }
 
 impl PartialEq for CategoryData {
     fn eq(&self, other: &Self) -> bool {
         Rc::ptr_eq(&self.list, &other.list)
-            && match (&self.library, &other.library) {
-                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
-                (None, None) => true,
-                _ => false,
-            }
     }
 }
 
@@ -50,7 +51,7 @@ pub(crate) fn CategoryList(
     onselect: EventHandler<Option<u64>>,
     onpin: EventHandler<u64>,
 ) -> Element {
-    let CategoryData { list, library } = data;
+    let CategoryData { list } = data;
     let mut query = query;
     let q = query().to_lowercase();
     let filter_id = if in_dialog {
@@ -65,49 +66,45 @@ pub(crate) fn CategoryList(
         || list
             .iter()
             .any(|c| xtream::contains_lowercase(&c.category_name, &q));
-    let count = |id: u64| {
-        library
-            .as_ref()
-            .and_then(|l| l.counts.get(&id))
-            .copied()
-            .unwrap_or(0)
-    };
-    let total = library.as_ref().map_or(0, |l| l.len());
     rsx! {
-        div { class: "category-filter",
-            Icon { d: SEARCH }
-            input {
-                id: "{filter_id}",
-                aria_label: "Filter categories", placeholder: "Filter categories",
-                value: "{query}", oninput: move |e| query.set(e.value())
+        div { class: "category-list",
+            div { class: "category-filter",
+                Icon { d: SEARCH }
+                input {
+                    id: "{filter_id}",
+                    aria_label: "Filter categories", placeholder: "Filter categories",
+                    value: "{query}", oninput: move |e| query.set(e.value())
+                }
+                button {
+                    aria_label: "Clear category filter", aria_hidden: q.is_empty(),
+                    tabindex: if q.is_empty() { -1 } else { 0 }, onclick: move |_| {
+                        crate::controls::focus(filter_id);
+                        query.set(String::new());
+                    },
+                    Icon { d: CLOSE }
+                }
             }
             button {
-                aria_label: "Clear category filter", aria_hidden: q.is_empty(),
-                tabindex: if q.is_empty() { -1 } else { 0 }, onclick: move |_| {
-                    crate::controls::focus(filter_id);
-                    query.set(String::new());
-                },
-                Icon { d: CLOSE }
+                class: if selected.is_none() { "cat category-all on" } else { "cat category-all" },
+                aria_pressed: selected.is_none(),
+                onclick: move |_| onselect.call(None), span { "All" }
             }
-        }
-        button {
-            class: if selected.is_none() { "cat category-all on" } else { "cat category-all" },
-            aria_pressed: selected.is_none(),
-            onclick: move |_| onselect.call(None), span { "All" } small { "{thousands(total)}" }
-        }
-        // Pinned first, preserving provider order within both groups and each row's identity.
-        for c in list.iter().filter(matches).filter(|c| pins.contains(&c.category_id))
-            .chain(list.iter().filter(matches).filter(|c| !pins.contains(&c.category_id))) {
-            CategoryItem { key: "category-{c.category_id}", category: c.clone(), count: count(c.category_id),
-                selected: selected == Some(c.category_id), pinned: pins.contains(&c.category_id), onselect, onpin }
-        }
-        if !q.is_empty() && !has_matches {
-            div { class: "category-note",
-                span { "No categories match ‘{query}’." }
-                button { aria_label: "Clear category filter", onclick: move |_| {
-                    crate::controls::focus(filter_id);
-                    query.set(String::new());
-                }, "Clear filter" }
+            div { class: "category-items",
+                // Pinned first, preserving provider order within both groups and each row's identity.
+                for c in list.iter().filter(matches).filter(|c| pins.contains(&c.category_id))
+                    .chain(list.iter().filter(matches).filter(|c| !pins.contains(&c.category_id))) {
+                    CategoryItem { key: "category-{c.category_id}", category: c.clone(),
+                        selected: selected == Some(c.category_id), pinned: pins.contains(&c.category_id), onselect, onpin }
+                }
+                if !q.is_empty() && !has_matches {
+                    div { class: "category-note",
+                        span { "No categories match ‘{query}’." }
+                        button { aria_label: "Clear category filter", onclick: move |_| {
+                            crate::controls::focus(filter_id);
+                            query.set(String::new());
+                        }, "Clear filter" }
+                    }
+                }
             }
         }
     }
@@ -116,7 +113,6 @@ pub(crate) fn CategoryList(
 #[component]
 fn CategoryItem(
     category: xtream::Category,
-    count: usize,
     selected: bool,
     pinned: bool,
     onselect: EventHandler<Option<u64>>,
@@ -130,7 +126,7 @@ fn CategoryItem(
                 class: if selected { "cat on" } else { "cat" },
                 aria_pressed: selected,
                 title: "{category.category_name}", onclick: move |_| onselect.call(Some(id)),
-                span { "{category.category_name}" } small { "{thousands(count)}" }
+                span { "{category.category_name}" }
             }
             button {
                 class: if pinned { "category-pin pinned" } else { "category-pin" },
