@@ -90,6 +90,27 @@ fn progress_scan_and_episode_bars_share_one_lookup_per_episode() {
 }
 
 #[test]
+fn progress_cache_invalidates_new_equal_snapshot_without_retaining_old_list() {
+    let old = Rc::new(vec![7_u32]);
+    let old_weak = Rc::downgrade(&old);
+    let mut cache = resume::ProgressCache::new();
+    assert_eq!(cache.get_or_load(&old, 3, 0, || None::<(f64, f64)>), None);
+    drop(old);
+    assert!(old_weak.upgrade().is_none());
+
+    let refreshed = Rc::new(vec![7_u32]);
+    let loads = Cell::new(0);
+    assert_eq!(
+        cache.get_or_load(&refreshed, 3, 0, || {
+            loads.set(loads.get() + 1);
+            Some((45.0, 120.0))
+        }),
+        Some((45.0, 120.0))
+    );
+    assert_eq!(loads.get(), 1);
+}
+
+#[test]
 fn last_unfinished_preserves_play_order_and_empty_fallback() {
     let episodes = [0, 1, 2, 3, 4, 5];
     let selected = resume::last_unfinished(&episodes, |_, episode| match episode {
