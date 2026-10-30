@@ -242,6 +242,19 @@ checks; defaults retain the short existing fixtures. Targeted regressions are in
 Clippy and the release web build accompany the batch; platform fullscreen and whole-process
 memory still require device profiling.
 
+## Shelf write-through cache — 2026-10-30
+
+Successful recent/My List writes now publish the same JSON and owned entry vector into the
+in-memory cache. The next read still checks the persisted JSON string for external edits, but
+avoids parsing the app's own just-written data again. Failed writes do not publish an unpersisted
+cache entry. Scope changes and shelf limits are unchanged; progress keys are neither pruned nor
+coarsened.
+
+Test-only parse counters verify that initial decoding costs one parse, a successful own write
+followed by a read adds none, an external JSON change adds a parse, and a failed write preserves
+the cache. Two browser tabs verify that adding and removing My List in one is observed by the
+other on its next render. This establishes operation behavior, not a latency or memory benchmark.
+
 ## Next priorities
 
 1. Test on real iOS and Android devices: software keyboard, touch scrolling and seeking, safe

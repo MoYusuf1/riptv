@@ -5,6 +5,8 @@
 //! Everything is keyed by the signed-in profile, so two providers that both have a "movie 12" don't
 //! share progress.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use serde::{Deserialize, Serialize};
@@ -15,6 +17,15 @@ type ShelfCache = HashMap<String, (String, Rc<Vec<Entry>>)>;
 thread_local! {
     static SCOPE: RefCell<String> = const { RefCell::new(String::new()) };
     static CACHE: RefCell<ShelfCache> = RefCell::default();
+}
+#[cfg(test)]
+thread_local! {
+    static PARSE_COUNT: Cell<usize> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn parse_count() -> usize {
+    PARSE_COUNT.with(Cell::get)
 }
 
 /// Whose data this is: the profile just signed in. (One thread, so a global is enough.)
@@ -83,17 +94,24 @@ fn load(list: &str) -> Rc<Vec<Entry>> {
         {
             return entries.clone();
         }
+        #[cfg(test)]
+        PARSE_COUNT.with(|count| count.set(count.get() + 1));
         let entries = Rc::new(serde_json::from_str::<Vec<Entry>>(&json).unwrap_or_default());
         cache.insert(list.to_owned(), (json, entries.clone()));
         entries
     })
 }
 
-fn store(list: &str, entries: &[Entry]) {
+fn store(list: &str, entries: Vec<Entry>) {
     if let Some(s) = storage()
-        && let Ok(json) = serde_json::to_string(entries)
+        && let Ok(json) = serde_json::to_string(&entries)
+        && s.set_item(&name(list), &json).is_ok()
     {
-        let _ = s.set_item(&name(list), &json);
+        CACHE.with(|cache| {
+            cache
+                .borrow_mut()
+                .insert(list.to_owned(), (json, Rc::new(entries)));
+        });
     }
 }
 
@@ -103,7 +121,7 @@ fn promote(list: &str, entry: Entry, keep: usize) {
     all.retain(|e| !(e.kind == entry.kind && e.id == entry.id));
     all.insert(0, entry);
     all.truncate(keep);
-    store(list, &all);
+    store(list, all);
 }
 
 fn remove(list: &str, kind: Title, id: u64) {
@@ -111,7 +129,7 @@ fn remove(list: &str, kind: Title, id: u64) {
     let before = all.len();
     all.retain(|e| !(e.kind == kind && e.id == id));
     if all.len() != before {
-        store(list, &all);
+        store(list, all);
     }
 }
 
