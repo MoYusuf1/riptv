@@ -1119,10 +1119,7 @@ pub(crate) fn LivePlayer(
                     ondoubleclick: move |_| fullscreen_for_picture.toggle("live-player", expanded),
                 }
                 if show_stats() {
-                    crate::stream_info::StreamInfo { readout: stats(), onclose: move |_| {
-                        crate::controls::focus("stream-info-toggle");
-                        show_stats.set(false);
-                    } }
+                    crate::stream_info::StreamInfo { readout: stats() }
                 }
                 if audio_only() {
                     div { class: if paused() { "radio paused" } else { "radio" },

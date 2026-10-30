@@ -23,27 +23,16 @@ impl Default for Readout {
 }
 
 #[component]
-pub(crate) fn StreamInfo(readout: Readout, onclose: EventHandler<()>) -> Element {
+pub(crate) fn StreamInfo(readout: Readout) -> Element {
     let picture = readout
         .picture
-        .map_or_else(|| "Not ready".into(), |(w, h)| format!("{w} × {h}"));
+        .map_or_else(|| "…".into(), |(w, h)| format!("{w}×{h}"));
     let fps = readout
         .fps
-        .map_or_else(|| "—".into(), |n| format!("{n} fps"));
-    let dropped = thousands(readout.dropped as usize);
+        .map_or_else(|| "… fps".into(), |n| format!("{n} fps"));
     rsx! {
-        section { class: "stream-info", id: "stream-info", aria_label: "Stream info",
-            div { class: "settings-heading",
-                h3 { "Stream info" }
-                button { class: "icon-btn", aria_label: "Close stream info", onclick: move |_| onclose.call(()), Icon { d: CLOSE } }
-            }
-            dl {
-                div { dt { "Picture" } dd { "{picture}" } }
-                div { dt { "Frame rate" } dd { "{fps}" } }
-                div { dt { "Dropped frames" } dd { "{dropped}" } }
-                div { dt { "Buffer ahead" } dd { "{readout.buffer_seconds} s" } }
-                div { dt { "Playback" } dd { "{readout.playback}" } }
-            }
+        div { class: "stats", id: "stream-info", aria_label: "Stream info",
+            "{picture} · {fps} · {readout.dropped} dropped · {readout.buffer_seconds}s buffered · {readout.playback}"
         }
     }
 }

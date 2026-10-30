@@ -287,6 +287,13 @@ of the type-only bottom switcher; changing sections dismisses the account menu. 
 full native suite, native/WASM Clippy and release web build pass. The temporary large-series
 provider was stopped and its QA profile endpoint restored to the existing local fixture.
 
+## Stream-info preference follow-up — 2026-10-30
+
+The viewer preferred the original compact stream-info readout. It is restored as a small
+monospace overlay within the picture, replacing the larger label/value card. It wraps inside
+narrow players and does not intercept pointer input. The current sampling, unknown initial
+frame-rate value, toggle and Escape dismissal remain. Earlier panel evidence above is historical.
+
 ## Next priorities
 
 1. Test on real iOS and Android devices: software keyboard, touch scrolling and seeking, safe
