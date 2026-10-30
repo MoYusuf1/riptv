@@ -271,6 +271,22 @@ to 40s and removed `dragging`, without moving the video. Both harnesses are test
 artifacts excluded from shipping and removed after verification. These checks verify the
 component paths; they do not reproduce actual OS quota exhaustion or physical touch cancellation.
 
+## MAST closure and touch-target follow-up — 2026-10-30
+
+The continuing [MAST issue ledger](mast.md) keeps the reported UI concerns, acceptance rubric,
+file ownership, independent review and remaining device/measurement work together. A final
+read-only retention audit found no additional concrete leak in the reviewed UI surfaces: shelf
+and portrait caches have limits, relevant player/menu listeners have cleanup, and control hiding
+allows one pending timer. This inspection does not establish whole-process memory behavior.
+
+At a 320px CSS viewport, the season trigger and menu rows measured about 40px high. They now
+have a 44px minimum. The rebuilt release measures approximately 44px, selecting Season 2 renders
+its three expected episodes and returns focus to the trigger, and Escape closes the reopened
+menu and returns focus. No horizontal overflow was observed. Mobile pagination remains clear
+of the type-only bottom switcher; changing sections dismisses the account menu. The project check,
+full native suite, native/WASM Clippy and release web build pass. The temporary large-series
+provider was stopped and its QA profile endpoint restored to the existing local fixture.
+
 ## Next priorities
 
 1. Test on real iOS and Android devices: software keyboard, touch scrolling and seeking, safe

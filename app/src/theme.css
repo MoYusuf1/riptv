@@ -85,6 +85,7 @@ body { font-family: "RIPTV Sans", ui-sans-serif, system-ui, -apple-system, "Sego
 .settings-section h3, .w-menu h5 { color: var(--faint); letter-spacing: .08em; }
 .sort-btn, .cats-btn { background: var(--row); border: 1px solid var(--hair); }
 .sort-btn:hover, .cats-btn:hover { background: #252c37; }
+.season-btn, .season-menu button { min-width: 44px; min-height: 44px; }
 .empty-state .empty-mark { border-color: var(--hair); border-radius: 12px; background: #1b2029; color: var(--accent); }
 .empty-action { border-color: var(--hair); background: #191e26; }
 .empty-action:hover { border-color: rgba(168, 199, 250, .34); background: var(--soft); }
