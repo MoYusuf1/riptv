@@ -4,7 +4,7 @@ This is a structural review, not a benchmark. Scores use the following scale: 0 
 unbounded; 1 inconsistent or fragile; 2 adequate with an evidenced issue; 3 coherent, bounded
 and verified; 4 measured strong with repeatable evidence. These are engineering review scores,
 not benchmark results or a claim of accessibility compliance. The baseline includes failures
-found during browser testing. The after column describes the changes through `fcb3623`.
+found during browser testing. The score table records the first pass through `fcb3623`; subsequent refinement evidence appears below.
 A domain can contain bounded components without total application memory being capped.
 
 | Domain | Before | After | Evidence and principal cost |
@@ -21,7 +21,8 @@ A domain can contain bounded components without total application memory being c
 Let *n* be titles in a section, *L* the total characters inspected for a query, *p* the page
 size, and *c* the number of categories. The whole catalog is loaded per visited section and kept
 in memory until its cache is discarded (`app/src/main.rs`, `Library`, `Loaded`, `load`). This
-cost is O(n) records plus their strings. Category counts take O(n) time and O(c) space.
+cost is O(n) records plus their strings. Category counts are no longer calculated or retained;
+page totals come from the memoized filtered index length.
 
 - Search/category matching is O(n + L) per changed filter and O(n) indexes in the worst case;
   `matches` is memoized and a page redraw builds O(p) rows. Pages contain at most 60 grid or 40
@@ -29,6 +30,10 @@ cost is O(n) records plus their strings. Category counts take O(n) time and O(c)
   lowercase keys and takes O(n log n) comparisons; ascending and descending indexes each use
   O(n) space and are cached (`app/src/catalog.rs`). Actual string comparison costs vary with
   title lengths. Category rendering scans categories and uses a pin set; it is not paginated.
+- Live channel actions reuse that same filtered index list. Up/Down scan O(m) matched indexes
+  with O(1) extra memory; numbered selection is O(1), with a final checked catalog lookup.
+  They no longer rescan and lowercase every title on each action. Removing category counts also
+  removes one O(n) load-time pass and an O(c) retained map per loaded section.
 - Visible catalog DOM is O(p); poster and thumbnail images request lazy, asynchronous decoding
   (`app/src/main.rs`, `Card` and row rendering). Browser image caches, GPU memory, and background
   components are outside that row count. No browser timing or heap measurement supports a
@@ -123,6 +128,49 @@ resizing, notched-device safe areas, Picture in Picture support, or native fulls
 on iOS. Reduced-motion rules were preserved and reviewed; the preference was not changed on
 a physical device.
 
+## Mobile and playback refinement acceptance
+
+The mobile catalog uses a plain header, large section title, two poster columns and a floating
+section switcher containing only Live, Movies and Shows. Category filtering and sorting share
+one native sheet opened by the filter icon beside search. There is no descriptive subheading or
+category count. The catalog scrolls as one page, including its 44px pagination controls.
+Profile monograms stay circular inside the rounded account control, with a quiet tint.
+
+| Concern | Implementation and evidence |
+| --- | --- |
+| Missing guide enlarges picture | The player no longer grows into the guide's space. At 1280×600 its rectangle is identical with a populated guide and absent guide: approximately 626×318px. A short viewport can shrink the picture region; video remains contained. |
+| Live/Smooth menu | Two explicit option rows with short descriptions and selected check; each measures over 60px high on a 320px phone viewport. Toolbar button styling is retained. |
+| Stream information | Semantic label/value rows, units and tabular figures replace the debug string. The first frame-rate sample remains unknown until a sampling interval exists; sampling stops when closed and unchanged values do not trigger writes. Mobile panels cover the bottom navigation while open. |
+| Movie startup | Continuous CSS rotation and a short status replace guessed percentages. A mock provider with 2s response latency shows Preparing video with no numeric progress value. Startup feedback clears on actual playback; the artificial completion delay is removed. Launch/close/relaunch restores focus and clears background inert state. |
+| Category pins | Trailing targets measure 44×44px, rows 56px. Repeated pin/unpin preserves the active category and button focus. Filter, sort and All stay fixed while rows scroll. |
+| Profile dismissal | Capture-phase document listener closes on navigation and search clicks, including controls that stop bubbling. Listener registration and cleanup match. Escape still restores focus. |
+| Mobile layout | Effective 320px CSS viewport has two approximately 139px poster columns, no horizontal overflow, and section targets over 44px high. At 410px, posters remain in two columns. The title sits above search; its adjacent filter icon opens the sheet; dismissal restores trigger focus. |
+| Landscape playback | At approximately 666×320px, Live occupies the full viewport and header, channels and section navigation are hidden. At 320px portrait, the player is 320×180px and controls have equal 320px client and scroll widths. |
+| Pagination | Previous/Next use 44px targets with a clear page label; activation changes both the page and title list. Pagination belongs to the scrolling catalog and is clear of the fixed section switcher. |
+
+Independent code review found and resolved capture-listener propagation, sidebar selector and
+category flex sizing issues. Browser review caught a floating filter control covering pagination;
+the final filter control is beside search. Compilation alone is not acceptance evidence.
+The implementation and review are delegated separately; the integrating agent owns cross-component
+browser validation. The same 0–4 rubric above applies to each follow-up batch.
+
+Navigation parity tests cover empty results, missing current channels, wraparound, numbered bounds,
+duplicate identifiers and stale indexes. The ignored native benchmark can be rerun with:
+
+```sh
+cargo test --locked -p riptv --test catalog --release navigation_cost_30k -- --ignored --nocapture --test-threads=1
+```
+
+One run over 30,000 titles, 500 filtered hits and 600 actions measured 32.401ms for refiltering each
+action versus 302.821µs for reusing filtered indexes, with identical outputs. This synthetic native
+measurement excludes initial filtering and does not establish browser latency or total-memory gains.
+
+The project check, native tests, native/WASM Clippy with warnings denied, and release web build pass.
+A corrupted incremental compiler cache caused one compiler crash; the same WASM Clippy command
+passes with `CARGO_INCREMENTAL=0`. Native fixture tests require loopback
+access; the restricted-sandbox attempt fails to bind sockets and the loopback-enabled run passes.
+Real phone touch, keyboard, safe-area and hardware audio checks remain outstanding.
+
 ## Next priorities
 
 1. Test on real iOS and Android devices: software keyboard, touch scrolling and seeking, safe
@@ -132,3 +180,6 @@ a physical device.
 3. Exercise encrypted overflow, cancellation and reopening end to end, and validate the segment
    ceiling against representative providers before treating it as a compatibility guarantee.
 4. Measure accumulated progress storage and define retention or cleanup if real usage warrants it.
+5. Cancel the existing delayed fullscreen fallback when native fullscreen is entered and rapidly
+   exited: a rapid exit can leave the page-fill fallback active until Escape. This is distinct
+   from the verified landscape layout and was not changed in this pass.
