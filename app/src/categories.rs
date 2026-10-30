@@ -16,6 +16,8 @@ aside.sidebar:has(.category-list){display:flex;flex-direction:column;overflow:hi
 .category-dialog .category-list,.sidebar .category-list{min-height:0}
 .category-dialog .category-item .category-pin{position:static;width:2.75rem;min-width:2.75rem;height:2.75rem;opacity:.8}
 .category-dialog .category-item .cat,.category-dialog .cat.category-all{min-height:3.5rem}
+.category-page .category-list{flex:1;min-height:0;width:100%}
+.category-page .category-filter{display:none}
 .category-filter{position:relative;display:flex;align-items:center;height:2.5rem;margin:0 0 .5rem;border:1px solid transparent;border-radius:10px;background:var(--row);transition:border-color .2s,background .2s,box-shadow .2s}
 .category-filter:focus-within{border-color:color-mix(in srgb,var(--accent) 40%,transparent);background:color-mix(in srgb,var(--accent) 4%,var(--row));box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 12%,transparent)}
 .category-filter>svg{position:absolute;left:.75rem;width:.95rem;height:.95rem;color:var(--dim);pointer-events:none}
@@ -48,16 +50,24 @@ pub(crate) fn CategoryList(
     pins: Vec<u64>,
     query: Signal<String>,
     #[props(default)] in_dialog: bool,
+    #[props(default)] in_page: bool,
     onselect: EventHandler<Option<u64>>,
     onpin: EventHandler<u64>,
 ) -> Element {
     let CategoryData { list } = data;
     let mut query = query;
     let q = query().to_lowercase();
-    let filter_id = if in_dialog {
+    let filter_id = if in_page {
+        "category-page-filter"
+    } else if in_dialog {
         "category-dialog-filter"
     } else {
         "category-sidebar-filter"
+    };
+    let focus_id = if in_page {
+        "mobile-catalog-search"
+    } else {
+        filter_id
     };
     let pins: std::collections::HashSet<_> = pins.into_iter().collect();
     let matches =
@@ -78,7 +88,7 @@ pub(crate) fn CategoryList(
                 button {
                     aria_label: "Clear category filter", aria_hidden: q.is_empty(),
                     tabindex: if q.is_empty() { -1 } else { 0 }, onclick: move |_| {
-                        crate::controls::focus(filter_id);
+                        crate::controls::focus(focus_id);
                         query.set(String::new());
                     },
                     Icon { d: CLOSE }
@@ -100,7 +110,7 @@ pub(crate) fn CategoryList(
                     div { class: "category-note",
                         span { "No categories match ‘{query}’." }
                         button { aria_label: "Clear category filter", onclick: move |_| {
-                            crate::controls::focus(filter_id);
+                            crate::controls::focus(focus_id);
                             query.set(String::new());
                         }, "Clear filter" }
                     }

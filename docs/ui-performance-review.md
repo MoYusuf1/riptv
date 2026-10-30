@@ -131,8 +131,8 @@ a physical device.
 ## Mobile and playback refinement acceptance
 
 The mobile catalog uses a plain header, large section title, two poster columns and a floating
-section switcher containing only Live, Movies and Shows. Category filtering and sorting share
-one native sheet opened by the filter icon beside search. There is no descriptive subheading or
+section switcher containing only Live, Movies and Shows. Live opens a category page first; selecting a category opens its channels with a Back button.
+The control beside search opens a compact sort-only sheet. There is no descriptive subheading or
 category count. The catalog scrolls as one page, including its 44px pagination controls.
 Profile monograms stay circular inside the rounded account control, with a quiet tint.
 
@@ -142,9 +142,9 @@ Profile monograms stay circular inside the rounded account control, with a quiet
 | Live/Smooth menu | Two explicit option rows with short descriptions and selected check; each measures over 60px high on a 320px phone viewport. Toolbar button styling is retained. |
 | Stream information | Semantic label/value rows, units and tabular figures replace the debug string. The first frame-rate sample remains unknown until a sampling interval exists; sampling stops when closed and unchanged values do not trigger writes. Mobile panels cover the bottom navigation while open. |
 | Movie startup | Continuous CSS rotation and a short status replace guessed percentages. A mock provider with 2s response latency shows Preparing video with no numeric progress value. Startup feedback clears on actual playback; the artificial completion delay is removed. Launch/close/relaunch restores focus and clears background inert state. |
-| Category pins | Trailing targets measure 44×44px, rows 56px. Repeated pin/unpin preserves the active category and button focus. Filter, sort and All stay fixed while rows scroll. |
+| Category pins | Trailing targets measure 44×44px, rows 56px. Repeated pin/unpin preserves the active category and button focus. Header category search and All stay fixed while rows scroll. |
 | Profile dismissal | Capture-phase document listener closes on navigation and search clicks, including controls that stop bubbling. Listener registration and cleanup match. Escape still restores focus. |
-| Mobile layout | Effective 320px CSS viewport has two approximately 139px poster columns, no horizontal overflow, and section targets over 44px high. At 410px, posters remain in two columns. The title sits above search; its adjacent filter icon opens the sheet; dismissal restores trigger focus. |
+| Mobile layout | Effective 320px CSS viewport has two approximately 139px poster columns, no horizontal overflow, and section targets over 44px high. At 410px, posters remain in two columns. The title sits above search; its adjacent sort icon opens the sheet; dismissal restores trigger focus. |
 | Landscape playback | At approximately 666×320px, Live occupies the full viewport and header, channels and section navigation are hidden. At 320px portrait, the player is 320×180px and controls have equal 320px client and scroll widths. |
 | Pagination | Previous/Next use 44px targets with a clear page label; activation changes both the page and title list. Pagination belongs to the scrolling catalog and is clear of the fixed section switcher. |
 
@@ -153,6 +153,14 @@ category flex sizing issues. Browser review caught a floating filter control cov
 the final filter control is beside search. Compilation alone is not acceptance evidence.
 The implementation and review are delegated separately; the integrating agent owns cross-component
 browser validation. The same 0–4 rubric above applies to each follow-up batch.
+
+Mobile Live navigation was additionally checked at a 320px CSS viewport: category search →
+category → channel → moving mock video, then Back removes the video and returns focus to category
+search. All → filtered channel → stream also passes. Returning to another category clears the
+old channel query. Empty category-search recovery clears the query and focuses the visible
+header search, rather than a hidden duplicate filter. Sidebar/page filter IDs remain distinct.
+The sort sheet mounts no category list; its A–Z/Z–A controls use the same capsule treatment as
+the section switcher. Desktop browsing retains its sidebar and channel workflow.
 
 Navigation parity tests cover empty results, missing current channels, wraparound, numbered bounds,
 duplicate identifiers and stale indexes. The ignored native benchmark can be rerun with:

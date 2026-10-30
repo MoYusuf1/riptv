@@ -229,3 +229,4 @@ a.person:hover { border-color: rgba(168, 199, 250, .3); background: var(--soft);
 .sort-choice { min-width: 4.25rem; min-height: 2.75rem; padding: .5rem .9rem; border-radius: 8px; color: var(--dim); font-size: .85rem; font-weight: 550; }
 .sort-choice.selected { background: #30343c; color: var(--text); }
 .sort-choice:hover { color: var(--text); }
+.mobile-title-row, .mobile-search, .category-page { display: none; }

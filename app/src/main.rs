@@ -1295,6 +1295,7 @@ fn Browse() -> Element {
         });
     }
     let mut cats_open = use_signal(|| false);
+    let mut mobile_category_root = use_signal(|| true);
     let categories_were_open = use_hook(|| Rc::new(Cell::new(false)));
     use_effect(move || {
         let open = cats_open();
@@ -1410,6 +1411,7 @@ fn Browse() -> Element {
     let three_pane = kind() == Kind::Live && (category().is_some() || live().is_some());
 
     let pick_kind = move |k: Kind| {
+        mobile_category_root.set(true);
         let prefs = preferences::load();
         account_open.set(false);
         sort_open.set(false);
@@ -1424,6 +1426,8 @@ fn Browse() -> Element {
         page.set(0);
     };
     let select = move |cat: Option<u64>| {
+        mobile_category_root.set(false);
+        crate::controls::focus("mobile-catalog-search");
         account_open.set(false);
         sort_open.set(false);
         category.set(cat);
@@ -1470,13 +1474,13 @@ fn Browse() -> Element {
         });
     });
 
-    let cat_list = move |in_dialog: bool| -> Element {
+    let cat_list = move |in_dialog: bool, in_page: bool| -> Element {
         match &*cats.read() {
             Some(Err(e)) => rsx! { p { class: "err", "{e}" } },
             Some(Ok((k, list))) if *k == kind() => {
                 rsx! {
                     categories::CategoryList {
-                        data: categories::CategoryData { list: list.clone() }, selected: category(), in_dialog,
+                        data: categories::CategoryData { list: list.clone() }, selected: category(), in_dialog, in_page,
                         pins: pinned_categories()[kind() as usize].clone(), query: category_search,
                         onselect: select,
                         onpin: move |id| {
@@ -1746,12 +1750,11 @@ fn Browse() -> Element {
                 onclick: move |_| dismiss_categories(),
                 div { class: "sheet cats", onclick: move |e| e.stop_propagation(),
                     div { class: "bar",
-                        strong { id: "category-heading", "Filter and sort" }
+                        strong { id: "category-heading", "Sort" }
                         button { class: "icon-btn", aria_label: "Close", onclick: move |_| dismiss_categories(), Icon { d: CLOSE } }
                     }
                     div { class: "sheet-body",
                         div { class: "browse-sort",
-                            span { "Sort by" }
                             div { class: "sort-choices", role: "group", aria_label: "Sort titles",
                                 for option in Sort::options(kind()).iter().copied() {
                                     button { class: if option == sort() { "sort-choice selected" } else { "sort-choice" }, aria_label: "{option.label()}", aria_pressed: option == sort(), onclick: move |_| {
@@ -1762,7 +1765,6 @@ fn Browse() -> Element {
                                 }
                             }
                         }
-                        {cat_list(true)}
                     }
                 }
             }
@@ -1827,9 +1829,34 @@ fn Browse() -> Element {
         header { class: if open().is_some() { "topbar detail-mode" } else { "topbar" }, inert: playing().is_some().then_some(""),
             if open().is_none() {
                 span { class: "brand", title: "Rust", RustMark {} }
-                h1 { class: "mobile-page-title", "{section_name}" }
-                button { id: "mobile-filter-trigger", class: "mobile-header-filter", aria_label: "Filter and sort", aria_haspopup: "dialog", aria_expanded: cats_open(), aria_controls: "category-dialog", onclick: move |_| cats_open.set(true), Icon { d: SORT } }
-                div { class: "search",
+                div { class: "mobile-title-row",
+                    if kind() == Kind::Live && !mobile_category_root() {
+                        button { class: "mobile-category-back", aria_label: "Back to categories", onclick: move |_| {
+                            live.set(None);
+                            mobile_category_root.set(true);
+                            crate::controls::focus("mobile-catalog-search");
+                        }, Icon { d: BACK } }
+                    }
+                    h1 { class: "mobile-page-title", if kind() == Kind::Live && !mobile_category_root() { "{category_name}" } else { "{section_name}" } }
+                }
+                button { id: "mobile-filter-trigger", class: "mobile-header-filter", aria_label: "Sort", aria_haspopup: "dialog", aria_expanded: cats_open(), aria_controls: "category-dialog", onclick: move |_| cats_open.set(true), Icon { d: SORT } }
+                div { class: "search mobile-search",
+                    Icon { d: SEARCH }
+                    input {
+                        id: "mobile-catalog-search",
+                        aria_label: if kind() == Kind::Live && mobile_category_root() { "Search categories" } else { "Search titles" },
+                        placeholder: if kind() == Kind::Live && mobile_category_root() { "Search categories" } else { "Search {search_label}" },
+                        value: if kind() == Kind::Live && mobile_category_root() { category_search() } else { search() },
+                        oninput: move |e| { if kind() == Kind::Live && mobile_category_root() { category_search.set(e.value()); } else { search.set(e.value()); page.set(0); } }
+                    }
+                    if !(if kind() == Kind::Live && mobile_category_root() { category_search() } else { search() }).is_empty() {
+                        button { class: "search-clear", aria_label: "Clear mobile search", onclick: move |_| {
+                            if kind() == Kind::Live && mobile_category_root() { category_search.set(String::new()); } else { search.set(String::new()); page.set(0); }
+                            crate::controls::focus("mobile-catalog-search");
+                        }, Icon { d: CLOSE } }
+                    }
+                }
+                div { class: "search desktop-search",
                     Icon { d: SEARCH }
                     input {
                         id: "catalog-search",
@@ -1920,8 +1947,11 @@ fn Browse() -> Element {
             navigation::LibraryNav { kind: kind(), playlist: client.is_playlist(), onpick: pick_kind }
         }
         main { class: if open().is_some() { "workspace detail-open" } else { "workspace" }, inert: playing().is_some().then_some(""),
-            aside { class: "sidebar", {cat_list(false)} }
-            div { class: "content",
+            aside { class: "sidebar", {cat_list(false, false)} }
+            div { class: if kind() == Kind::Live && mobile_category_root() { "content mobile-category-root" } else { "content" },
+                if kind() == Kind::Live {
+                    section { class: "category-page", aria_label: "Live categories", {cat_list(false, true)} }
+                }
                 if three_pane {
                     div { class: if live().is_some() { "live watching" } else { "live" },
                         section { class: "channels",
