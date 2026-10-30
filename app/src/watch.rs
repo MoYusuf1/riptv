@@ -59,14 +59,44 @@ pub(crate) fn buffered_end(v: &web_sys::HtmlVideoElement) -> f64 {
         .map_or(0.0, |r| r.1)
 }
 
-pub(crate) fn fullscreen_watch() {
+fn watch_is_native_fullscreen() -> bool {
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+        return false;
+    };
+    let Some(watch) = doc.get_element_by_id("watch") else {
+        return false;
+    };
+    doc.fullscreen_element()
+        .is_some_and(|fullscreen| fullscreen.is_same_node(Some(&watch)))
+}
+
+fn exit_watch_fullscreen(watch: Option<&web_sys::Element>) {
     let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
         return;
     };
-    if doc.fullscreen_element().is_some() {
+    if let Some(watch) = watch
+        && doc
+            .fullscreen_element()
+            .is_some_and(|fullscreen| fullscreen.is_same_node(Some(watch)))
+    {
         doc.exit_fullscreen();
-    } else if let Some(el) = doc.get_element_by_id("watch") {
-        let _ = el.request_fullscreen();
+    }
+}
+
+fn blur_watch_seek() {
+    if let Some(bar) = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.active_element())
+        .filter(|element| {
+            element
+                .class_name()
+                .split(' ')
+                .any(|class| class == "w-seek")
+        })
+        && let Ok(blur) = js_sys::Reflect::get(&bar, &"blur".into())
+        && let Some(blur) = blur.dyn_ref::<js_sys::Function>()
+    {
+        let _ = blur.call0(&bar);
     }
 }
 
@@ -107,6 +137,7 @@ pub(crate) fn Watch(
     let mut volume = use_signal(move || saved_volume);
     let mut rate = use_signal(move || saved_speed);
     let mut scrubbing = use_signal(|| false);
+    let mut seek_pointer_down = use_signal(|| false);
     // Whether the pointer is over the controls (they stay up while it is).
     let mut over_controls = use_signal(|| false);
     // Where the current drag on the seek bar began (see `let_go`).
@@ -120,6 +151,15 @@ pub(crate) fn Watch(
     let saved = use_hook(|| Rc::new(Cell::new(resume)));
 
     let watch_element = use_hook(|| Rc::new(RefCell::new(None::<web_sys::HtmlVideoElement>)));
+    let fullscreen = use_hook(crate::fullscreen::Controller::default);
+    let fullscreen_root = use_hook(|| Rc::new(RefCell::new(None::<web_sys::Element>)));
+    let fullscreen_root_on_drop = fullscreen_root.clone();
+    let fullscreen_on_drop = fullscreen.clone();
+    use_drop(move || {
+        fullscreen_on_drop.dispose();
+        let watch = fullscreen_root_on_drop.borrow_mut().take();
+        exit_watch_fullscreen(watch.as_ref());
+    });
     // With `riptv --logs`: what this title's player does, for the proxy's diagnostics log.
     let trace = use_hook(|| {
         let upstream = xtream::Url::parse(&play.url)
@@ -221,9 +261,12 @@ pub(crate) fn Watch(
         // A stall the experimental player doesn't report (it appended data, but no frame is ever
         // decoded): after 8 s, hand over to the standard player, as for a format it can't play.
         {
-            let (c, url, this) = (c.clone(), url.clone(), movie.clone());
+            let (c, url, this) = (c.clone(), url.clone(), Rc::downgrade(&movie));
             wasm_bindgen_futures::spawn_local(async move {
                 rstreamkit::mse::sleep(Duration::from_secs(8)).await;
+                let Some(this) = this.upgrade() else {
+                    return;
+                };
                 let still = engine
                     .try_peek()
                     .is_ok_and(|e| matches!(&*e, Some(Engine::Rust(m, _)) if Rc::ptr_eq(m, &this)));
@@ -402,12 +445,15 @@ pub(crate) fn Watch(
         ))
     });
     let installed = listener.clone();
+    let fullscreen_root_on_mount = fullscreen_root.clone();
+    let fullscreen_for_keys = fullscreen.clone();
     let menu_for_keys = menu;
     use_effect(move || {
         let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
             return;
         };
         let key_idle = key_idle.clone();
+        let fullscreen = fullscreen_for_keys.clone();
         let mut menu = menu_for_keys;
         let on_key =
             Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
@@ -443,9 +489,15 @@ pub(crate) fn Watch(
                             v.set_muted(!v.muted());
                         }
                     }
-                    "f" => fullscreen_watch(),
+                    "f" => fullscreen.toggle_native("watch"),
                     "n" if has_next => act.set(Some(Act::Next)),
-                    "escape" => act.set(Some(Act::Close)),
+                    "escape" => {
+                        if watch_is_native_fullscreen() {
+                            fullscreen.toggle_native("watch");
+                        } else {
+                            act.set(Some(Act::Close));
+                        }
+                    }
                     _ => return,
                 }
                 e.prevent_default();
@@ -501,6 +553,8 @@ pub(crate) fn Watch(
         play.entry.clone(),
     );
     let native_url = play.url.clone();
+    let fullscreen_on_doubleclick = fullscreen.clone();
+    let fullscreen_on_button = fullscreen.clone();
     rsx! {
         div {
             class: "{class}",
@@ -509,9 +563,17 @@ pub(crate) fn Watch(
             aria_modal: "true",
             aria_label: "{play.title}",
             tabindex: "0",
-            onmounted: move |_| crate::controls::focus("watch"),
+            onmounted: move |_| {
+                if let Some(watch) = web_sys::window()
+                    .and_then(|window| window.document())
+                    .and_then(|document| document.get_element_by_id("watch"))
+                {
+                    *fullscreen_root_on_mount.borrow_mut() = Some(watch);
+                }
+                crate::controls::focus("watch");
+            },
             onmousemove: move |_| idle.wake(),
-            ondoubleclick: move |_| fullscreen_watch(),
+            ondoubleclick: move |_| fullscreen_on_doubleclick.toggle_native("watch"),
             if !engine_now {
                 if let Some(Engine::Failed(why)) = engine() {
                     div { class: "w-fail",
@@ -714,6 +776,8 @@ pub(crate) fn Watch(
                             disabled: total() <= 0.0,
                             aria_label: "Seek",
                             title: if total() > 0.0 { "Seek" } else { "Total length unavailable from this stream" },
+                            onpointerdown: move |_| seek_pointer_down.set(true),
+                            onkeydown: move |_| seek_pointer_down.set(false),
                             oninput: move |e| {
                                 if !*scrubbing.peek() {
                                     let from = *pos.peek();
@@ -725,20 +789,20 @@ pub(crate) fn Watch(
                             onchange: move |e| {
                                 scrubbing.set(false);
                                 seek_to(e.value().parse().unwrap_or(0.0));
-                                // Give the focus back (arrow keys never move this bar: the player's
-                                // own keys take them), or the controls would stay up for the rest of
-                                // the film: they show while anything in them has focus.
-                                if let Some(bar) = web_sys::window()
-                                    .and_then(|w| w.document())
-                                    .and_then(|d| d.active_element())
-                                    .filter(|el| el.class_name().split(' ').any(|c| c == "w-seek"))
-                                    && let Ok(blur) = js_sys::Reflect::get(&bar, &"blur".into())
-                                    && let Some(blur) = blur.dyn_ref::<js_sys::Function>()
-                                {
-                                    let _ = blur.call0(&bar);
+                                if seek_pointer_down() {
+                                    seek_pointer_down.set(false);
+                                    blur_watch_seek();
                                 }
                             },
-                            onpointerup: move |_| let_go(),
+                            onpointerup: move |_| {
+                                let no_pointer_change = !scrubbing()
+                                    || (pos() - scrub_from()).abs() < 1.0;
+                                let_go();
+                                if seek_pointer_down() && no_pointer_change {
+                                    seek_pointer_down.set(false);
+                                    blur_watch_seek();
+                                }
+                            },
                             onpointercancel: move |_| let_go(),
                             onblur: move |_| let_go(),
                         }
@@ -795,7 +859,7 @@ pub(crate) fn Watch(
                         }
                         button { id: "watch-settings-toggle", class: "ctl", aria_label: "Settings", title: "Settings", onclick: move |_| menu.set(!menu()), Icon { d: GEAR } }
                         button { class: "ctl", aria_label: "Picture in picture", title: "Picture in picture", onclick: move |_| toggle_pip(watch_video()), Icon { d: PIP } }
-                        button { class: "ctl", aria_label: "Fullscreen", title: "Fullscreen (F)", onclick: move |_| fullscreen_watch(), Icon { d: FULLSCREEN } }
+                        button { class: "ctl", aria_label: "Fullscreen", title: "Fullscreen (F)", onclick: move |_| fullscreen_on_button.toggle_native("watch"), Icon { d: FULLSCREEN } }
                     }
                 }
             }

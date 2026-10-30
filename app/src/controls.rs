@@ -16,6 +16,23 @@ pub(crate) fn focus(id: &str) {
     }
 }
 
+/// The catalog has different search controls at desktop and phone widths. Focus only
+/// the displayed input so a disappearing empty-state action never strands keyboard focus.
+pub(crate) fn focus_catalog_search() {
+    let Some(document) = web_sys::window().and_then(|window| window.document()) else {
+        return;
+    };
+    for id in ["mobile-catalog-search", "catalog-search"] {
+        if let Some(element) = document.get_element_by_id(id)
+            && let Ok(input) = element.dyn_into::<web_sys::HtmlElement>()
+            && input.get_bounding_client_rect().width() > 0.0
+        {
+            let _ = input.focus();
+            break;
+        }
+    }
+}
+
 /// Keep focused form controls and native Space/Enter activations out of player shortcuts.
 pub(crate) fn preserve_native_key(event: &web_sys::KeyboardEvent) -> bool {
     let Some(element) = event

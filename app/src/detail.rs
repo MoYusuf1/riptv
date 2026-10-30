@@ -128,6 +128,7 @@ thread_local! {
 pub(crate) fn DetailPage(
     row: Row,
     inert: bool,
+    #[props(default)] resume_epoch: u64,
     onback: EventHandler<()>,
     onplay: EventHandler<(Rc<Vec<Play>>, usize)>,
 ) -> Element {
@@ -399,12 +400,18 @@ pub(crate) fn DetailPage(
         move |i: usize| onplay.call((all.clone(), i))
     };
     // The main button plays the episode last left half watched (or the movie), else the first.
-    let (start_at, resume) = all
-        .iter()
-        .enumerate()
-        .rev()
-        .find_map(|(i, p)| shelves::progress(&p.key).map(|r| (i, Some(r))))
-        .unwrap_or((0, None));
+    // Re-scan only when this immutable play list changes or playback closes.
+    let resume_cache = use_hook(|| Rc::new(RefCell::new(resume::ResumeMemo::new())));
+    let progress_cache = use_hook(|| Rc::new(RefCell::new(resume::ProgressCache::new())));
+    let (start_at, resume) = resume_cache
+        .borrow_mut()
+        .get_or_compute(&all, resume_epoch, || {
+            resume::last_unfinished(&all, |index, play| {
+                progress_cache
+                    .borrow_mut()
+                    .get_or_load(&all, resume_epoch, index, || shelves::progress(&play.key))
+            })
+        });
     let episode_now = all
         .get(start_at)
         .and_then(|p| p.subtitle.as_deref())
@@ -538,13 +545,15 @@ pub(crate) fn DetailPage(
                         if let Some((_, range)) = spans.iter().find(|s| Some(s.0) == season_now) {
                             for (i, ep) in seasons.iter().flat_map(|s| s.episodes.iter()).enumerate().skip(range.start).take(range.len()) {
                                 div { class: "epc", key: "{ep.id}",
-                                    button { class: "thumb", aria_label: "Play", onclick: { let play_at = play_at.clone(); move |_| play_at(i) },
+                                    button { class: "thumb", aria_label: "Play {episode_name(ep, i - range.start)}", onclick: { let play_at = play_at.clone(); move |_| play_at(i) },
                                         if let Some(img) = ep.info.image.as_deref().filter(|s| s.starts_with("http")) {
                                             img { src: "{xtream::sized_art(img, xtream::Art::Still)}", loading: "lazy", decoding: "async" }
                                         } else if let Some(src) = &series_still {
                                             img { class: "series-still", src: "{src}", loading: "lazy", decoding: "async", alt: "" }
                                         }
-                                        if let Some(p) = shelves::percent(&all[i].key) { span { class: "prog", i { style: "width:{p}%" } } }
+                                        if let Some(p) = progress_cache.borrow_mut().get_or_load(&all, resume_epoch, i, || shelves::progress(&all[i].key))
+                                            .and_then(|(at, total)| shelves::percent_of(at, total))
+                                        { span { class: "prog", i { style: "width:{p}%" } } }
                                         span { class: "ep-num", "E{ep.episode_num.unwrap_or((i - range.start + 1) as u64)}" }
                                         span { class: "go", Icon { d: PLAY } }
                                         if let Some(secs) = ep.info.runtime_secs { span { class: "len", "{runtime_label(secs)}" } }

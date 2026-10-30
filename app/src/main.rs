@@ -35,6 +35,7 @@ mod preferences;
 mod profiles;
 mod quit;
 mod recovery;
+mod resume;
 mod shelves;
 mod snapshot;
 mod standard;
@@ -1230,6 +1231,7 @@ fn Browse() -> Element {
     let mut category_search = use_signal(String::new);
     let mut pinned_categories = use_signal(|| remembered.pinned_categories.clone());
     let mut playing = use_signal(|| None::<Play>);
+    let mut resume_epoch = use_signal(|| 0_u64);
     let previous_playing = use_hook(|| Rc::new(Cell::new(false)));
     let previous_playing_effect = previous_playing.clone();
     use_effect(move || {
@@ -1564,7 +1566,7 @@ fn Browse() -> Element {
                                 button {
                                     class: "empty-action",
                                     onclick: move |_| {
-                                        crate::controls::focus("catalog-search");
+                                        crate::controls::focus_catalog_search();
                                         search.set(String::new());
                                         page.set(0);
                                     },
@@ -1671,6 +1673,7 @@ fn Browse() -> Element {
                 play,
                 next,
                 onclose: move |_| {
+                    resume_epoch.set(resume_epoch().wrapping_add(1));
                     playing.set(None);
                     queue.set(None);
                 },
@@ -1863,7 +1866,7 @@ fn Browse() -> Element {
                             aria_label: "Clear search",
                             title: "Clear search",
                             onclick: move |_| {
-                                crate::controls::focus("catalog-search");
+                                crate::controls::focus_catalog_search();
                                 search.set(String::new());
                                 page.set(0);
                             },
@@ -1984,6 +1987,7 @@ fn Browse() -> Element {
                 key: "{row.key}",
                 row,
                 inert: playing().is_some(),
+                resume_epoch: resume_epoch(),
                 onback: move |_| open.set(None),
                 onplay: move |(all, at): (Rc<Vec<Play>>, usize)| {
                     playing.set(all.get(at).cloned());

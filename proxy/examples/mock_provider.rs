@@ -1,6 +1,9 @@
 //! Fake Xtream provider for local development. Login: demo / demo. Streams redirect to public
-//! test media (MDN's CC0 flower.mp4, Mux's Big Buck Bunny HLS). It listens on loopback, which the
-//! proxy only reaches because the demo sign-in approves 127.0.0.1.
+//! test media (MDN's CC0 flower.mp4, Mux's Big Buck Bunny HLS) unless an optional local episode
+//! file is supplied. It listens on loopback, which the proxy only reaches because the demo sign-in
+//! approves 127.0.0.1.
+//! `MOCK_EPISODES=200` expands Flower: The Series' first season (clamped to 2..=10,000), and
+//! `MOCK_EPISODE_FILE=/path/clip.mp4` serves that file locally for episode 101 and generated ones.
 //!   cargo run -p riptv --example mock_provider     (listens on 127.0.0.1:8081)
 
 use std::{
@@ -30,6 +33,17 @@ fn titles() -> usize {
             .ok()
             .and_then(|n| n.parse().ok())
             .unwrap_or(0)
+    })
+}
+
+/// Number of episodes in the mock Flower series' first season; defaults to its original two.
+fn episode_count() -> usize {
+    static N: OnceLock<usize> = OnceLock::new();
+    *N.get_or_init(|| {
+        std::env::var("MOCK_EPISODES")
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .map_or(2, |n: usize| n.clamp(2, 10_000))
     })
 }
 
@@ -126,6 +140,26 @@ fn own() -> Option<(&'static [u8], &'static str)> {
             "video/mp4"
         };
         Some((Box::leak(bytes.into_boxed_slice()) as &'static [u8], kind))
+    })
+}
+
+/// An optional local clip for the first and generated episodes of Flower: The Series.
+static OWN_EPISODE: OnceLock<Option<(&'static [u8], &'static str, &'static str)>> = OnceLock::new();
+
+fn own_episode() -> Option<(&'static [u8], &'static str, &'static str)> {
+    *OWN_EPISODE.get_or_init(|| {
+        let path = std::env::var("MOCK_EPISODE_FILE").ok()?;
+        let bytes = std::fs::read(&path).ok()?;
+        let (kind, extension) = if path.to_ascii_lowercase().ends_with(".mkv") {
+            ("video/x-matroska", "mkv")
+        } else {
+            ("video/mp4", "mp4")
+        };
+        Some((
+            Box::leak(bytes.into_boxed_slice()) as &'static [u8],
+            kind,
+            extension,
+        ))
     })
 }
 
@@ -344,6 +378,36 @@ fn vod_streams() -> Value {
     Value::Array(movies)
 }
 
+fn flower_episodes() -> Vec<Value> {
+    let owned = own_episode();
+    let extension = owned.map_or("mp4", |(_, _, extension)| extension);
+    let first_info = if owned.is_some() {
+        // Let the browser discover the supplied file's real duration from its metadata.
+        json!({"plot": "It starts, as these things do, with a bud.", "movie_image": POSTER,
+               "releasedate": "2021-03-01"})
+    } else {
+        json!({"plot": "It starts, as these things do, with a bud.", "movie_image": POSTER,
+               "duration_secs": 16, "releasedate": "2021-03-01"})
+    };
+    let mut episodes = vec![
+        json!({"id": "101", "episode_num": 1, "title": "Bloom", "container_extension": extension,
+               "info": first_info}),
+        json!({"id": "102", "episode_num": 2, "title": "Petals", "container_extension": "mkv",
+               "info": {"plot": "The same clip again, now in a different container.",
+                        "duration_secs": 16, "releasedate": "2021-03-08"}}),
+    ];
+    for number in 3..=episode_count() {
+        episodes.push(json!({
+            "id": 10_000 + number,
+            "episode_num": number,
+            "title": format!("Flower episode {number}"),
+            "container_extension": extension,
+            "info": [],
+        }));
+    }
+    episodes
+}
+
 async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
     let get = |k: &str| q.get(k).map(String::as_str);
     if get("username") != Some("demo") || get("password") != Some("demo") {
@@ -448,12 +512,7 @@ async fn api(Query(q): Query<HashMap<String, String>>) -> Json<Value> {
                      "youtube_trailer": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
                      "plot": "Two seasons of the same short film."},
             "episodes": {
-                "1": [{"id": "101", "episode_num": 1, "title": "Bloom", "container_extension": "mp4",
-                       "info": {"plot": "It starts, as these things do, with a bud.", "movie_image": POSTER,
-                                "duration_secs": 16, "releasedate": "2021-03-01"}},
-                      {"id": "102", "episode_num": 2, "title": "Petals", "container_extension": "mkv",
-                       "info": {"plot": "The same clip again, now in a different container.",
-                                "duration_secs": 16, "releasedate": "2021-03-08"}}],
+                "1": flower_episodes(),
                 "2": [{"id": "201", "episode_num": 1, "title": "Return", "container_extension": "mp4",
                        "info": []}],
                 // Shapes real panels send: a title that only numbers the episode (its name is in
@@ -549,9 +608,24 @@ async fn main() {
             "/series/{user}/{pass}/{file}",
             get(
                 |Path((_u, _p, file)): Path<(String, String, String)>, headers: HeaderMap| async move {
-                    match file.split_once('.').map_or(file.as_str(), |f| f.0) {
-                        "101" => ranged(&headers, MOVIE_AC3_MP4, "video/mp4"),
-                        "102" => ranged(&headers, MOVIE_AC3_MKV, "video/x-matroska"),
+                    match file
+                        .split_once('.')
+                        .map_or(file.as_str(), |f| f.0)
+                        .parse::<u64>()
+                    {
+                        Ok(101) if own_episode().is_some() => {
+                            let (bytes, kind, _) = own_episode().expect("checked");
+                            ranged(&headers, bytes, kind)
+                        }
+                        Ok(101) => ranged(&headers, MOVIE_AC3_MP4, "video/mp4"),
+                        Ok(102) => ranged(&headers, MOVIE_AC3_MKV, "video/x-matroska"),
+                        Ok(id) if (10_003..=10_000 + episode_count() as u64).contains(&id) => {
+                            if let Some((bytes, kind, _)) = own_episode() {
+                                ranged(&headers, bytes, kind)
+                            } else {
+                                Redirect::temporary(FLOWER).into_response()
+                            }
+                        }
                         _ => Redirect::temporary(FLOWER).into_response(),
                     }
                 },

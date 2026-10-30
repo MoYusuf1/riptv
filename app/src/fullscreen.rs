@@ -93,14 +93,37 @@ impl Default for Controller {
 
 impl Controller {
     /// Toggle native fullscreen, or page-fill if the request is denied or ignored.
-    pub(crate) fn toggle(&self, id: &'static str, mut expanded: Signal<bool>) {
+    pub(crate) fn toggle(&self, id: &'static str, expanded: Signal<bool>) {
+        self.toggle_inner(id, Some(expanded));
+    }
+
+    /// Toggle native fullscreen without the page-fill fallback (for an already full-page surface).
+    pub(crate) fn toggle_native(&self, id: &'static str) {
+        self.toggle_inner(id, None);
+    }
+
+    fn toggle_inner(&self, id: &'static str, mut expanded: Option<Signal<bool>>) {
         let Some(document) = web_sys::window().and_then(|window| window.document()) else {
             return;
         };
-        let native = document.fullscreen_element().is_some();
+        let active_fullscreen = document.fullscreen_element();
+        let own_player = document.get_element_by_id(id);
+        let native = if expanded.is_some() {
+            active_fullscreen.is_some()
+        } else {
+            active_fullscreen.as_ref().is_some_and(|active| {
+                own_player
+                    .as_ref()
+                    .is_some_and(|player| active.is_same_node(Some(player)))
+            })
+        };
+        // A native-only surface must never steal fullscreen from another element.
+        if expanded.is_none() && active_fullscreen.is_some() && !native {
+            return;
+        }
         let action = {
             let mut state = self.inner.state.borrow_mut();
-            let action = state.toggle(native, expanded());
+            let action = state.toggle(native, expanded.is_some_and(|signal| signal()));
             self.inner.cancelled.set(state.cancelled_token());
             action
         };
@@ -112,7 +135,9 @@ impl Controller {
             }
             Action::ClearFallback => {
                 self.inner.clear_listener(None);
-                expanded.set(false);
+                if let Some(expanded) = expanded.as_mut() {
+                    expanded.set(false);
+                }
             }
             Action::CancelPending => self.inner.clear_listener(None),
             Action::Start(token) => {
@@ -164,7 +189,7 @@ impl Controller {
         player: Element,
         id: &'static str,
         token: u64,
-        mut expanded: Signal<bool>,
+        mut expanded: Option<Signal<bool>>,
     ) {
         let weak = Rc::downgrade(&self.inner);
         let event_document = document.clone();
@@ -229,7 +254,9 @@ impl Controller {
                     promise_document.exit_fullscreen();
                 } else if is_native_player && settlement.current && settlement.alive {
                     // A late native success replaces fallback fill; clear its old state.
-                    promise_expanded.set(false);
+                    if let Some(expanded) = promise_expanded.as_mut() {
+                        expanded.set(false);
+                    }
                 }
             });
         }
@@ -248,7 +275,7 @@ impl Controller {
                     .borrow_mut()
                     .finish(token, no_native_fullscreen, same_player);
             inner.clear_listener(Some(token));
-            if should_expand {
+            if should_expand && let Some(expanded) = expanded.as_mut() {
                 expanded.set(true);
             }
         });

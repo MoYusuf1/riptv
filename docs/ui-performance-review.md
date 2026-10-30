@@ -205,6 +205,43 @@ The MAST audit, implementation and independent review are separate tasks. Review
 late-native-response case after the initial fallback fix; browser interaction caught focus loss
 when a pin moved its row. Checks and targeted regression tests accompany the integrated change.
 
+## Playback, search and resume follow-up — 2026-10-30
+
+Mobile empty-result recovery now focuses the displayed search input rather than the hidden
+desktop field. Movies, Shows and channel search share that focus helper. Watch uses the shared
+fullscreen request controller in native-only mode: Escape closes settings first, exits its own
+native fullscreen next, then closes playback. Teardown cancels pending native requests and exits
+only the captured Watch element. The experimental 8-second stall watchdog holds a weak movie
+reference during its delay; it no longer keeps that movie alive merely by sleeping.
+
+Keyboard seeking retains range focus, so consecutive arrow keys keep their native one-second
+steps. Pointer seeking releases focus only after the commit, and a no-movement pointer release
+also clears focus. Browser checks cover consecutive arrows (40 → 41 → 42 seconds), a pointer
+seek to the midpoint, a repeated click at the same value, and a drag to a later position. Hardware
+touch cancellation remains part of real-device testing.
+
+Series resume selection and episode bars share a lazy progress cache keyed by immutable play-list
+identity and a playback-close epoch. Both present and missing values are cached by index. The
+reverse resume scan is itself memoized. A stable detail redraw performs no storage reads for
+already inspected episodes; changing season reads only uncached episodes, while closing playback
+invalidates the snapshot so newly saved or finished progress is visible. Entries are bounded by
+the accessed episodes in the current play list; changing list identity releases the old map.
+There is no progress-key migration or eviction. Cross-tab progress is not made reactive by this
+cache and may require closing/reopening playback or details to refresh.
+
+Native operation-count tests use 10,000 episodes: an initial all-missing scan performs 10,000
+lookups; rendering all bars and repeating the scan/bars adds zero lookups until invalidation.
+This is an operation-count result, not a browser latency or RAM measurement. Browser testing uses
+200 episodes and a local 96-second clip: E1 becomes resumable, unfinished E3 supersedes it,
+finishing E3 falls back to E1, and finishing E1 restores Play. Episode buttons expose their names
+to assistive technology instead of 200 identical Play labels.
+
+The mock provider accepts optional `MOCK_EPISODES` (up to 10,000) and `MOCK_EPISODE_FILE` for these
+checks; defaults retain the short existing fixtures. Targeted regressions are in
+`proxy/tests/resume.rs`, alongside the fullscreen and catalog tests. Project checks, native tests,
+Clippy and the release web build accompany the batch; platform fullscreen and whole-process
+memory still require device profiling.
+
 ## Next priorities
 
 1. Test on real iOS and Android devices: software keyboard, touch scrolling and seeking, safe
