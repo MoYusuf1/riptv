@@ -6,13 +6,15 @@ mobile refinement, reliability, and playback follow-up sections. “Browser chec
 specific flow and viewport recorded there passed; it is not device certification or a performance
 benchmark.
 
+Full-palette follow-up completed: history scout found only avatar swatches and a fixed rose theme, not an earlier selectable global palette system. The implementation now expands all five choices across surfaces, text, borders and interaction states. Worker: full_palettes; read-only history: picker_history; independent review: palette_independent_review; integration/browser checks: coordinator. See [full palette review](full-palette-review.md).
+
 Latest follow-up: [palette and layout review](palette-layout-review.md).
 
 ## Issue ledger
 
 | Area | Current outcome | Remaining evidence or follow-up |
 | --- | --- | --- |
-| Color choices and palette refresh | Account now exposes saved Blue, Teal, Violet and Amber choices on shared neutral surfaces; Teal is the default. A finite enum prevents arbitrary saved CSS. Failed saves report session-only behavior. All four choices updated navigation color at 320px, and Teal survived reload. | Browser persistence, all four choices and the final viewport matrix passed; physical-device review remains. |
+| Color choices and palette refresh | Account now exposes full Charcoal, Blue, Teal, Violet and Amber palettes with surface/text previews and reset. Charcoal is the default; previous saved names remain compatible. Finite constants prevent arbitrary saved CSS. Failed saves report session-only behavior. | All five choices changed surfaces/text at 320px; reload persistence and reset passed. Sort/details and desktop palette propagation passed; physical-device review remains. |
 | Neutral scrollbars and playback sliders | The legacy global rose scrollbar was replaced for standard and WebKit styling. Seek progress is neutral and separate from the selected accent; volume remains neutral. Menus, focus and selection consume shared palette tokens. | Movie/series player geometry, neutral seek and native-key checks passed in-browser. Native Firefox and physical-device rendering remain unverified. |
 | Layout and pagination follow-up | Browser reproduction found Next left mobile content scrolled over 8,000px down. Explicit paging now resets the parent panel and focuses its first new title; Next/Previous retests at 390px passed. Profile form, clear-search and player/settings targets were raised to 44px; tablet posters use a denser grid. Detail/season/account Escape ordering restores focus. | Required check, release build, independent review and the final viewport matrix passed. Software keyboards and physical touch still need device checks. |
 | Mobile look and navigation | Minimal dark palette, clear type hierarchy, plain header, prominent title above search, adjacent sort control, two poster columns on narrow phones and a denser tablet grid, and a bottom pill with only Live/Movies/Shows are implemented. No catalog subheadings or category counts. The current pass checks 320/390/820/1280px with no root horizontal overflow. | Test on physical phones, including safe areas, software keyboard resizing, and touch. Keep the nav limited to section switching. |

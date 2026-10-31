@@ -12,7 +12,7 @@
   .detail .d-art { inset: 0 0 auto; height: var(--detail-art-height); }
   .detail .d-poster { top: 4.5rem; right: 50%; transform: translateX(50%); width: min(42vw, 12rem); max-height: min(35svh, 14rem); }
   .detail .d-shade {
-    background: linear-gradient(180deg, rgba(17, 17, 19, .08) 0%, rgba(17, 17, 19, .6) clamp(9rem, 24svh, 14rem), rgba(17, 17, 19, .88) clamp(11rem, 32svh, 20rem), var(--bg) clamp(14rem, 38svh, 24rem));
+    background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 8%, transparent) 0%, color-mix(in srgb, var(--bg) 60%, transparent) clamp(9rem, 24svh, 14rem), color-mix(in srgb, var(--bg) 88%, transparent) clamp(11rem, 32svh, 20rem), var(--bg) clamp(14rem, 38svh, 24rem));
   }
   .detail .d-hero.no-art .d-shade { background: transparent; }
   .detail .d-main, .detail .d-facts, .detail .d-facts dd {
@@ -42,7 +42,7 @@
   .detail .d-hero.no-art { --detail-art-height: 0px; padding-top: 4rem; }
   .detail .d-poster { top: 3.5rem; right: 50%; transform: translateX(50%); width: min(32vw, 9rem); max-height: min(25svh, 7rem); }
   .detail .d-shade {
-    background: linear-gradient(180deg, rgba(17, 17, 19, .08) 0%, rgba(17, 17, 19, .2) clamp(5rem, 18svh, 7rem), rgba(17, 17, 19, .62) clamp(7rem, 27svh, 10rem), var(--bg) clamp(8rem, 40svh, 12rem));
+    background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 8%, transparent) 0%, color-mix(in srgb, var(--bg) 20%, transparent) clamp(5rem, 18svh, 7rem), color-mix(in srgb, var(--bg) 62%, transparent) clamp(7rem, 27svh, 10rem), var(--bg) clamp(8rem, 40svh, 12rem));
   }
 }
 
