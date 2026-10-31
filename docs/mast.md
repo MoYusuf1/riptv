@@ -6,11 +6,16 @@ mobile refinement, reliability, and playback follow-up sections. “Browser chec
 specific flow and viewport recorded there passed; it is not device certification or a performance
 benchmark.
 
+Latest follow-up: [palette and layout review](palette-layout-review.md).
+
 ## Issue ledger
 
 | Area | Current outcome | Remaining evidence or follow-up |
 | --- | --- | --- |
-| Mobile look and navigation | Minimal dark palette, clear type hierarchy, plain header, prominent title above search, adjacent sort control, two poster columns, and a bottom pill with only Live/Movies/Shows are implemented. No catalog subheadings or category counts. Browser checks cover 320/390/410/820px and no horizontal overflow. | Test on physical phones, including safe areas, software keyboard resizing, and touch. Keep the nav limited to section switching. |
+| Color choices and palette refresh | Account now exposes saved Blue, Teal, Violet and Amber choices on shared neutral surfaces; Teal is the default. A finite enum prevents arbitrary saved CSS. Failed saves report session-only behavior. All four choices updated navigation color at 320px, and Teal survived reload. | Browser persistence, all four choices and the final viewport matrix passed; physical-device review remains. |
+| Neutral scrollbars and playback sliders | The legacy global rose scrollbar was replaced for standard and WebKit styling. Seek progress is neutral and separate from the selected accent; volume remains neutral. Menus, focus and selection consume shared palette tokens. | Movie/series player geometry, neutral seek and native-key checks passed in-browser. Native Firefox and physical-device rendering remain unverified. |
+| Layout and pagination follow-up | Browser reproduction found Next left mobile content scrolled over 8,000px down. Explicit paging now resets the parent panel and focuses its first new title; Next/Previous retests at 390px passed. Profile form, clear-search and player/settings targets were raised to 44px; tablet posters use a denser grid. Detail/season/account Escape ordering restores focus. | Required check, release build, independent review and the final viewport matrix passed. Software keyboards and physical touch still need device checks. |
+| Mobile look and navigation | Minimal dark palette, clear type hierarchy, plain header, prominent title above search, adjacent sort control, two poster columns on narrow phones and a denser tablet grid, and a bottom pill with only Live/Movies/Shows are implemented. No catalog subheadings or category counts. The current pass checks 320/390/820/1280px with no root horizontal overflow. | Test on physical phones, including safe areas, software keyboard resizing, and touch. Keep the nav limited to section switching. |
 | Live categories and channels | Mobile Live opens categories, then channels, with Back to categories; search and selection work through the flow. Browser checks cover category → channel → moving mock stream, Back, All, empty recovery, and focus return. | Physical touch and keyboard checks remain. |
 | Pins and category list | Pin targets are 44×44px, rows at least 56px, All/search stay fixed while rows scroll, and counts were removed. Browser checks cover pin/unpin, stable selection, and focus. | Recheck on a narrow physical device and with a long category list. |
 | Sort, search, pagination | The button beside mobile search opens a compact sort sheet; pagination belongs to the scrolling catalog. Previous/Next targets are 44px. Browser checks cover dismissal, focus restoration, page changes, and 320px layout. | Check software-keyboard and touch behavior on device; collect a repeatable interaction-latency baseline. |
@@ -39,10 +44,10 @@ behavior still needs browser evidence where relevant.
 
 - **Coordinator:** owns integration, cross-component decisions, browser validation, and the issue
   ledger. Give each batch a named file owner and acceptance flow.
-- **Luna scoped worker:** audits or implements only the assigned files. Read relevant code first;
+- **Scoped worker:** choose an available model suited to the task and cost (Luna when available). It audits or implements only the assigned files. Read relevant code first;
   send a concise plan before multi-file work; run the project check and diff check; report exact
   files, selectors or handlers, and known unverified cases.
-- **Terra reviewer:** independently reviews the concrete diff for behavior, lifecycle, accessibility,
+- **Independent reviewer (Terra when available):** independently reviews the concrete diff for behavior, lifecycle, accessibility,
   performance, and boundary cases. Review findings become ledger items until resolved or explicitly
   deferred.
 

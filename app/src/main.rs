@@ -14,6 +14,7 @@ use std::{
     time::Duration,
 };
 
+mod appearance;
 mod catalog;
 mod categories;
 mod channel_preview;
@@ -64,13 +65,13 @@ const PAGE_LIST: usize = 40;
 /// One stylesheet, grouped by component. The comments live here, not in the shipped string.
 const CSS: &str = concat!(
     // Palette and page basics
-    r#":root{color-scheme:dark;--bg:#0b0709;--panel:#130d10;--row:#1c1418;--hair:rgba(255,255,255,.08);--text:#f5eef1;--dim:#a0919a;--faint:#6f6068;--accent:#ff7d92;--fill:#e11d48;--soft:rgba(255,125,146,.14);--glass:rgba(24,16,20,.72);--ease:cubic-bezier(.2,.8,.2,1)}
+    r#":root{color-scheme:dark}
 *{box-sizing:border-box}
-*{scrollbar-width:thin;scrollbar-color:#59414c transparent}
+*{scrollbar-width:thin;scrollbar-color:var(--scrollbar,#535359) transparent}
 ::-webkit-scrollbar{width:9px;height:9px}
 ::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{border:2px solid var(--panel);border-radius:999px;background:#59414c}
-::-webkit-scrollbar-thumb:hover{background:#946373}
+::-webkit-scrollbar-thumb{border:2px solid var(--panel);border-radius:999px;background:var(--scrollbar,#535359)}
+::-webkit-scrollbar-thumb:hover{background:var(--scrollbar-hover,#73737c)}
 ::-webkit-scrollbar-corner{background:transparent}
 :where(button,a,input,select,summary,[tabindex]):focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 body{margin:0;min-width:320px;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
@@ -128,13 +129,13 @@ svg{width:1.1rem;height:1.1rem}
 "#,
     // Top chrome: logo, search, account. Section navigation lives in navigation.rs.
     r#".topbar{position:fixed;z-index:20;display:flex;border:1px solid rgba(255,255,255,.1);background:linear-gradient(115deg,rgba(42,25,34,.88),rgba(20,14,18,.94));box-shadow:0 8px 32px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.03);backdrop-filter:blur(24px) saturate(150%);inset:.7rem .7rem auto;align-items:center;gap:1rem;height:3.7rem;padding:0 .65rem;border-radius:20px}
-.brand{display:grid;place-items:center;flex:none;width:2.55rem;height:2.55rem;border:1px solid rgba(255,125,146,.13);border-radius:14px;background:linear-gradient(145deg,rgba(255,125,146,.12),rgba(255,255,255,.02));box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+.brand{display:grid;place-items:center;flex:none;width:2.55rem;height:2.55rem;border:1px solid color-mix(in srgb,var(--accent) 13%,transparent);border-radius:14px;background:linear-gradient(145deg,color-mix(in srgb,var(--accent) 12%,transparent),rgba(255,255,255,.02));box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
 .rust-mark{width:1.85rem;height:1.85rem;color:var(--accent)}
 .search{position:relative;display:flex;align-items:center;flex:1;min-width:4rem;max-width:42rem;margin-inline:auto}
 .search svg{position:absolute;left:.95rem;width:1rem;height:1rem;color:var(--dim);pointer-events:none}
 .search input{width:100%;height:2.55rem;padding:0 2.8rem 0 2.6rem;border:1px solid rgba(255,255,255,.05);border-radius:13px;outline:0;background:rgba(255,255,255,.035);transition:border-color .2s,background .2s,box-shadow .2s}
 .search input:hover{background:rgba(255,255,255,.055)}
-.search input:focus{border-color:rgba(255,125,146,.35);background:rgba(255,125,146,.035);box-shadow:0 0 0 3px rgba(255,125,146,.06)}
+.search input:focus{border-color:color-mix(in srgb,var(--accent) 35%,transparent);background:color-mix(in srgb,var(--accent) 3.5%,transparent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 6%,transparent)}
 .search input::placeholder{color:var(--faint)}
 .search-clear{position:absolute;right:.35rem;display:grid;place-items:center;width:2rem;height:2rem;border-radius:50%;color:var(--dim);transition:color .2s,background .2s}
 .search-clear:hover{background:rgba(255,255,255,.09);color:var(--text)}
@@ -197,13 +198,13 @@ svg{width:1.1rem;height:1.1rem}
 .cats-btn{display:none;align-items:center;gap:.4rem;flex:none;padding:.4rem .8rem;border-radius:999px;background:var(--row);font-size:.8rem}
 .scroll{flex:1;min-height:0;padding:0 .4rem 2rem;overflow:auto;scrollbar-width:thin}
 .empty-state{display:grid;justify-items:center;align-content:center;gap:.65rem;min-height:min(32vh,17rem);padding:2rem 1rem;color:var(--dim);text-align:center}
-.empty-state .empty-mark{display:grid;place-items:center;width:3rem;height:3rem;margin-bottom:.15rem;border:1px solid rgba(255,125,146,.14);border-radius:1rem;background:linear-gradient(145deg,rgba(255,125,146,.1),rgba(255,255,255,.025));color:var(--accent)}
+.empty-state .empty-mark{display:grid;place-items:center;width:3rem;height:3rem;margin-bottom:.15rem;border:1px solid color-mix(in srgb,var(--accent) 14%,transparent);border-radius:1rem;background:linear-gradient(145deg,color-mix(in srgb,var(--accent) 10%,transparent),rgba(255,255,255,.025));color:var(--accent)}
 .empty-state .empty-mark svg{width:1.25rem;height:1.25rem}
 .empty-state strong{color:var(--text);font-size:1rem;font-weight:600}
 .empty-state p{max-width:24rem;margin:0;font-size:.84rem}
 .empty-actions{display:flex;justify-content:center;flex-wrap:wrap;gap:.5rem;margin-top:.3rem}
 .empty-action{padding:.48rem .85rem;border:1px solid var(--hair);border-radius:999px;background:rgba(255,255,255,.04);color:var(--text);font-size:.8rem;font-weight:600;transition:background .2s,border-color .2s}
-.empty-action:hover{border-color:rgba(255,125,146,.28);background:var(--soft)}
+.empty-action:hover{border-color:color-mix(in srgb,var(--accent) 28%,transparent);background:var(--soft)}
 "#,
     // Posters and channel tiles
     r#".grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(8.6rem,1fr));align-items:start;gap:1.5rem 1rem}
@@ -264,7 +265,7 @@ a.face,a.person{color:inherit;text-decoration:none}
 a.face img,a.face .initial{transition:box-shadow .2s var(--ease),transform .25s var(--ease)}
 a.face:hover img,a.face:hover .initial{box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--accent);transform:translateY(-2px)}
 a.person{transition:background .2s var(--ease),border-color .2s}
-a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
+a.person:hover{border-color:color-mix(in srgb,var(--accent) 40%,transparent);background:var(--soft)}
 .trailer{position:relative;display:block;width:16rem;color:#fff;aspect-ratio:16/9;overflow:hidden;border-radius:12px;background:var(--row)}
 .trailer img{width:100%;height:100%;object-fit:cover;transition:transform .2s}
 .trailer:hover img{transform:scale(1.04)}
@@ -307,7 +308,7 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 .row strong{font-weight:500}
 .row .eq{flex:none;height:12px;margin:0 .35rem 0 auto;gap:2px}
 .row .eq i{width:2.5px;background:var(--accent)}
-.channel-preview{position:fixed;z-index:45;display:flex;flex-direction:column;gap:.5rem;width:min(320px,calc(100vw - 24px));padding:1rem 1.1rem;border:1px solid rgba(255,125,146,.22);border-radius:16px;background:#22171e;box-shadow:0 16px 48px rgba(0,0,0,.5);text-align:left;pointer-events:none;animation:fade .16s var(--ease)}
+.channel-preview{position:fixed;z-index:45;display:flex;flex-direction:column;gap:.5rem;width:min(320px,calc(100vw - 24px));padding:1rem 1.1rem;border:1px solid color-mix(in srgb,var(--accent) 22%,transparent);border-radius:16px;background:#22171e;box-shadow:0 16px 48px rgba(0,0,0,.5);text-align:left;pointer-events:none;animation:fade .16s var(--ease)}
 /* A hover card: a touch screen has no hover to end it, so it would stay over the list. */
 @media(hover:none){.channel-preview{display:none}}
 .channel-preview strong{font-size:.98rem;line-height:1.35;white-space:normal;overflow-wrap:anywhere}
@@ -329,7 +330,7 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 .player:not(.active):not(.paused){cursor:none}
 .player video{width:100%;height:100%;object-fit:contain;opacity:0;transition:opacity .45s var(--ease)}
 .player.showing video{opacity:1}
-.radio{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.1rem;overflow:hidden;background:#0a0709;color:#fff;pointer-events:none;animation:rise .5s var(--ease)}
+.radio{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1.1rem;overflow:hidden;background:var(--bg);color:#fff;pointer-events:none;animation:rise .5s var(--ease)}
 .radio-glow{position:absolute;inset:-25%;width:150%;height:150%;object-fit:cover;opacity:.32;filter:blur(48px) saturate(1.6);transform:scale(1.1)}
 .radio-art{position:relative;display:grid;place-items:center;width:clamp(6.5rem,26vh,10rem);aspect-ratio:1;border-radius:24%;background:rgba(255,255,255,.07);box-shadow:0 24px 60px rgba(0,0,0,.55),inset 0 0 0 1px rgba(255,255,255,.08);overflow:hidden}
 .radio-art img{width:76%;height:76%;object-fit:contain}
@@ -346,7 +347,7 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 .sound-note{position:absolute;top:1rem;left:1rem;display:flex;align-items:center;gap:.4rem;padding:.35rem .7rem;border-radius:999px;background:rgba(0,0,0,.55);color:#fff;font-size:.75rem;backdrop-filter:blur(14px);animation:rise .3s var(--ease)}
 .sound-note svg{width:.95rem;height:.95rem}
 .backup-label{font-size:.75rem;max-width:35%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim)}
-.live-settings{position:absolute;z-index:12;right:clamp(1rem,5.75rem,calc(100% - 20rem));bottom:4.3rem;width:min(300px,calc(100% - 2rem));max-height:calc(100% - 5.3rem);overflow-y:auto;border:1px solid rgba(255,125,146,.16);border-radius:16px;background:linear-gradient(145deg,rgba(40,28,35,.98),rgba(22,15,19,.98));box-shadow:0 16px 48px #0008,inset 0 1px 0 #ffffff06;text-align:left;animation:fade .16s var(--ease)}
+.live-settings{position:absolute;z-index:12;right:clamp(1rem,5.75rem,calc(100% - 20rem));bottom:4.3rem;width:min(300px,calc(100% - 2rem));max-height:calc(100% - 5.3rem);overflow-y:auto;border:1px solid color-mix(in srgb,var(--accent) 16%,transparent);border-radius:16px;background:linear-gradient(145deg,rgba(40,28,35,.98),rgba(22,15,19,.98));box-shadow:0 16px 48px #0008,inset 0 1px 0 #ffffff06;text-align:left;animation:fade .16s var(--ease)}
 .settings-toggle[aria-expanded=true]{color:var(--accent);background:var(--soft);border-radius:50%}
 .player:has(.live-settings) .controls{opacity:1;transform:none;z-index:11}
 .context-dismiss{position:fixed;z-index:70;inset:0}
@@ -358,7 +359,7 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 .playback-modes{display:grid;grid-template-columns:1fr 1fr;gap:.25rem;padding:.25rem;border:1px solid var(--hair);border-radius:11px;background:#0003}
 .playback-modes .mode{padding:.55rem .75rem;border:1px solid transparent;border-radius:8px;color:var(--dim);font-size:.8rem;font-weight:500;line-height:1.35;transition:color .15s,background .15s}
 .playback-modes .mode:hover{color:var(--text);background:#ffffff06}
-.playback-modes .mode.selected{border-color:#ff7d9226;background:var(--soft);color:var(--accent);box-shadow:0 2px 6px #0002}
+.playback-modes .mode.selected{border-color:color-mix(in srgb,var(--accent) 15%,transparent);background:var(--soft);color:var(--accent);box-shadow:0 2px 6px #0002}
 .playback-modes .mode:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .backup-section{padding-top:1rem;border-top:1px solid var(--hair)}
 .playback-option-row{display:flex;align-items:center;gap:.6rem}
@@ -416,7 +417,7 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 .tl{position:relative;height:100%;min-height:6.4rem}
 .tick{position:absolute;top:0;height:100%;padding-left:.4rem;border-left:1px solid var(--hair);color:var(--faint);font-size:.7rem}
 .block{position:absolute;top:1.5rem;bottom:0;min-width:0;overflow:clip;padding:.5rem 0;border-right:3px solid var(--panel);border-radius:10px;background:var(--row)}
-.block.now{background:var(--soft);outline:1px solid rgba(255,125,146,.45);outline-offset:-1px}
+.block.now{background:var(--soft);outline:1px solid color-mix(in srgb,var(--accent) 45%,transparent);outline-offset:-1px}
 .block .txt{position:sticky;left:.7rem;margin-inline:.7rem;max-width:18rem;max-height:100%;overflow:hidden;overflow-wrap:anywhere}
 .block.compact .txt{left:.35rem;margin-inline:.35rem}.block.compact time,.block.compact p{display:none}.block.compact strong{font-size:.72rem}
 .block time{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dim);font-size:.7rem}
@@ -441,7 +442,7 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
 .watch video{position:absolute;inset:0;width:100%;height:100%;background:#000;object-fit:contain}
 .watch:not(.active):not(.paused){cursor:none}
 .watch:has(.w-load),.watch:has(.w-fail){cursor:default}
-.w-load,.w-fail{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:.7rem;padding:2rem;text-align:center;color:var(--dim);background:radial-gradient(circle at 50% 48%,rgba(255,125,146,.1),transparent 32%),#070607}
+.w-load,.w-fail{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:.7rem;padding:2rem;text-align:center;color:var(--dim);background:radial-gradient(circle at 50% 48%,color-mix(in srgb,var(--accent) 10%,transparent),transparent 32%),#070607}
 .w-top,.w-bottom{position:absolute;inset-inline:0;opacity:0;pointer-events:none;transition:opacity .25s}
 .w-top{top:0;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:1rem;padding:1rem 1.4rem 3rem;background:linear-gradient(rgba(0,0,0,.8),transparent)}
 .w-top .icon-btn{background:rgba(255,255,255,.14)}
@@ -460,8 +461,8 @@ a.person:hover{border-color:rgba(255,125,146,.4);background:var(--soft)}
    the position changes several times a second, so hidden it cost 60 restyles a second for nothing. */
 .watch.active .w-seek,.watch.paused .w-seek{transition:--sp .25s linear,--sb .6s var(--ease)}
 .watch .w-seek.dragging{transition:--sb .6s var(--ease)}
-.w-seek::-webkit-slider-runnable-track{height:5px;border-radius:99px;background:linear-gradient(90deg,var(--accent) var(--sp),rgba(255,255,255,.45) var(--sp) var(--sb),rgba(255,255,255,.18) var(--sb));transition:height .15s var(--ease)}
-.w-seek::-moz-range-track{height:5px;border-radius:99px;background:linear-gradient(90deg,var(--accent) var(--sp),rgba(255,255,255,.45) var(--sp) var(--sb),rgba(255,255,255,.18) var(--sb))}
+.w-seek::-webkit-slider-runnable-track{height:5px;border-radius:99px;background:linear-gradient(90deg,var(--playback-progress,#f1f1f3) var(--sp),rgba(255,255,255,.45) var(--sp) var(--sb),rgba(255,255,255,.18) var(--sb));transition:height .15s var(--ease)}
+.w-seek::-moz-range-track{height:5px;border-radius:99px;background:linear-gradient(90deg,var(--playback-progress,#f1f1f3) var(--sp),rgba(255,255,255,.45) var(--sp) var(--sb),rgba(255,255,255,.18) var(--sb))}
 .w-seek::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;margin-top:-4.5px;border-radius:50%;background:#fff;box-shadow:0 1px 6px rgba(0,0,0,.5);transform:scale(0);transition:transform .15s var(--ease)}
 .w-seek::-moz-range-thumb{width:14px;height:14px;border:0;border-radius:50%;background:#fff;transform:scale(0);transition:transform .15s var(--ease)}
 .w-seek:hover::-webkit-slider-runnable-track,.w-seek:focus-visible::-webkit-slider-runnable-track,.w-seek.dragging::-webkit-slider-runnable-track{height:7px}
@@ -594,7 +595,7 @@ body{font-size:.875rem}
 .card .art{transition:transform .35s var(--ease),box-shadow .35s var(--ease)}
 .card .art img{transition:transform .5s var(--ease)}
 .card strong{transition:color .2s}
-.card:hover .art,.card:focus-visible .art{transform:translateY(-4px);box-shadow:0 16px 34px rgba(0,0,0,.5),0 0 0 1px rgba(255,125,146,.22)}
+.card:hover .art,.card:focus-visible .art{transform:translateY(-4px);box-shadow:0 16px 34px rgba(0,0,0,.5),0 0 0 1px color-mix(in srgb,var(--accent) 22%,transparent)}
 .card:hover .art img{transform:scale(1.04)}
 .card:hover strong,.card:focus-visible strong{color:var(--text)}
 .card:active .art{transform:translateY(-1px) scale(.985)}
@@ -660,13 +661,13 @@ const GEAR: &str = "M12 9a3 3 0 100 6 3 3 0 000-6zM19.4 15a1.7 1.7 0 00.3 1.8l.1
 const MARK_TEETH: &str = "M32 2v8M32 54v8M2 32h8M54 32h8M11 11l6 6M47 47l6 6M53 11l-6 6M17 47l-6 6M20 5l3 8M44 51l3 8M5 20l8 3M51 44l8 3M44 5l-3 8M23 51l-3 8M59 20l-8 3M13 41l-8 3";
 const MARK_R: &str = "M23 44V20h11c6 0 10 4 10 9s-4 9-10 9H23M34 38l11 7";
 
-/// The tab icon: the same logo, in the accent colour on the page's own background. It is a data
+/// The tab icon keeps a neutral mark on the shared dark background. It is a data
 /// address so there is no file to serve (and the page's policy allows `data:` images).
 fn set_favicon() {
     let svg = format!(
         "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'>\
-         <rect width='64' height='64' rx='14' fill='#0b0709'/>\
-         <g fill='none' stroke='#ff7d92' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'>\
+         <rect width='64' height='64' rx='14' fill='#111113'/>\
+         <g fill='none' stroke='#d8d8df' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'>\
          <circle cx='32' cy='32' r='21'/><path d='{MARK_TEETH}'/><path d='{MARK_R}'/></g></svg>"
     );
     let href = format!(
@@ -943,6 +944,7 @@ pub(crate) struct ProfileColor(pub(crate) Signal<&'static str>);
 #[component]
 fn App() -> Element {
     let session = use_context_provider(|| Signal::new(None::<Client>));
+    let palette = use_context_provider(|| Signal::new(appearance::load()));
     let quit = quit::use_quit_state();
     updates::use_updates();
     use_context_provider(|| Signal::new(String::new())); // the account name, if any
@@ -964,6 +966,7 @@ fn App() -> Element {
         style { {include_str!("theme.css")} }
         style { {include_str!("detail_loading.css")} }
         style { {include_str!("mobile.css")} }
+        style { "{palette().css()}" }
         if quit() { quit::Closed {} } else if session.read().is_some() { Browse {} } else { Login {} }
         updates::Notice {}
     }
@@ -1256,6 +1259,23 @@ fn Browse() -> Element {
         options.menu.set(None);
     });
     let mut open = use_signal(|| None::<Row>); // the movie or series page
+    let previous_detail = use_hook(|| Rc::new(Cell::new(None::<u64>)));
+    use_effect(move || {
+        let current = open.read().as_ref().map(|row| row.key);
+        if let Some(key) = previous_detail.replace(current)
+            && current.is_none()
+        {
+            let id = format!("tile-{key}");
+            controls::focus(&id);
+            let restored = web_sys::window()
+                .and_then(|w| w.document())
+                .and_then(|d| d.active_element())
+                .is_some_and(|element| element.id() == id);
+            if !restored {
+                controls::focus("account-trigger");
+            }
+        }
+    });
     let mut sort = use_signal(|| Sort::restored(Kind::Live, remembered.sorts[0]));
     let mut sort_open = use_signal(|| false);
     let mut account_open = use_signal(|| false);
@@ -1298,6 +1318,29 @@ fn Browse() -> Element {
     let mut player_revision = use_signal(|| 0_u64);
     let mut refresh = use_signal(|| 0_u64);
     let mut page = use_signal(|| 0_usize);
+    let mut page_focus_requested = use_signal(|| false);
+    use_effect(move || {
+        if !page_focus_requested() {
+            return;
+        }
+        page_focus_requested.set(false);
+        let Some(document) = web_sys::window().and_then(|w| w.document()) else {
+            return;
+        };
+        // Phones scroll the parent panel, not the keyed list that is replaced on paging.
+        for selector in [".workspace .main", ".workspace .channels"] {
+            if let Ok(Some(element)) = document.query_selector(selector)
+                && let Ok(element) = element.dyn_into::<web_sys::HtmlElement>()
+            {
+                element.set_scroll_top(0);
+            }
+        }
+        if let Ok(Some(element)) = document.query_selector(".workspace .card, .workspace .row")
+            && let Ok(element) = element.dyn_into::<web_sys::HtmlElement>()
+        {
+            let _ = element.focus();
+        }
+    });
 
     let (c_cats, c_lib) = (client.clone(), client.clone());
     // Each section, once loaded, stays: switching back to it is instant. Refresh starts over.
@@ -1641,7 +1684,7 @@ fn Browse() -> Element {
                     }
                     {list}
                 }
-                Pager { page: now, pages, total, size, onpage: move |n| page.set(n) }
+                Pager { page: now, pages, total, size, onpage: move |n| { page.set(n); page_focus_requested.set(true); } }
             }
         }
         // Still loading, or showing the previous section's data: don't pass that off as this one.
@@ -1878,11 +1921,17 @@ fn Browse() -> Element {
             }
             div { class: "account",
                 onkeydown: move |e| {
-                    if e.key() == Key::Escape && account_open() {
-                        e.stop_propagation();
-                        e.prevent_default();
-                        crate::controls::focus("account-trigger");
-                        account_open.set(false);
+                    if e.key() == Key::Escape {
+                        if account_open() {
+                            e.stop_propagation();
+                            e.prevent_default();
+                            crate::controls::focus("account-trigger");
+                            account_open.set(false);
+                        } else if open().is_some() && playing().is_none() {
+                            e.stop_propagation();
+                            e.prevent_default();
+                            open.set(None);
+                        }
                     }
                 },
                 button {
@@ -1908,6 +1957,7 @@ fn Browse() -> Element {
                             },
                             "Refresh"
                         }
+                        appearance::Picker {}
                         button {
                             class: "setting",
                             role: "switch",
@@ -1936,7 +1986,10 @@ fn Browse() -> Element {
             button {
                 class: "scrim page-scrim",
                 aria_label: "Close menu",
-                onclick: move |_| account_open.set(false)
+                onclick: move |_| {
+                    account_open.set(false);
+                    crate::controls::focus("account-trigger");
+                }
             }
         }
         if open().is_none() {

@@ -4,7 +4,7 @@
     <title>{app_title}</title>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#0c0e12" />
+    <meta name="theme-color" content="#111113" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <link rel="preload" href="/fonts/adwaita-sans-latin.woff2" as="font" type="font/woff2" crossorigin />
@@ -14,9 +14,9 @@
     <script src="/register-sw.js" defer></script>
     <style>
       /* Shown while the app itself downloads and starts; it hides once the app draws. */
-      html,body{margin:0;background:#0c0e12}
+      html,body{margin:0;background:#111113}
       #boot{position:fixed;inset:0;display:grid;place-items:center;pointer-events:none;transition:opacity .25s}
-      #boot i{width:2.6rem;height:2.6rem;border:2.5px solid rgba(255,255,255,.12);border-top-color:#a8c7fa;border-radius:50%;animation:boot 1s linear infinite}
+      #boot i{width:2.6rem;height:2.6rem;border:2.5px solid rgba(255,255,255,.12);border-top-color:#d8d8df;border-radius:50%;animation:boot 1s linear infinite}
       @keyframes boot{to{transform:rotate(1turn)}}
       body:has(#main > *) #boot{opacity:0}
       body:has(#main > *) #boot i{animation:none}

@@ -492,7 +492,8 @@ pub(crate) fn Watch(
                     }
                     return;
                 }
-                if crate::controls::preserve_native_key(&e) {
+                // Range keys stay native, but Escape still dismisses fullscreen or the player.
+                if key != "escape" && crate::controls::preserve_native_key(&e) {
                     return;
                 }
                 // Values are read into locals first: a `peek()` guard lives to the end of its
@@ -904,8 +905,8 @@ pub(crate) fn Watch(
                         }
                         span { class: "grow" }
                         if has_next {
-                            button { class: "next-btn", title: "Next episode (N)", onclick: move |_| onnext.call(()),
-                                Icon { d: NEXT } "Next"
+                            button { class: "next-btn", aria_label: "Next episode", title: "Next episode (N)", onclick: move |_| onnext.call(()),
+                                Icon { d: NEXT } span { class: "next-label", "Next" }
                             }
                         }
                         if engine_now {

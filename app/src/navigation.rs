@@ -5,7 +5,7 @@ pub(crate) const CSS: &str = r#"
 .rail{position:fixed;z-index:25;top:50%;left:.7rem;display:flex;flex-direction:column;gap:.35rem;width:4.2rem;padding:.35rem;border:1px solid var(--hair);border-radius:20px;background:linear-gradient(150deg,#21161c,#140e12);box-shadow:0 12px 34px rgba(0,0,0,.25);transform:translateY(-50%)}
 .rail button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:.35rem;height:3.8rem;padding:.4rem .2rem;border-radius:14px;color:var(--dim);transition:background .18s,color .18s}
 .rail button:hover{background:rgba(255,255,255,.04);color:var(--text)}
-.rail button.on{background:var(--soft);color:var(--accent);box-shadow:inset 0 0 0 1px rgba(255,125,146,.12)}
+.rail button.on{background:var(--soft);color:var(--accent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 12%,transparent)}
 .rail svg{width:1.35rem;height:1.35rem}.rail span{font-size:.62rem;font-weight:600;white-space:nowrap}
 @media(max-width:820px){
   .topbar:not(.detail-mode){top:max(.6rem,env(safe-area-inset-top));right:max(.7rem,env(safe-area-inset-right));left:max(.7rem,env(safe-area-inset-left));display:grid;grid-template-columns:1fr auto;grid-template-rows:2.5rem auto;align-items:center;gap:.45rem .6rem;height:auto;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;backdrop-filter:none}
@@ -45,11 +45,7 @@ pub(crate) const CSS: &str = r#"
 "#;
 
 #[component]
-pub(crate) fn LibraryNav(
-    kind: Kind,
-    playlist: bool,
-    onpick: EventHandler<Kind>,
-) -> Element {
+pub(crate) fn LibraryNav(kind: Kind, playlist: bool, onpick: EventHandler<Kind>) -> Element {
     let class = |k| if kind == k { "on" } else { "" };
     let current = |k| if kind == k { "page" } else { "false" };
     rsx! {

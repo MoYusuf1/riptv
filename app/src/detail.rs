@@ -137,6 +137,7 @@ pub(crate) fn DetailPage(
     let mut expanded = use_signal(|| false);
     let mut chosen = use_signal(|| None::<u64>);
     let mut seasons_open = use_signal(|| false);
+    use_effect(|| crate::controls::focus("detail-back"));
     let mut listed = use_signal(|| {
         let (kind, id) = identity(&row);
         shelves::is_mine(kind, id)
@@ -424,12 +425,27 @@ pub(crate) fn DetailPage(
 
     rsx! {
         section { class: if loading { "detail detail-loading" } else { "detail" }, inert: inert.then_some(""), aria_busy: "{loading}",
+            onkeydown: move |e| {
+                if e.key() == Key::Escape {
+                    e.stop_propagation();
+                    e.prevent_default();
+                    if seasons_open() {
+                        seasons_open.set(false);
+                        crate::controls::focus("season-trigger");
+                    } else {
+                        onback.call(());
+                    }
+                }
+            },
             // At the page's root: inside a section, content-visibility would confine it to that section.
             if seasons_open() {
-                button { class: "scrim", aria_label: "Close menu", onclick: move |_| seasons_open.set(false) }
+                button { class: "scrim", aria_label: "Close menu", onclick: move |_| {
+                    seasons_open.set(false);
+                    crate::controls::focus("season-trigger");
+                } }
             }
             div { class: "detail-return",
-                button { class: "icon-btn back", aria_label: "Back", title: "Back (Esc)", onclick: move |_| onback.call(()), Icon { d: BACK } }
+                button { id: "detail-back", class: "icon-btn back", aria_label: "Back", title: "Back (Esc)", onclick: move |_| onback.call(()), Icon { d: BACK } }
             }
             if loading {
                 div { class: "detail-loading-content",
