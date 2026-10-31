@@ -46,11 +46,8 @@ pub(crate) async fn choose(c: &Client, url: &str, experimental: bool) -> Engine 
 /// 88 or 100), and HEVC for a browser that decodes it; encode anything else.
 fn known(c: &Client, media: &xtream::Url, movie: &rstreamkit::vod::Movie, why: String) -> Engine {
     let video = &movie.video;
-    // ponytail: rstreamkit reads Matroska's FlagInterlaced as `> 1`, but 2 means progressive
-    // (0 unknown, 1 interlaced), so ffmpeg-made MKVs look interlaced and a real one (1) doesn't.
-    // Ignored for MKV until rstreamkit reads it as `== 1`; trusted for MP4.
-    let interlaced = video.interlaced && movie.container != rstreamkit::vod::Container::Matroska;
-    // Known progressive only from an MP4's index (Matroska's flag is the one read backwards).
+    let interlaced = video.interlaced;
+    // Known progressive only from an MP4's index: Matroska's FlagInterlaced 0 means unknown.
     let progressive = movie.container == rstreamkit::vod::Container::Mp4 && !video.interlaced;
     let mode = if interlaced {
         "transcode"

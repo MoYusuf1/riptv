@@ -962,6 +962,7 @@ fn App() -> Element {
         style { "{CSS}" }
         style { "{navigation::CSS}{categories::CSS}{updates::CSS}{quit::CSS}" }
         style { {include_str!("theme.css")} }
+        style { {include_str!("detail_loading.css")} }
         style { {include_str!("mobile.css")} }
         if quit() { quit::Closed {} } else if session.read().is_some() { Browse {} } else { Login {} }
         updates::Notice {}

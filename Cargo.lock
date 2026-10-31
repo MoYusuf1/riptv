@@ -1872,15 +1872,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
-name = "oxideav-ac3"
-version = "0.0.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "efb5f931133bf47e30ed9d809ae1cc6b2c95f5643a73b39fc75fffc0329184be"
-dependencies = [
- "oxideav-core",
-]
-
-[[package]]
 name = "oxideav-core"
 version = "0.1.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2271,7 +2262,7 @@ dependencies = [
 
 [[package]]
 name = "riptv"
-version = "0.2.11"
+version = "0.2.12"
 dependencies = [
  "aes",
  "axum",
@@ -2292,18 +2283,26 @@ dependencies = [
 
 [[package]]
 name = "rstreamkit"
-version = "0.1.0"
-source = "git+https://github.com/MoYusuf1/rstreamkit.git#72f8cddebcbc0cd6705888c740b792a68dc06ca3"
+version = "0.2.0"
+source = "git+https://github.com/MoYusuf1/rstreamkit.git#f8cc0ca6dd94147c5fe76e65000539f3c8665a46"
 dependencies = [
  "futures-core",
  "js-sys",
- "oxideav-ac3",
  "oxideav-core",
  "oxideav-mp2",
+ "rstreamkit-ac3",
  "thiserror 2.0.21",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "rstreamkit-ac3"
+version = "0.1.0"
+source = "git+https://github.com/MoYusuf1/rstreamkit.git#f8cc0ca6dd94147c5fe76e65000539f3c8665a46"
+dependencies = [
+ "oxideav-core",
 ]
 
 [[package]]

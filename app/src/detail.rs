@@ -245,6 +245,8 @@ pub(crate) fn DetailPage(
     });
     let seasons = seasons();
     let guard = info.read();
+    let loading = guard.is_none();
+    let is_series = matches!(&row.target, Target::Series(_));
     let mut details = match &*guard {
         Some(Ok((d, _))) => d.clone(),
         _ => Details::default(),
@@ -421,7 +423,7 @@ pub(crate) fn DetailPage(
     let season_now = chosen().or_else(|| spans.first().map(|s| s.0));
 
     rsx! {
-        section { class: "detail", inert: inert.then_some(""),
+        section { class: if loading { "detail detail-loading" } else { "detail" }, inert: inert.then_some(""), aria_busy: "{loading}",
             // At the page's root: inside a section, content-visibility would confine it to that section.
             if seasons_open() {
                 button { class: "scrim", aria_label: "Close menu", onclick: move |_| seasons_open.set(false) }
@@ -429,6 +431,37 @@ pub(crate) fn DetailPage(
             div { class: "detail-return",
                 button { class: "icon-btn back", aria_label: "Back", title: "Back (Esc)", onclick: move |_| onback.call(()), Icon { d: BACK } }
             }
+            if loading {
+                div { class: "detail-loading-content",
+                    p { class: "sr-only", role: "status", "Loading details for {row.title}" }
+                    div { class: "d-hero no-art d-loading-hero", aria_hidden: "true",
+                        div { class: "d-shade" }
+                        div { class: "d-main d-loading-main",
+                            div { class: "d-skeleton d-skeleton-title" }
+                            div { class: "d-loading-pills", span { class: "d-skeleton d-skeleton-pill" } span { class: "d-skeleton d-skeleton-pill short" } }
+                            div { class: "d-loading-actions", span { class: "d-skeleton d-skeleton-action" } span { class: "d-skeleton d-skeleton-icon" } }
+                            div { class: "d-loading-meta", span { class: "d-skeleton" } span { class: "d-skeleton" } span { class: "d-skeleton short" } }
+                            div { class: "d-loading-copy", span { class: "d-skeleton" } span { class: "d-skeleton" } span { class: "d-skeleton short" } }
+                        }
+                        dl { class: "d-facts d-loading-facts",
+                            for _ in 0..3 { div { dt { class: "d-skeleton" } dd { class: "d-skeleton" } } }
+                        }
+                    }
+                    if is_series {
+                        div { class: "d-sec d-loading-episodes", aria_hidden: "true",
+                            div { class: "ep-heading", h2 { class: "d-skeleton d-skeleton-heading" } }
+                            div { class: "eps",
+                                for _ in 0..4 {
+                                    div { class: "epc",
+                                        div { class: "d-skeleton d-skeleton-thumb" }
+                                        div { class: "d-loading-episode-title", span { class: "d-skeleton" } span { class: "d-skeleton short" } }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
             div { class: if backdrop_src.is_none() && poster_src.is_none() { "d-hero no-art" } else { "d-hero" },
                 if let Some(src) = backdrop_src {
                     img { class: "d-art", src: "{xtream::sized_art(src, xtream::Art::Backdrop)}", decoding: "async", fetchpriority: "high", onerror: move |_| backdrop_failed.set(true) }
@@ -644,6 +677,7 @@ pub(crate) fn DetailPage(
                 }
             }
             div { class: "d-sec" }
+            }
         }
     }
 }

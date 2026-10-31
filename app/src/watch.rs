@@ -24,6 +24,14 @@ pub(crate) enum Act {
     Next,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+enum LoadContext {
+    Startup,
+    Buffering,
+    Seeking,
+    SwitchingSource,
+}
+
 pub(crate) const WATCH_MEDIA_ACTIONS: &[(&str, media_session::Action)] = &[
     ("play", media_session::Action::Play),
     ("pause", media_session::Action::Pause),
@@ -131,6 +139,8 @@ pub(crate) fn Watch(
     let mut ahead = use_signal(|| 0.0_f64);
     let mut paused = use_signal(|| false);
     let mut waiting = use_signal(|| true);
+    let mut load_context = use_signal(|| LoadContext::Startup);
+    let mut has_played = use_signal(|| false);
     // Recovery uses these real media stages to detect an experimental-player stall.
     let mut load_stage = use_signal(|| 0_u8);
     let mut muted = use_signal(move || saved_volume == 0);
@@ -271,6 +281,7 @@ pub(crate) fn Watch(
                     .try_peek()
                     .is_ok_and(|e| matches!(&*e, Some(Engine::Rust(m, _)) if Rc::ptr_eq(m, &this)));
                 if still && *load_stage.peek() < 3 {
+                    load_context.set(LoadContext::SwitchingSource);
                     switch_to_convert(
                         c,
                         url,
@@ -289,8 +300,13 @@ pub(crate) fn Watch(
             c.clone(),
             *pos.peek(),
             move |e| match e {
-                experimental::Event::Playing => waiting.set(false),
+                experimental::Event::Playing => {
+                    has_played.set(true);
+                    load_context.set(LoadContext::Startup);
+                    waiting.set(false);
+                }
                 experimental::Event::Unsupported(why) | experimental::Event::NoSound(why) => {
+                    load_context.set(LoadContext::SwitchingSource);
                     switch_to_convert(c.clone(), url.clone(), why, *pos.peek(), engine, start)
                 }
                 experimental::Event::Failed(e) => engine.set(Some(Engine::Failed(e))),
@@ -334,6 +350,10 @@ pub(crate) fn Watch(
             t.max(0.0)
         };
         pos.set(t);
+        // A source switch keeps its own message until the new source plays.
+        if *load_context.peek() != LoadContext::SwitchingSource {
+            load_context.set(LoadContext::Seeking);
+        }
         if matches!(engine.peek().as_ref(), Some(Engine::Converted(..))) {
             // A new stream from `t`: count it up by its own stages, not the old stream's buffer.
             load_stage.set(0);
@@ -522,12 +542,14 @@ pub(crate) fn Watch(
         Some(Engine::Converted(c, _)) => (true, "converted", Some(c.at(start()).to_string())),
         _ => (false, "", None),
     };
-    let load_message = if !engine_now || load_stage() == 0 {
-        "Preparing video…"
-    } else if load_stage() < 2 {
-        "Opening stream…"
-    } else {
-        "Buffering video…"
+    let load_message = match load_context() {
+        LoadContext::Buffering => "Buffering video…",
+        LoadContext::Seeking => "Seeking to position…",
+        LoadContext::SwitchingSource => "Switching playback source…",
+        LoadContext::Startup if has_played() => "Buffering video…",
+        LoadContext::Startup if !engine_now || load_stage() == 0 => "Preparing video…",
+        LoadContext::Startup if load_stage() < 2 => "Opening stream…",
+        LoadContext::Startup => "Buffering video…",
     };
     let (p, b) = {
         let t = total().max(1.0);
@@ -583,7 +605,7 @@ pub(crate) fn Watch(
                 } else {
                     div { class: "w-load",
                         LoadRing { stage: 2 }
-                        p { class: "load-status", role: "status", "Preparing video…" }
+                        p { class: "load-status", role: "status", "{load_message}" }
                     }
                 }
             } else {
@@ -602,12 +624,35 @@ pub(crate) fn Watch(
                         paused.set(true);
                         if let Some(s) = media_on_pause.borrow().as_ref() { s.playing(false); }
                     },
-                    onwaiting: move |_| waiting.set(true),
+                    onwaiting: move |_| {
+                        if *load_context.peek() != LoadContext::Seeking
+                            && *load_context.peek() != LoadContext::SwitchingSource
+                        {
+                            load_context.set(if *has_played.peek() {
+                                LoadContext::Buffering
+                            } else {
+                                LoadContext::Startup
+                            });
+                        }
+                        waiting.set(true);
+                    },
+                    onseeking: move |_| {
+                        if *load_context.peek() != LoadContext::SwitchingSource {
+                            load_context.set(LoadContext::Seeking);
+                        }
+                    },
+                    onseeked: move |_| {
+                        if *load_context.peek() == LoadContext::Seeking {
+                            load_context.set(LoadContext::Buffering);
+                        }
+                    },
                     // A new source (its own element) starts the ring over.
                     onloadstart: move |_| load_stage.set(1),
                     onloadeddata: move |_| if *load_stage.peek() < 3 { load_stage.set(3) },
                     onplaying: move |_| {
                         load_stage.set(4);
+                        has_played.set(true);
+                        load_context.set(LoadContext::Startup);
                         waiting.set(false);
                         paused.set(false);
                     },
@@ -660,6 +705,7 @@ pub(crate) fn Watch(
                                 && let Some(v) = watch_video()
                                 && no_audio_decoded(&v, 4.0)
                             {
+                                load_context.set(LoadContext::SwitchingSource);
                                 switch_to_convert(c.clone(), url.clone(), "sound the browser can't decode".into(), *pos.peek(), engine, start);
                             }
                             if (*pos.peek() - saved.get()).abs() >= 5.0 {
@@ -674,6 +720,7 @@ pub(crate) fn Watch(
                             let native = matches!(engine.peek().as_ref(), Some(Engine::Native(..)));
                             let converted = matches!(engine.peek().as_ref(), Some(Engine::Converted(..)));
                             if native {
+                                load_context.set(LoadContext::SwitchingSource);
                                 switch_to_convert(c.clone(), url.clone(), "a format the browser can't play".into(), *pos.peek(), engine, start);
                             } else if converted {
                                 engine.set(Some(Engine::Failed("The converted stream stopped: the source may have ended.".into())));

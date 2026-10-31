@@ -29,8 +29,8 @@ pub(crate) fn LiveSettings(
                             }
                         }
                         div { class: "playback-modes", role: "group", aria_label: "Playback mode",
-                            button { class: if !smoother { "mode selected" } else { "mode" }, aria_pressed: !smoother, aria_label: "Live: shorter playback delay", onclick: move |_| onmode.call(false), span { strong { "Live" } small { "Less delay" } } span { class: "mode-check", aria_hidden: true, if !smoother { Icon { d: CHECK } } } }
-                            button { class: if smoother { "mode selected" } else { "mode" }, aria_pressed: smoother, aria_label: "Smooth: a larger playback buffer", onclick: move |_| onmode.call(true), span { strong { "Smooth" } small { "Extra buffer" } } span { class: "mode-check", aria_hidden: true, if smoother { Icon { d: CHECK } } } }
+                            button { class: if !smoother { "mode selected" } else { "mode" }, aria_pressed: !smoother, aria_label: "Live: shorter playback delay", onclick: move |_| onmode.call(false), span { strong { "Live" } } span { class: "mode-check", aria_hidden: true, if !smoother { Icon { d: CHECK } } } }
+                            button { class: if smoother { "mode selected" } else { "mode" }, aria_pressed: smoother, aria_label: "Smooth: a larger playback buffer", onclick: move |_| onmode.call(true), span { strong { "Smooth" } } span { class: "mode-check", aria_hidden: true, if smoother { Icon { d: CHECK } } } }
                         }
                     }
                     if let Some(channel) = current {

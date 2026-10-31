@@ -5,6 +5,29 @@ release's notes (`docs/release-notes.md`), and the published release also lists 
 How each number was measured is in brackets; live-channel start times are in
 [live-playback.md](live-playback.md).
 
+## 0.2.12
+
+Movies play through rstreamkit for everyone; live channels only with the Experimental player (the
+standard live path is unchanged). rstreamkit moves from 0.1 (72f8cdd) to 0.2 (f8cc0ca). Numbers
+are rstreamkit's own browser measurements (its `docs/performance.md`), and riptv's mock-provider
+check (`e2e/play.mjs`, Chrome 156) where named:
+
+| What | 0.2.11 | 0.2.12 |
+|---|---|---|
+| Experimental live channel, first picture (1080p, 6 s segments, 40 Mb/s, 100 ms latency) | 1.20 s | 0.29 s |
+| Same on an 8 Mb/s link | 1.82 s | 0.46 s |
+| Experimental live, raw TS channel (one keyframe every 2 s) | 2.03 s | 0.03 s |
+| Experimental live channel on the mock provider (e2e) | not measured | first picture 62 ms after choosing it |
+| Matroska movie start, server answering in 300 ms | 1.34 s | 0.99 s |
+| MKV with laced sound (mkvmerge's default) | no sound data; would not play | plays with sound |
+| MKV with header-stripped tracks (older mkvmerge) | refused | plays |
+| MKV without a cue index | refused | plays from the start |
+| Movie whose clock starts late (e.g. MKV at 0.3 s) | refetched its opening forever | starts |
+| Progressive MKV made by FFmpeg | taken as interlaced and re-encoded | plays directly |
+| A live server that never answers (Experimental) | waited forever | retried after 20 s |
+| Title page while details load | partial page | a placeholder of the same layout |
+| Loading message after a seek, a stall or a source switch | "Buffering video…" for all | says which |
+
 ## 0.2.11
 
 Live TV on a difficult real Xtream provider (10 s HLS segments, a redirected playlist link that goes

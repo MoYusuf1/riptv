@@ -8,28 +8,27 @@ Your browser opens automatically. No Rust or FFmpeg setup.
 
 ## What improved
 
-**Live TV no longer cuts out.** Some IPTV providers are unreliable: every couple of minutes
-their stream link stops working, or their server goes quiet for a while. TV-box and phone apps
-quietly work around this, but RIPTV used to give up and restart the channel, which you saw as a
-cut. Now RIPTV keeps about 30 seconds of video ready, and when the provider misbehaves it quietly
-gets a fresh link in the background and carries on from the same moment. You just keep watching.
+**Movies start sooner and more of them play.** RIPTV's built-in movie player was updated. Matroska
+(MKV) movies start about a third of a second sooner, and several kinds of MKV that used to fail
+now play: sound packed the way mkvmerge does by default, older files with stripped headers, files
+with no index, and files whose clock starts late. Progressive MKVs made by FFmpeg are no longer
+mistaken for interlaced ones and re-encoded.
 
-Measured on a real provider that used to cut out every ~2 minutes on desktop:
+**Experimental player: live channels show a picture almost at once.** If you use the Experimental
+player, a live channel now shows its first picture as soon as it arrives instead of after a whole
+segment or keyframe group. (The standard player is unchanged.)
 
-| Since 0.2.9 | Before | Now |
+| Since 0.2.11 | Before | Now |
 |---|---|---|
-| Unbroken live TV on that provider | a cut every ~2 minutes | 0 cuts in 3.5 hours of sports across 9 channels |
-| Its stream link going stale (every ~2 min) | the stream ended | a fresh link fetched in the background |
-| The provider not answering | 33 s of waiting, then a cut | a fresh link after 4 s |
-| A link that dies for good | a blackout and restart | the server reconnects and carries on |
-| "Provider interrupted" on screen | every ~10 s | never while the picture plays |
-| Buffer ahead of the picture | swinging down to 2 s | a steady ~30 s (Smooth) |
-| Encrypted channels (AES-128) | failed | play |
-| With a Discord-style screen share running | not measured | no cuts |
+| Experimental live channel, first picture (1080p, 40 Mb/s) | 1.20 s | 0.29 s |
+| Same on a slower 8 Mb/s link | 1.82 s | 0.46 s |
+| Experimental live, raw TS channel | 2.03 s | 0.03 s |
+| MKV movie start (server answering in 300 ms) | 1.34 s | 0.99 s |
+| MKV with laced sound, stripped headers, or no index | would not play | plays |
+| Title page while details load | partial page | a steady placeholder |
+| Loading message | "Buffering video…" for everything | says whether it is starting, buffering, seeking or switching |
 
-Also: an update now always reaches your browser (no stale app from the cache), keyboard focus
-rings on every control, one consistent motion curve, the loading ring keeps turning with
-"reduce motion" on, and a quieter no-sound badge. Every release's numbers:
+Also: the Live/Smooth switch is a compact two-way toggle. Every release's numbers:
 [What changed, in numbers](https://github.com/MoYusuf1/riptv/blob/main/docs/changes.md).
 
 Apps are unsigned, so your computer may show a security warning.

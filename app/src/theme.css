@@ -202,10 +202,9 @@ a.person:hover { border-color: rgba(168, 199, 250, .3); background: var(--soft);
 /* Playback menus share the same readable rows; the toolbar retains its controls. */
 .live-settings .settings-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin-bottom: .8rem; }
 .live-settings .settings-heading h3 { margin: 0; color: var(--text); font-size: 1rem; font-weight: 600; letter-spacing: -.015em; text-transform: none; }
-.live-settings .playback-modes { grid-template-columns: 1fr; gap: .4rem; padding: 0; border: 0; background: transparent; }
-.live-settings .playback-modes .mode { display: flex; align-items: center; justify-content: space-between; min-height: 3.75rem; padding: .65rem .8rem; text-align: left; border: 1px solid var(--hair); background: #13161c; box-shadow: none; border-radius: 10px; }
+.live-settings .playback-modes { grid-template-columns: 1fr 1fr; gap: .25rem; padding: .25rem; border: 1px solid var(--hair); border-radius: 999px; background: #13161c; }
+.live-settings .playback-modes .mode { display: flex; align-items: center; justify-content: space-between; min-height: 44px; padding: .5rem .75rem; text-align: left; border: 1px solid var(--hair); background: transparent; box-shadow: none; border-radius: 999px; }
 .playback-modes .mode strong { display: block; color: var(--text); font-size: .9rem; font-weight: 550; }
-.playback-modes .mode small { display: block; margin-top: .2rem; color: var(--dim); font-size: .78rem; font-weight: 400; }
 .live-settings .playback-modes .mode.selected { background: var(--soft); border-color: rgba(168,199,250,.3); box-shadow: none; }
 .mode-check { display: grid; place-items: center; width: 1.25rem; color: var(--accent); }
 .mode-check svg { width: 1.1rem; height: 1.1rem; }
