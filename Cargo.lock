@@ -2284,7 +2284,7 @@ dependencies = [
 [[package]]
 name = "rstreamkit"
 version = "0.2.0"
-source = "git+https://github.com/MoYusuf1/rstreamkit.git#f8cc0ca6dd94147c5fe76e65000539f3c8665a46"
+source = "git+https://github.com/MoYusuf1/rstreamkit.git#43f07e1eca8281f1d2a4613171c7ea69a21b5143"
 dependencies = [
  "futures-core",
  "js-sys",
@@ -2300,7 +2300,7 @@ dependencies = [
 [[package]]
 name = "rstreamkit-ac3"
 version = "0.1.0"
-source = "git+https://github.com/MoYusuf1/rstreamkit.git#f8cc0ca6dd94147c5fe76e65000539f3c8665a46"
+source = "git+https://github.com/MoYusuf1/rstreamkit.git#43f07e1eca8281f1d2a4613171c7ea69a21b5143"
 dependencies = [
  "oxideav-core",
 ]
