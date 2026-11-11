@@ -2,6 +2,7 @@
 
 **A fast, private TV app for your IPTV service.** Live TV, movies and shows, in your browser.
 
+Written in Rust. It runs on your own computer and plays in your browser — no account, no ads, no tracking.
 ## Why RIPTV
 
 - **Channels usually start in 1–3 seconds**, with sound. That includes 4K and surround-sound channels
